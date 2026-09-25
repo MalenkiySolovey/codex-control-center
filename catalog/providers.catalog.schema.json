@@ -256,8 +256,21 @@
         "request": {
           "$ref": "#/$defs/RecipeRequest"
         },
+        "requests": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/RecipeRequest"
+          },
+          "description": "Bounded set of read-only requests used by multi-response recipes. Each request must have a unique id."
+        },
         "response": {
           "$ref": "#/$defs/RecipeResponseMapping"
+        },
+        "outputs": {
+          "$ref": "#/$defs/RecipeResponseMapping",
+          "description": "Named response mappings and bounded arithmetic outputs for multi-request recipes."
         }
       }
     },
@@ -275,6 +288,11 @@
             "HEAD"
           ],
           "description": "HTTP request method. Only GET and HEAD are permitted for automatic inspection."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+          "description": "Unique response identifier required when this request is part of a requests array."
         },
         "url": {
           "type": "string",
@@ -333,8 +351,21 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "pointer",
         "type"
+      ],
+      "oneOf": [
+        {
+          "required": ["pointer"],
+          "properties": {
+            "operation": { "enum": ["direct", "scale"] }
+          }
+        },
+        {
+          "required": ["operation", "sources"],
+          "properties": {
+            "operation": { "enum": ["scale", "add", "subtract"] }
+          }
+        }
       ],
       "properties": {
         "pointer": {
@@ -351,6 +382,26 @@
             "integer",
             "array"
           ]
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+          "description": "Named response to read; omitted for a legacy single-request recipe."
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["direct", "scale", "add", "subtract"],
+          "default": "direct"
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "enum": ["balance", "used", "limit", "remaining"]
+          },
+          "description": "References prior numeric outputs; add/subtract require exactly two sources and scale exactly one."
         },
         "transform": {
           "type": "string",
@@ -378,6 +429,11 @@
           "type": "string",
           "pattern": "^/.*$",
           "description": "RFC 6901 JSON pointer to extract dynamic currency string."
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+          "description": "Named response to read in a multi-request recipe."
         }
       }
     },

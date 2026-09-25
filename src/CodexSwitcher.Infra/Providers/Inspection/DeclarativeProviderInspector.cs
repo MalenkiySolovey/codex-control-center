@@ -15,9 +15,12 @@ namespace CodexSwitcher.Infra.Providers.Inspection;
 /// </summary>
 public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector, IDisposable
 {
+    private const int MaxBillingRequestsPerRecipe = 8;
+    private const int MaxGenericBillingStrategies = 8;
     private readonly IProviderProbePlanner _planner;
     private readonly ISafeProviderHttpTransport _transport;
     private readonly IProviderProbeResponseMapper _mapper;
+    private readonly IReadOnlyList<IGenericProviderBillingStrategy> _genericBillingStrategies;
 
     /// <summary>
     /// Decomposed constructor injecting dedicated planner, transport, and mapper.
@@ -25,11 +28,18 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
     public DeclarativeProviderInspector(
         IProviderProbePlanner planner,
         ISafeProviderHttpTransport transport,
-        IProviderProbeResponseMapper mapper)
+        IProviderProbeResponseMapper mapper,
+        IEnumerable<IGenericProviderBillingStrategy>? genericBillingStrategies = null)
     {
         _planner = planner ?? throw new ArgumentNullException(nameof(planner));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _genericBillingStrategies = (genericBillingStrategies ?? [])
+            .Where(strategy => strategy is not null)
+            .OrderBy(strategy => strategy.Order)
+            .ThenBy(strategy => strategy.Id, StringComparer.Ordinal)
+            .Take(MaxGenericBillingStrategies)
+            .ToArray();
     }
 
     /// <summary>
@@ -66,6 +76,20 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
         };
 
         var modelsList = new List<string>();
+        var responseCache = new Dictionary<string, ProbeHttpResponse>(StringComparer.Ordinal);
+
+        async Task<ProbeHttpResponse> SendOnceAsync(ProviderProbePlan plan)
+        {
+            var cacheKey = CreateRequestCacheKey(plan);
+            if (!responseCache.TryGetValue(cacheKey, out var response))
+            {
+                response = await _transport.SendProbeAsync(plan, descriptor, apiKey, ct).ConfigureAwait(false);
+                responseCache[cacheKey] = response;
+            }
+
+            return response;
+        }
+
         decimal? balance = null;
         string? currency = null;
         decimal? usedCredits = null;
@@ -86,7 +110,7 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
             }
             else
             {
-                var response = await _transport.SendProbeAsync(plan, descriptor, apiKey, ct).ConfigureAwait(false);
+                var response = await SendOnceAsync(plan).ConfigureAwait(false);
                 var (success, models, mapError) = _mapper.MapModelsResponse(response, plan.ModelsPointer);
                 if (success)
                 {
@@ -104,62 +128,73 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
             }
         }
 
-        // 2. Inspect Balance if supported
+        // 2. Inspect Balance if supported. All plans are validated before any
+        // request runs; a malformed/untrusted later request cannot leave a
+        // partially executed recipe.
         var balanceRecipe = descriptor.Capabilities?.Balance;
         if (balanceRecipe != null && balanceRecipe.Status == CapabilityStatus.Supported)
         {
-            var (valid, plan, planError) = _planner.PlanProbe(descriptor, balanceRecipe, activeBaseUrl, "balance");
-            if (valid && plan != null)
+            var execution = await ExecuteBillingRecipeAsync(
+                descriptor,
+                activeBaseUrl,
+                balanceRecipe,
+                "balance",
+                SendOnceAsync,
+                ct).ConfigureAwait(false);
+            overallError ??= execution.Error;
+            if (execution.Valid)
             {
-                var response = await _transport.SendProbeAsync(plan, descriptor, apiKey, ct).ConfigureAwait(false);
-                if (response.Success && response.Json != null)
+                if (execution.Responses.Values.Any(response => response.Success) && connectionStatus == HealthStatus.Unknown)
                 {
-                    if (connectionStatus == HealthStatus.Unknown)
-                    {
-                        connectionStatus = HealthStatus.Valid;
-                    }
+                    connectionStatus = HealthStatus.Valid;
+                }
 
-                    _mapper.MapBalanceAndUsageResponse(
-                        response,
-                        balanceRecipe.Response,
-                        ref balance,
-                        ref usedCredits,
-                        ref creditLimit,
-                        ref remainingCredits,
-                        ref currency);
-                }
-                else if (response.Error != null)
-                {
-                    overallError ??= response.Error;
-                }
-            }
-            else if (planError != null)
-            {
-                overallError ??= planError;
+                _mapper.MapBalanceAndUsageResponses(
+                    execution.Responses,
+                    balanceRecipe.Outputs ?? balanceRecipe.Response,
+                    ref balance,
+                    ref usedCredits,
+                    ref creditLimit,
+                    ref remainingCredits,
+                    ref currency);
             }
         }
 
         // 3. Inspect Usage if supported and separate from balance
         var usageRecipe = descriptor.Capabilities?.Usage;
-        if (usageRecipe != null && usageRecipe.Status == CapabilityStatus.Supported && usageRecipe != balanceRecipe)
+        if (usageRecipe != null && usageRecipe.Status == CapabilityStatus.Supported)
         {
-            var (valid, plan, _) = _planner.PlanProbe(descriptor, usageRecipe, activeBaseUrl, "usage");
-            if (valid && plan != null)
+            var execution = await ExecuteBillingRecipeAsync(
+                descriptor,
+                activeBaseUrl,
+                usageRecipe,
+                "usage",
+                SendOnceAsync,
+                ct).ConfigureAwait(false);
+            overallError ??= execution.Error;
+            if (execution.Valid)
             {
-                var response = await _transport.SendProbeAsync(plan, descriptor, apiKey, ct).ConfigureAwait(false);
-                if (response.Success && response.Json != null)
-                {
-                    _mapper.MapBalanceAndUsageResponse(
-                        response,
-                        usageRecipe.Response,
-                        ref balance,
-                        ref usedCredits,
-                        ref creditLimit,
-                        ref remainingCredits,
-                        ref currency);
-                }
+                _mapper.MapBalanceAndUsageResponses(
+                    execution.Responses,
+                    usageRecipe.Outputs ?? usageRecipe.Response,
+                    ref balance,
+                    ref usedCredits,
+                    ref creditLimit,
+                    ref remainingCredits,
+                    ref currency);
             }
         }
+
+        // Some documented key-metadata APIs report a hard currency limit and
+        // usage but omit an explicit remaining field. Derive it only when the
+        // signed recipe also establishes the unit/currency.
+        if (!string.IsNullOrWhiteSpace(currency) && remainingCredits is null &&
+            creditLimit.HasValue && usedCredits.HasValue)
+        {
+            remainingCredits = Math.Max(0m, creditLimit.Value - usedCredits.Value);
+        }
+
+        balance ??= remainingCredits;
 
         if (connectionStatus == HealthStatus.Unknown)
         {
@@ -180,6 +215,110 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
             LastCheckedAt = DateTimeOffset.UtcNow,
             Error = overallError,
         };
+    }
+
+    private async Task<BillingRecipeExecutionResult> ExecuteBillingRecipeAsync(
+        ProviderDescriptor descriptor,
+        string activeBaseUrl,
+        ProviderCapabilityRecipe recipe,
+        string capability,
+        Func<ProviderProbePlan, Task<ProbeHttpResponse>> sendOnceAsync,
+        CancellationToken ct)
+    {
+        if (recipe.Requests is { Count: 0 })
+        {
+            return BillingRecipeExecutionResult.Invalid("Billing recipe declares an empty request list.");
+        }
+
+        var requests = recipe.Requests is { Count: > 0 }
+            ? recipe.Requests
+            : recipe.Request is null ? [] : [recipe.Request];
+
+        if (requests.Count == 0)
+        {
+            return BillingRecipeExecutionResult.Invalid("Supported billing recipe is missing a read-only request.");
+        }
+
+        if (requests.Count > MaxBillingRequestsPerRecipe)
+        {
+            return BillingRecipeExecutionResult.Invalid(
+                $"Billing recipe exceeds the {MaxBillingRequestsPerRecipe}-request limit.");
+        }
+
+        var planned = new List<(string Id, ProviderProbePlan Plan)>(requests.Count);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < requests.Count; index++)
+        {
+            var request = requests[index];
+            var id = request.Id?.Trim();
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                if (requests.Count > 1)
+                {
+                    return BillingRecipeExecutionResult.Invalid(
+                        "Every request in a multi-request billing recipe must have an id.");
+                }
+
+                id = "default";
+            }
+
+            if (!IsSafeRequestId(id) || !ids.Add(id))
+            {
+                return BillingRecipeExecutionResult.Invalid("Billing recipe request ids must be unique safe identifiers.");
+            }
+
+            var singleRequestRecipe = new ProviderCapabilityRecipe
+            {
+                Status = recipe.Status,
+                Strategy = recipe.Strategy,
+                Request = request,
+                Response = recipe.Outputs ?? recipe.Response,
+            };
+            var (valid, plan, error) = _planner.PlanProbe(descriptor, singleRequestRecipe, activeBaseUrl, capability);
+            if (!valid || plan is null)
+            {
+                return BillingRecipeExecutionResult.Invalid(
+                    error ?? $"Billing recipe request '{id}' could not be planned.");
+            }
+
+            planned.Add((id, plan));
+        }
+
+        // Plan every request first, then execute them sequentially through the
+        // same bounded, redirect-safe transport used by single-request recipes.
+        var responses = new Dictionary<string, ProbeHttpResponse>(StringComparer.Ordinal);
+        string? firstError = null;
+        foreach (var (id, plan) in planned)
+        {
+            ct.ThrowIfCancellationRequested();
+            var response = await sendOnceAsync(plan).ConfigureAwait(false);
+            responses[id] = response;
+            if (!response.Success)
+            {
+                firstError ??= response.Error ?? "Billing request failed.";
+            }
+        }
+
+        return new BillingRecipeExecutionResult(true, responses, firstError);
+    }
+
+    private static bool IsSafeRequestId(string id)
+    {
+        if (id.Length is < 1 or > 64 || !char.IsAsciiLetter(id[0]))
+        {
+            return false;
+        }
+
+        return id.Skip(1).All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+    }
+
+    private sealed record BillingRecipeExecutionResult(
+        bool Valid,
+        IReadOnlyDictionary<string, ProbeHttpResponse> Responses,
+        string? Error)
+    {
+        public static BillingRecipeExecutionResult Invalid(string error) =>
+            new(false, new Dictionary<string, ProbeHttpResponse>(StringComparer.Ordinal), error);
     }
 
     /// <inheritdoc />
@@ -260,7 +399,20 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
             };
         }
 
-        var response = await _transport.SendProbeAsync(plan, syntheticDescriptor, apiKey, ct).ConfigureAwait(false);
+        var responseCache = new Dictionary<string, ProbeHttpResponse>(StringComparer.Ordinal);
+        async Task<ProbeHttpResponse> SendOnceAsync(ProviderProbePlan requestPlan)
+        {
+            var cacheKey = CreateRequestCacheKey(requestPlan);
+            if (!responseCache.TryGetValue(cacheKey, out var cached))
+            {
+                cached = await _transport.SendProbeAsync(requestPlan, syntheticDescriptor, apiKey, ct).ConfigureAwait(false);
+                responseCache[cacheKey] = cached;
+            }
+
+            return cached;
+        }
+
+        var response = await SendOnceAsync(plan).ConfigureAwait(false);
         var (success, models, mapError) = _mapper.MapModelsResponse(response, plan.ModelsPointer);
 
         var capabilities = new Dictionary<string, CapabilityStatus>(StringComparer.OrdinalIgnoreCase)
@@ -270,15 +422,128 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
             ["usage"] = CapabilityStatus.Unknown,
         };
 
+        decimal? balance = null;
+        decimal? usedCredits = null;
+        decimal? creditLimit = null;
+        decimal? remainingCredits = null;
+        string? currency = null;
+        string? billingError = null;
+        var providerOrigin = new Uri(plan.TargetUri.GetLeftPart(UriPartial.Authority));
+
+        foreach (var strategy in _genericBillingStrategies)
+        {
+            ProviderCapabilityRecipe? recipe;
+            try
+            {
+                recipe = strategy.CreateRecipe(providerOrigin);
+            }
+            catch (Exception)
+            {
+                billingError ??= "A generic billing strategy could not create its read-only recipe.";
+                continue;
+            }
+
+            if (recipe is null || recipe.Status != CapabilityStatus.Supported)
+            {
+                continue;
+            }
+
+            var outputMapping = recipe.Outputs ?? recipe.Response;
+            if (outputMapping?.Balance is not null)
+            {
+                capabilities["balance"] = CapabilityStatus.Supported;
+            }
+            if (outputMapping?.Used is not null || outputMapping?.Limit is not null || outputMapping?.Remaining is not null)
+            {
+                capabilities["usage"] = CapabilityStatus.Supported;
+            }
+
+            var execution = await ExecuteBillingRecipeAsync(
+                syntheticDescriptor,
+                rawBaseUrl,
+                recipe,
+                "generic-billing",
+                SendOnceAsync,
+                ct).ConfigureAwait(false);
+            if (execution.Valid)
+            {
+                _mapper.MapBalanceAndUsageResponses(
+                    execution.Responses,
+                    outputMapping,
+                    ref balance,
+                    ref usedCredits,
+                    ref creditLimit,
+                    ref remainingCredits,
+                    ref currency);
+            }
+
+            if (balance.HasValue || usedCredits.HasValue || creditLimit.HasValue || remainingCredits.HasValue)
+            {
+                billingError = null;
+                break;
+            }
+
+            billingError ??= execution.Error;
+
+            // Do not send the same stored credential to another endpoint after
+            // an explicit authorization rejection.
+            if (execution.Error?.Contains("HTTP 401", StringComparison.OrdinalIgnoreCase) == true ||
+                execution.Error?.Contains("HTTP 403", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                break;
+            }
+        }
+
         return new ApiProviderSnapshot
         {
             ConnectionStatus = success ? HealthStatus.Valid : HealthStatus.Unknown,
             Models = models ?? [],
-            Balance = null,
-            Currency = null,
+            Balance = balance ?? remainingCredits,
+            Currency = currency,
+            UsedCredits = usedCredits,
+            Usage = usedCredits,
+            CreditLimit = creditLimit,
+            RemainingCredits = remainingCredits,
             Capabilities = capabilities,
             LastCheckedAt = DateTimeOffset.UtcNow,
-            Error = mapError ?? response.Error,
+            Error = billingError ?? mapError ?? response.Error,
+        };
+    }
+
+    /// <summary>
+    /// Inspects models for an unknown provider without invoking billing fallback
+    /// strategies. Used by explicit model-refresh/editor flows.
+    /// </summary>
+    public async Task<ApiProviderSnapshot> DiscoverGenericUnknownModelsAsync(
+        string rawBaseUrl,
+        string? apiKey,
+        CancellationToken ct = default)
+    {
+        var (valid, plan, descriptor, planError) = _planner.PlanGenericUnknownModelsProbe(rawBaseUrl);
+        if (!valid || plan is null || descriptor is null)
+        {
+            return new ApiProviderSnapshot
+            {
+                ConnectionStatus = HealthStatus.Unknown,
+                Error = planError ?? "Invalid base URL format.",
+                LastCheckedAt = DateTimeOffset.UtcNow,
+            };
+        }
+
+        var response = await _transport.SendProbeAsync(plan, descriptor, apiKey, ct).ConfigureAwait(false);
+        var (success, models, error) = _mapper.MapModelsResponse(response, plan.ModelsPointer);
+        return new ApiProviderSnapshot
+        {
+            ConnectionStatus = success ? HealthStatus.Valid : HealthStatus.Unknown,
+            Models = models ?? [],
+            Capabilities = new Dictionary<string, CapabilityStatus>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["models"] = success ? CapabilityStatus.Supported : CapabilityStatus.Unknown,
+                ["balance"] = CapabilityStatus.Unknown,
+                ["usage"] = CapabilityStatus.Unknown,
+            },
+            LastCheckedAt = DateTimeOffset.UtcNow,
+            Error = error ?? response.Error,
         };
     }
 
@@ -297,5 +562,16 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
         {
             disposable.Dispose();
         }
+    }
+
+    private static string CreateRequestCacheKey(ProviderProbePlan plan)
+    {
+        var headers = plan.Headers is null
+            ? string.Empty
+            : string.Join("\n", plan.Headers
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => $"{pair.Key.Trim().ToLowerInvariant()}:{pair.Value.Trim()}"));
+
+        return $"{plan.Method.Trim().ToUpperInvariant()}\n{plan.TargetUri.AbsoluteUri}\n{plan.AuthScheme.Trim().ToLowerInvariant()}\n{headers}";
     }
 }

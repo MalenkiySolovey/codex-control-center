@@ -68,4 +68,13 @@ public interface IDeclarativeProviderInspector
         string rawBaseUrl,
         string? apiKey,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Performs only the safe GET /models probe for an unknown provider. This
+    /// keeps optional billing strategies out of model-refresh and editor flows.
+    /// </summary>
+    Task<ApiProviderSnapshot> DiscoverGenericUnknownModelsAsync(
+        string rawBaseUrl,
+        string? apiKey,
+        CancellationToken ct = default);
 }

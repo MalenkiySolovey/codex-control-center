@@ -57,22 +57,77 @@ public static class LegacyRefreshTask
 {
     private const string TaskName = "CodexSwitcherRefresh";
 
-    public static void Remove()
+    public static bool RemoveIfPresent(TimeSpan? timeout = null)
     {
+        var timeoutMs = (int)Math.Clamp((timeout ?? TimeSpan.FromMilliseconds(750)).TotalMilliseconds, 100, 2_000);
         try
         {
-            using var process = Process.Start(new ProcessStartInfo
+            using var query = Process.Start(new ProcessStartInfo
+            {
+                FileName = "schtasks.exe",
+                Arguments = $"/Query /TN {TaskName}",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+
+            if (query is null)
+            {
+                return false;
+            }
+
+            if (!query.WaitForExit(timeoutMs))
+            {
+                TryStopOwnedProcess(query);
+                return false;
+            }
+
+            if (query.ExitCode != 0)
+            {
+                // A missing legacy task is the normal modern-installation state.
+                return true;
+            }
+
+            using var deletion = Process.Start(new ProcessStartInfo
             {
                 FileName = "schtasks.exe",
                 Arguments = $"/Delete /TN {TaskName} /F",
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
-            process?.WaitForExit(5_000);
+
+            if (deletion is null)
+            {
+                return false;
+            }
+
+            if (!deletion.WaitForExit(timeoutMs))
+            {
+                TryStopOwnedProcess(deletion);
+                return false;
+            }
+
+            return deletion.ExitCode == 0;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             // Melhor esforço: a tarefa não afeta as novas versões mesmo se não puder ser removida agora.
+            return false;
+        }
+    }
+
+    private static void TryStopOwnedProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(250);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // Best effort, strictly limited to the schtasks process started above.
         }
     }
 }

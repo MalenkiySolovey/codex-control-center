@@ -21,6 +21,7 @@ namespace CodexSwitcher.Infra.Codex.Routing;
 /// </summary>
 public sealed partial class CodexRoutingConfigStore : ICodexRoutingConfigStore
 {
+    private const int MaxRoutingConfigBackups = 10;
     private readonly IFileSystem _fs;
     private readonly AppPaths _paths;
     private readonly object _sync = new();
@@ -748,6 +749,7 @@ public sealed partial class CodexRoutingConfigStore : ICodexRoutingConfigStore
                 _paths.EnsureDirectories();
                 var backupFile = Path.Combine(_paths.BackupsDir, $"config.toml.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.bak");
                 _fs.WriteAllBytesAtomic(backupFile, currentBytes);
+                PruneRoutingConfigBackups();
             }
             catch
             {
@@ -755,6 +757,30 @@ public sealed partial class CodexRoutingConfigStore : ICodexRoutingConfigStore
             }
         }
     }
+
+    private void PruneRoutingConfigBackups()
+    {
+        try
+        {
+            var backups = _fs.EnumerateFiles(_paths.BackupsDir, "config.toml.*.bak")
+                .Where(path => RoutingBackupNameRegex().IsMatch(Path.GetFileName(path)))
+                .OrderByDescending(Path.GetFileName, StringComparer.Ordinal)
+                .ToArray();
+
+            foreach (var obsolete in backups.Skip(MaxRoutingConfigBackups))
+            {
+                try { _fs.Delete(obsolete); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Retention is best-effort; a cleanup failure must never prevent routing config mutation.
+        }
+    }
+
+    [GeneratedRegex(@"^config\.toml\.\d{17}\.bak$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex RoutingBackupNameRegex();
 
     private static int FirstTableIndex(IReadOnlyList<string> lines)
     {

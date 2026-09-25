@@ -6,7 +6,8 @@
 param(
     [string]$Version = "0.2.1",
     [switch]$SkipTests = $false,
-    [switch]$PublicRelease = $false
+    [switch]$PublicRelease = $false,
+    [string]$OutputRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,7 +17,11 @@ if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$DistDir = Join-Path $RepoRoot "dist"
+$DistDir = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    Join-Path $RepoRoot "dist"
+} else {
+    [System.IO.Path]::GetFullPath($OutputRoot)
+}
 $ReleaseDir = Join-Path $DistDir "v$Version"
 $StagingDir = Join-Path $ReleaseDir ("staging-" + [Guid]::NewGuid().ToString("N"))
 $ZipName = "CodexSwitchboard-$Version-win-x64.zip"
@@ -24,15 +29,21 @@ $ZipPath = Join-Path $ReleaseDir $ZipName
 $SumsPath = Join-Path $ReleaseDir "SHA256SUMS.txt"
 $ManifestPath = Join-Path $ReleaseDir "manifest-sha256.txt"
 $SanitizerScript = Join-Path $RepoRoot "eng\quality\Invoke-ReleaseSanitizer.ps1"
+$DependencyAuditScript = Join-Path $RepoRoot "eng\quality\Invoke-DependencyAudit.ps1"
 
-$resolvedRepoRoot = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+$resolvedRepoRootPath = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+$resolvedRepoRoot = $resolvedRepoRootPath + [System.IO.Path]::DirectorySeparatorChar
 $resolvedDistDir = [System.IO.Path]::GetFullPath($DistDir)
 $resolvedReleaseDir = [System.IO.Path]::GetFullPath($ReleaseDir)
 $resolvedStagingDir = [System.IO.Path]::GetFullPath($StagingDir)
-if (-not $resolvedDistDir.StartsWith($resolvedRepoRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+$distIsFilesystemRoot = $resolvedDistDir.TrimEnd([System.IO.Path]::DirectorySeparatorChar) -eq
+    [System.IO.Path]::GetPathRoot($resolvedDistDir).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+$distIsRepositoryRoot = $resolvedDistDir.TrimEnd([System.IO.Path]::DirectorySeparatorChar) -eq $resolvedRepoRootPath
+if ($distIsFilesystemRoot -or $distIsRepositoryRoot -or
+    ([string]::IsNullOrWhiteSpace($OutputRoot) -and -not $resolvedDistDir.StartsWith($resolvedRepoRoot, [System.StringComparison]::OrdinalIgnoreCase)) -or
     -not $resolvedReleaseDir.StartsWith($resolvedDistDir.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -or
     -not $resolvedStagingDir.StartsWith($resolvedReleaseDir.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Release output paths must stay under the repository dist directory."
+    throw "Release output paths must stay below a dedicated output directory, not a filesystem or repository root."
 }
 
 Write-Host "==================================================" -ForegroundColor Cyan
@@ -61,10 +72,13 @@ New-Item -Path $StagingDir -ItemType Directory -Force | Out-Null
 
 # 2. Restore and build solution
 Write-Host "[2/8] Restoring and building CodexSwitcher.slnx in Release mode..." -ForegroundColor Yellow
-dotnet restore "$RepoRoot\CodexSwitcher.slnx" --locked-mode -p:Configuration=Release
+dotnet restore "$RepoRoot\CodexSwitcher.slnx" --locked-mode -p:Configuration=Release -p:NuGetAudit=false
 if ($LASTEXITCODE -ne 0) { throw "Locked restore failed with exit code $LASTEXITCODE" }
 
-dotnet build "$RepoRoot\CodexSwitcher.slnx" -c Release --no-restore
+& powershell -ExecutionPolicy Bypass -File $DependencyAuditScript -SolutionPath "$RepoRoot\CodexSwitcher.slnx"
+if ($LASTEXITCODE -ne 0) { throw "Dependency vulnerability audit failed with exit code $LASTEXITCODE" }
+
+dotnet build "$RepoRoot\CodexSwitcher.slnx" -c Release --no-restore -p:NuGetAudit=false
 if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 
 # 3. Run unit tests

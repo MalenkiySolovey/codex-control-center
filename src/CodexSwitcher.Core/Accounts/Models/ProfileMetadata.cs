@@ -52,6 +52,9 @@ public sealed class ProfileMetadata
     /// <summary>E-mail da conta, extraído localmente do claim <c>email</c> do id_token. Pode ser nulo.</summary>
     public string? AccountEmail { get; set; }
 
+    /// <summary>Nome humano detectado localmente nos claims <c>name</c> ou <c>given_name</c>/<c>family_name</c>.</summary>
+    public string? DetectedDisplayName { get; set; }
+
     /// <summary>Claim <c>sub</c> do id_token — identificador estável da conta. Usado para deduplicar/reconciliar.</summary>
     public string? AccountSub { get; set; }
 
@@ -104,9 +107,10 @@ public sealed class ProfileMetadata
     /// </summary>
     public DetectedSubscriptionInfo? DetectedSubscription { get; set; }
 
-    /// <summary>Nome de exibição preferido: apelido, senão e-mail, senão id curto.</summary>
+    /// <summary>Nome preferido pelo usuário, nome detectado no token, e-mail ou identificador curto.</summary>
     public string DisplayName =>
         !string.IsNullOrWhiteSpace(Nickname) ? Nickname
+        : !string.IsNullOrWhiteSpace(DetectedDisplayName) ? DetectedDisplayName!
         : !string.IsNullOrWhiteSpace(AccountEmail) ? AccountEmail!
         : $"Conta {Id.ToString()[..8]}";
 }

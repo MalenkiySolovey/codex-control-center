@@ -43,6 +43,8 @@ namespace CodexSwitcher.Core.Security.Secrets;
 /// </summary>
 public static class JwtClaimsReader
 {
+    private const int MaxDisplayNameLength = 120;
+
     /// <summary>
     /// Extrai <c>sub</c>, <c>email</c>, expiração e plano do payload do JWT. Retorna claims
     /// vazios se o token for malformado (nunca lança por causa de conteúdo inválido).
@@ -66,13 +68,44 @@ public static class JwtClaimsReader
             var email = GetString(root, "email");
             var exp = GetUnixSeconds(root, "exp");
             var plan = ReadPlan(root);
+            var displayName = ReadDisplayName(root);
 
-            return new AccountClaims(sub, email, exp, plan);
+            return new AccountClaims(sub, email, exp, plan, displayName);
         }
         catch (Exception ex) when (ex is FormatException or JsonException)
         {
             return new AccountClaims(null, null, null, null);
         }
+    }
+
+    private static string? ReadDisplayName(JsonElement root)
+    {
+        var direct = NormalizeDisplayName(GetString(root, "name"));
+        if (direct is not null)
+        {
+            return direct;
+        }
+
+        var givenName = NormalizeDisplayName(GetString(root, "given_name"));
+        var familyName = NormalizeDisplayName(GetString(root, "family_name"));
+        var combined = string.Join(' ', new[] { givenName, familyName }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        return NormalizeDisplayName(combined);
+    }
+
+    private static string? NormalizeDisplayName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.Length > MaxDisplayNameLength || trimmed.Any(char.IsControl))
+        {
+            return null;
+        }
+
+        return trimmed;
     }
 
     private static string? ReadPlan(JsonElement root)

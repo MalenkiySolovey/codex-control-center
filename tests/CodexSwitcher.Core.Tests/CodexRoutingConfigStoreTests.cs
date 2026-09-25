@@ -100,6 +100,42 @@ Preserve all formatting and comments.
     }
 
     [Fact]
+    public void Routing_config_backups_keep_only_ten_exact_generated_generations()
+    {
+        using var temp = new TempDir();
+        var paths = new AppPaths(temp.Root);
+        var configPath = Path.Combine(temp.Root, "config.toml");
+        File.WriteAllText(configPath, ComplexToml);
+        Directory.CreateDirectory(paths.BackupsDir);
+        var sentinel = Path.Combine(paths.BackupsDir, "config.toml.keep.bak");
+        File.WriteAllText(sentinel, "unrelated recovery data");
+
+        var store = new CodexRoutingConfigStore(_fs, paths);
+        var provider = new CodexProviderBlock(
+            "switchboard_112233445566",
+            "Router.Cheap",
+            "https://router.cheap/v1",
+            "responses",
+            "key-broker.exe",
+            new[] { "--key-id", "profile-key" },
+            5_000);
+
+        for (var index = 0; index < 12; index++)
+        {
+            store.ApplySwitchboardRouting(configPath, provider, $"model-{index}");
+            Thread.Sleep(2);
+        }
+
+        var generatedBackups = Directory.GetFiles(paths.BackupsDir, "config.toml.*.bak")
+            .Where(path => System.Text.RegularExpressions.Regex.IsMatch(
+                Path.GetFileName(path), @"^config\.toml\.\d{17}\.bak$"))
+            .ToArray();
+
+        Assert.Equal(10, generatedBackups.Length);
+        Assert.Equal("unrelated recovery data", File.ReadAllText(sentinel));
+    }
+
+    [Fact]
     public void ConcurrentModification_ThrowsConcurrentModificationException()
     {
         using var temp = new TempDir();

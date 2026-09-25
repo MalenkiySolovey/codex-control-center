@@ -167,6 +167,60 @@ public sealed class CodexProcessManager : IProcessManager
         return closed;
     }
 
+    public async Task<bool> CloseDesktopGracefullyAsync(
+        TimeSpan gracefulTimeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(gracefulTimeout, TimeSpan.Zero);
+
+        var targets = FindRunningCodexProcesses()
+            .Where(process => process.Kind == CodexProcessKind.DesktopApp)
+            .ToArray();
+        if (targets.Length == 0)
+        {
+            return true;
+        }
+
+        foreach (var target in targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var process = TryGetProcess(target.Pid);
+            if (process is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (!process.HasExited && process.MainWindowHandle != IntPtr.Zero)
+                {
+                    // CloseMainWindow gives Codex the opportunity to finish its
+                    // normal shutdown and any user-facing save confirmation.
+                    // This path intentionally never falls back to Process.Kill.
+                    process.CloseMainWindow();
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // It exited between discovery and close request.
+            }
+        }
+
+        var deadline = DateTimeOffset.UtcNow + gracefulTimeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (targets.All(target => !IsProcessRunning(target.Pid)))
+            {
+                return true;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+        }
+
+        return targets.All(target => !IsProcessRunning(target.Pid));
+    }
+
     public void Relaunch(CodexProcessInfo process)
     {
         if (process.Kind != CodexProcessKind.DesktopApp)
@@ -284,6 +338,19 @@ public sealed class CodexProcessManager : IProcessManager
         try { return SysProcess.GetProcessById(pid); }
         catch (ArgumentException) { return null; }
         catch (InvalidOperationException) { return null; }
+    }
+
+    private static bool IsProcessRunning(int pid)
+    {
+        using var process = TryGetProcess(pid);
+        try
+        {
+            return process is not null && !process.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static string? SafeExecutablePath(SysProcess proc)

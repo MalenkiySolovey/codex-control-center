@@ -405,6 +405,7 @@ public sealed class CodexRuntimeResolver : ICodexRuntimeResolver
     {
         // Strategy 2: Schema generation
         string tempDir = Path.Combine(Path.GetTempPath(), "codex_schema_" + Guid.NewGuid().ToString("N"));
+        Process? schemaProcess = null;
         try
         {
             Directory.CreateDirectory(tempDir);
@@ -418,8 +419,8 @@ public sealed class CodexRuntimeResolver : ICodexRuntimeResolver
                 CreateNoWindow = true
             };
 
-            using var process = Process.Start(psi);
-            if (process != null && process.WaitForExit(4000) && process.ExitCode == 0)
+            schemaProcess = Process.Start(psi);
+            if (schemaProcess is not null && schemaProcess.WaitForExit(4000) && schemaProcess.ExitCode == 0)
             {
                 var files = Directory.GetFiles(tempDir, "*.json", SearchOption.AllDirectories);
                 if (files.Length > 0)
@@ -434,14 +435,29 @@ public sealed class CodexRuntimeResolver : ICodexRuntimeResolver
                     return false;
                 }
             }
+            else if (schemaProcess is not null && !schemaProcess.HasExited)
+            {
+                // The schema probe owns this process; do not leave it writing into a temp folder
+                // that crash recovery may remove on a later launch.
+                TryStopOwnedProbe(schemaProcess);
+            }
         }
         catch { }
         finally
         {
+            if (schemaProcess is not null)
+            {
+                if (!schemaProcess.HasExited)
+                {
+                    TryStopOwnedProbe(schemaProcess);
+                }
+                schemaProcess.Dispose();
+            }
+
             try
             {
                 if (Directory.Exists(tempDir))
-                    Directory.Delete(tempDir, recursive: true);
+                    TempCleanup.TryForceDelete(tempDir);
             }
             catch { }
         }
@@ -457,6 +473,22 @@ public sealed class CodexRuntimeResolver : ICodexRuntimeResolver
         }
 
         return false;
+    }
+
+    private static void TryStopOwnedProbe(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(1_000);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // Only the child process created by this schema probe is addressed here.
+        }
     }
 
     private static CodexRuntimeCapabilities BuildCapabilities(bool isActivitySupported) =>

@@ -57,12 +57,9 @@ using CodexSwitcher.App.Dialogs.Common;
 using CodexSwitcher.App.Dialogs.Shared;
 using CodexSwitcher.App.Localization;
 using CodexSwitcher.App.Support;
-using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using System.Runtime.InteropServices;
-using Windows.Graphics;
 
 namespace CodexSwitcher.App.Dialogs.Providers;
 
@@ -71,8 +68,6 @@ namespace CodexSwitcher.App.Dialogs.Providers;
 /// </summary>
 public sealed class ProviderDialogService : CommonDialogService, IProviderDialogService
 {
-    private const int GwlHwndParent = -8;
-
     private readonly AppPaths _paths;
     private readonly CodexSwitcher.Core.Providers.Contracts.ICodexModelMetadataResolver _metadataResolver;
     private readonly IProviderCompatibilityProbeService? _probeService;
@@ -98,6 +93,42 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         _modelRefreshService = modelRefreshService;
         _providerStore = providerStore;
         _settings = settings;
+    }
+
+    private ContentDialog CreateApiProviderEditorDialog(
+        string title,
+        UIElement content,
+        string primaryButtonText,
+        string? secondaryButtonText = null,
+        double? width = null)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = content,
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = _loc.Cancel,
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot,
+        };
+
+        if (!string.IsNullOrWhiteSpace(secondaryButtonText))
+        {
+            dialog.SecondaryButtonText = secondaryButtonText;
+        }
+
+        if (width is { } requestedWidth && double.IsFinite(requestedWidth) && requestedWidth > 0)
+        {
+            dialog.Width = requestedWidth;
+            dialog.MaxWidth = requestedWidth;
+        }
+
+        if (CodexSwitcher.App.App.MainWindowInstance?.Content is FrameworkElement hostContent)
+        {
+            dialog.RequestedTheme = hostContent.RequestedTheme;
+        }
+
+        return dialog;
     }
 
     public async Task<AddApiProviderResult?> PromptAddApiProviderAsync(IReadOnlyList<ProviderDescriptor> descriptors)
@@ -473,16 +504,12 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
 
-        var dialog = new ContentDialog
-        {
-            Title = _loc.ProviderDialogTitle,
-            Content = scrollViewer,
-            PrimaryButtonText = _loc.SaveAndSwitch,
-            SecondaryButtonText = _loc.SaveOnly,
-            CloseButtonText = _loc.Cancel,
-            DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = XamlRoot,
-        };
+        var dialog = CreateApiProviderEditorDialog(
+            _loc.ProviderDialogTitle,
+            scrollViewer,
+            _loc.SaveAndSwitch,
+            _loc.SaveOnly,
+            width: 488);
 
         bool isPrimary = false;
         bool confirmed = false;
@@ -618,9 +645,10 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         panel.Children.Add(new TextBlock
         {
             Text = _loc.EditProviderDialogTitle,
-            FontSize = 22,
+            FontSize = 18,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 2),
+            Margin = new Thickness(0),
+            TextWrapping = TextWrapping.Wrap,
         });
 
         var nicknameBox = new TextBox
@@ -767,9 +795,13 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             ColumnDefinitions =
             {
                 new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
-                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }
             },
-            ColumnSpacing = 8,
+            RowDefinitions =
+            {
+                new RowDefinition { Height = GridLength.Auto },
+                new RowDefinition { Height = GridLength.Auto },
+            },
+            RowSpacing = 8,
             Margin = new Thickness(0, 2, 0, 2)
         };
 
@@ -849,7 +881,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             MinWidth = 0,
         };
         ToolTipService.SetToolTip(probeButton, _loc.InferenceProbeNote);
-        Grid.SetColumn(probeButton, 1);
+        Grid.SetRow(probeButton, 1);
 
         actionsPanel.Children.Add(refreshButton);
         actionsPanel.Children.Add(probeButton);
@@ -1131,14 +1163,16 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         manualModelPanel.Children.Add(manualModelBox);
         manualModelPanel.Children.Add(addManualButton);
 
-        var inventoryPanel = new StackPanel { Spacing = 8, Padding = new Thickness(2) };
-        inventoryPanel.Children.Add(new TextBlock
+        var inventoryDescription = new TextBlock
         {
             Text = _loc.ManageModelsDescription,
             TextWrapping = TextWrapping.Wrap,
             FontSize = 12,
             Opacity = 0.74,
-        });
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        var inventoryPanel = new StackPanel { Spacing = 8, Padding = new Thickness(2) };
+        inventoryPanel.Children.Add(inventoryDescription);
         inventoryPanel.Children.Add(inventoryFilterBox);
         inventoryPanel.Children.Add(invertVisibleButton);
         inventoryPanel.Children.Add(manualModelPanel);
@@ -1407,101 +1441,17 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
 
         var rootSize = XamlRoot.Size;
         var layout = SafeModalLayoutCalculator.Calculate(rootSize.Width, rootSize.Height);
-        var ownerHandle = Host.WindowHandle;
-        AppWindow? ownerAppWindow = null;
-        RectInt32 workArea = default;
-        var rasterizationScale = Host.XamlRoot.RasterizationScale;
-        if (!double.IsFinite(rasterizationScale) || rasterizationScale <= 0)
-        {
-            rasterizationScale = 1;
-        }
-
-        var maxEditorWidth = Math.Min(layout.Width, 820);
-        var maxEditorHeight = Math.Min(layout.MaxHeight, 860);
-        if (ownerHandle != IntPtr.Zero)
-        {
-            var ownerId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(ownerHandle);
-            ownerAppWindow = AppWindow.GetFromWindowId(ownerId);
-            workArea = DisplayArea.GetFromWindowId(ownerId, DisplayAreaFallback.Nearest).WorkArea;
-
-            // XAML layout uses effective pixels (DIPs), while AppWindow and
-            // DisplayArea use screen pixels. Keep the bounds in DIPs until
-            // the final Resize call to avoid shrinking and misplacing the
-            // editor on high-DPI displays.
-            var workAreaWidthDip = workArea.Width / rasterizationScale;
-            var workAreaHeightDip = workArea.Height / rasterizationScale;
-            var ownerWidthDip = ownerAppWindow.Size.Width / rasterizationScale;
-            var ownerHeightDip = ownerAppWindow.Size.Height / rasterizationScale;
-            maxEditorWidth = Math.Min(maxEditorWidth,
-                Math.Min(workAreaWidthDip - 48, ownerWidthDip - 48));
-            maxEditorHeight = Math.Min(maxEditorHeight,
-                Math.Min(workAreaHeightDip - 48, ownerHeightDip - 48));
-        }
-
-        var editorWidth = Math.Max(1, maxEditorWidth);
-        var editorHeight = Math.Max(1, maxEditorHeight);
+        var editorWidth = Math.Max(1, Math.Min(layout.Width, 820));
+        var editorHeight = Math.Max(180, Math.Min(layout.MaxHeight, 860));
 
         var scrollViewer = new ScrollViewer
         {
             Content = panel,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             Padding = new Thickness(24, 16, 24, 16),
-            MaxHeight = Math.Min(layout.ContentMaxHeight, Math.Max(180, editorHeight - 128)),
+            MaxHeight = Math.Min(layout.ContentMaxHeight, Math.Max(180, editorHeight - 96)),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        };
-
-        var editorContent = new Grid
-        {
-            RowDefinitions =
-            {
-                new RowDefinition { Height = new GridLength(1, GridUnitType.Star) },
-                new RowDefinition { Height = GridLength.Auto },
-            },
-        };
-        editorContent.Children.Add(scrollViewer);
-
-        var buttons = new Grid
-        {
-            ColumnDefinitions =
-            {
-                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
-                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
-            },
-            ColumnSpacing = 12,
-        };
-        var saveButton = new Button
-        {
-            Content = _loc.Save,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            MinWidth = 0,
-            Height = 40,
-            Background = Brushes.Resource("BrandAccentBrush"),
-            Foreground = Brushes.Resource("BrandOnAccentBrush"),
-        };
-        var cancelButton = new Button
-        {
-            Content = _loc.Cancel,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            Height = 40,
-        };
-        Grid.SetColumn(cancelButton, 1);
-        buttons.Children.Add(saveButton);
-        buttons.Children.Add(cancelButton);
-
-        var footer = new Border
-        {
-            Padding = new Thickness(24, 14, 24, 18),
-            Background = Brushes.Resource("LayerFillColorAltBrush"),
-            Child = buttons,
-        };
-        Grid.SetRow(footer, 1);
-        editorContent.Children.Add(footer);
-
-        var editorSurface = new Border
-        {
-            Background = Brushes.Resource("LayerFillColorDefaultBrush"),
-            Child = editorContent,
         };
         void ConstrainEditorContentWidth()
         {
@@ -1515,67 +1465,46 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             if (double.IsFinite(availableWidth) && availableWidth > 0)
             {
                 panel.Width = availableWidth;
+                actionsPanel.Width = availableWidth;
+                compatibilityConsentPanel.Width = availableWidth;
+                compatibilityInfoBar.MaxWidth = availableWidth;
+                errorBar.MaxWidth = availableWidth;
+                inventoryPanel.Width = Math.Max(1, availableWidth - inventoryPanel.Padding.Left - inventoryPanel.Padding.Right);
+                inventoryDescription.Width = inventoryPanel.Width;
+                inventoryFilterBox.Width = inventoryPanel.Width;
+                invertVisibleButton.MaxWidth = inventoryPanel.Width;
+                manualModelPanel.Width = inventoryPanel.Width;
+                inventoryCountText.Width = inventoryPanel.Width;
+                defaultValidationBar.MaxWidth = inventoryPanel.Width;
+                inventoryList.Width = inventoryPanel.Width;
+                inventoryExpander.Width = availableWidth;
             }
         }
         scrollViewer.SizeChanged += (_, _) => ConstrainEditorContentWidth();
-        editorSurface.SizeChanged += (_, _) => ConstrainEditorContentWidth();
         panel.Width = Math.Max(1, editorWidth - scrollViewer.Padding.Left - scrollViewer.Padding.Right - 18);
-        if (CodexSwitcher.App.App.MainWindowInstance?.Content is FrameworkElement hostContent)
-        {
-            editorSurface.RequestedTheme = hostContent.RequestedTheme;
-        }
 
-        var editorWindow = new Window
-        {
-            Title = _loc.EditProviderDialogTitle,
-            Content = editorSurface,
-        };
-        var editorTitleBar = AppWindow.GetFromWindowId(
-            Microsoft.UI.Win32Interop.GetWindowIdFromWindow(WinRT.Interop.WindowNative.GetWindowHandle(editorWindow))).TitleBar;
-        if (Brushes.Resource("LayerFillColorDefaultBrush") is SolidColorBrush titleBarBackground &&
-            Brushes.Resource("TextFillColorPrimaryBrush") is SolidColorBrush titleBarForeground)
-        {
-            var titleBarHover = Brushes.Resource("LayerFillColorAltBrush") is SolidColorBrush hoverBackground
-                ? hoverBackground.Color
-                : titleBarBackground.Color;
-            editorTitleBar.BackgroundColor = titleBarBackground.Color;
-            editorTitleBar.ForegroundColor = titleBarForeground.Color;
-            editorTitleBar.InactiveBackgroundColor = titleBarBackground.Color;
-            editorTitleBar.InactiveForegroundColor = titleBarForeground.Color;
-            editorTitleBar.ButtonBackgroundColor = titleBarBackground.Color;
-            editorTitleBar.ButtonForegroundColor = titleBarForeground.Color;
-            editorTitleBar.ButtonInactiveBackgroundColor = titleBarBackground.Color;
-            editorTitleBar.ButtonInactiveForegroundColor = titleBarForeground.Color;
-            editorTitleBar.ButtonHoverBackgroundColor = titleBarHover;
-            editorTitleBar.ButtonHoverForegroundColor = titleBarForeground.Color;
-            editorTitleBar.ButtonPressedBackgroundColor = titleBarHover;
-            editorTitleBar.ButtonPressedForegroundColor = titleBarForeground.Color;
-        }
-        cancelButton.Click += (_, _) => editorWindow.Close();
-        editorContent.KeyDown += (_, args) =>
-        {
-            if (args.Key == Windows.System.VirtualKey.Escape)
-            {
-                editorWindow.Close();
-                args.Handled = true;
-            }
-        };
+        var dialog = CreateApiProviderEditorDialog(
+            _loc.EditProviderDialogTitle,
+            scrollViewer,
+            _loc.Save,
+            width: editorWidth);
 
         CodexModelOverrides? extractedModel = null;
         ApiProviderTransportOverrides? extractedTransport = null;
         var isSaved = false;
-        var windowClosed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        saveButton.Click += (_, _) =>
+        dialog.PrimaryButtonClick += (_sender, args) =>
         {
             if (string.IsNullOrWhiteSpace(nicknameBox.Text))
             {
                 ShowGeneralValidation("Name is required.", nicknameBox);
+                args.Cancel = true;
                 return;
             }
             if (string.IsNullOrWhiteSpace(baseUrlBox.Text) || !Uri.TryCreate(baseUrlBox.Text.Trim(), UriKind.Absolute, out _))
             {
                 ShowGeneralValidation("Valid Base URL is required.", baseUrlBox);
+                args.Cancel = true;
                 return;
             }
 
@@ -1583,6 +1512,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             if (string.IsNullOrWhiteSpace(selModel))
             {
                 ShowDefaultValidation();
+                args.Cancel = true;
                 return;
             }
 
@@ -1591,12 +1521,14 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             if (selectedInventoryItem is null)
             {
                 ShowDefaultValidation();
+                args.Cancel = true;
                 return;
             }
             if (!selectedInventoryItem.Enabled)
             {
                 workingInventory.SelectedModel = null;
                 ShowDefaultValidation();
+                args.Cancel = true;
                 return;
             }
             workingInventory.SelectedModel = selModel;
@@ -1605,6 +1537,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             if (err != null)
             {
                 ShowGeneralValidation(err, advancedSettings.Expander);
+                args.Cancel = true;
                 return;
             }
 
@@ -1622,56 +1555,11 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             }
 
             isSaved = true;
-            editorWindow.Close();
         };
 
-        editorWindow.Closed += (_, _) => windowClosed.TrySetResult(isSaved);
+        var result = await dialog.ShowAsync();
 
-        var ownerWasEnabled = ownerHandle != IntPtr.Zero && IsWindowEnabled(ownerHandle);
-        try
-        {
-            var editorHandle = WinRT.Interop.WindowNative.GetWindowHandle(editorWindow);
-            if (ownerHandle != IntPtr.Zero)
-            {
-                _ = SetWindowLongPtrW(editorHandle, GwlHwndParent, ownerHandle);
-            }
-
-            var editorWindowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(editorHandle);
-            var appWindow = AppWindow.GetFromWindowId(editorWindowId);
-            var editorWidthPixels = (int)Math.Round(editorWidth * rasterizationScale);
-            var editorHeightPixels = (int)Math.Round(editorHeight * rasterizationScale);
-            appWindow.Resize(new SizeInt32(editorWidthPixels, editorHeightPixels));
-
-            if (appWindow.Presenter is OverlappedPresenter presenter)
-            {
-                presenter.IsResizable = false;
-                presenter.IsMaximizable = false;
-            }
-
-            if (ownerAppWindow is not null)
-            {
-                var x = ownerAppWindow.Position.X + (ownerAppWindow.Size.Width - appWindow.Size.Width) / 2;
-                var y = ownerAppWindow.Position.Y + (ownerAppWindow.Size.Height - appWindow.Size.Height) / 2;
-                var screenMargin = (int)Math.Round(24 * rasterizationScale);
-                var minX = workArea.X + screenMargin;
-                var minY = workArea.Y + screenMargin;
-                var maxX = workArea.X + workArea.Width - appWindow.Size.Width - screenMargin;
-                var maxY = workArea.Y + workArea.Height - appWindow.Size.Height - screenMargin;
-                if (maxX >= minX) x = Math.Clamp(x, minX, maxX);
-                if (maxY >= minY) y = Math.Clamp(y, minY, maxY);
-                appWindow.Move(new PointInt32(x, y));
-                if (ownerWasEnabled) _ = EnableWindow(ownerHandle, false);
-            }
-
-            editorWindow.Activate();
-            await windowClosed.Task;
-        }
-        finally
-        {
-            if (ownerWasEnabled) _ = EnableWindow(ownerHandle, true);
-        }
-
-        if (isSaved)
+        if (result == ContentDialogResult.Primary && isSaved)
         {
             var routeTag = (routeCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? profile.SelectedRouteId ?? string.Empty;
             return new EditApiProviderResult
@@ -1692,17 +1580,6 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         }
         return null;
     }
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
-    private static extern IntPtr SetWindowLongPtrW(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool EnableWindow(IntPtr hWnd, [MarshalAs(UnmanagedType.Bool)] bool bEnable);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsWindowEnabled(IntPtr hWnd);
 
     public async Task<string?> PromptRotateApiKeyAsync(string providerDisplayName)
     {

@@ -13,6 +13,7 @@ using CodexSwitcher.Core.Providers.Models;
 using CodexSwitcher.Core.Providers.Services;
 using CodexSwitcher.Core.Routing.Contracts;
 using CodexSwitcher.Infra.Common.Paths;
+using CodexSwitcher.Infra.Common.Storage;
 
 namespace CodexSwitcher.Infra.Codex.Runtime;
 
@@ -658,14 +659,7 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
         }
         finally
         {
-            try
-            {
-                if (Directory.Exists(tempValidationHome))
-                {
-                    Directory.Delete(tempValidationHome, true);
-                }
-            }
-            catch { }
+            TempCleanup.TryForceDelete(tempValidationHome);
         }
     }
 

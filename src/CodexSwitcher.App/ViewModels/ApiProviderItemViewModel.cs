@@ -87,6 +87,7 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
     public partial bool IsTargetActive { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanRefreshBilling))]
     [NotifyPropertyChangedFor(nameof(CanSwitch))]
     [NotifyPropertyChangedFor(nameof(CardVisualState))]
     public partial bool HasSecret { get; set; }
@@ -155,6 +156,15 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string UsageSummary { get; set; } = "Unknown";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanRefreshBilling))]
+    public partial bool IsRefreshingBilling { get; set; }
+
+    public bool CanRefreshBilling => HasSecret && !IsRefreshingBilling;
+
+    [ObservableProperty]
+    public partial string BillingDiagnostic { get; set; } = "No supported billing endpoint was detected.";
 
     [ObservableProperty]
     public partial string Initials { get; set; } = "AP";
@@ -235,6 +245,7 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
 
         ApplyTruthfulCapabilityFacts(descriptor);
         RefreshInventoryPresentation(profile);
+        ApplyBillingSnapshot(profile.LastBillingSnapshot, fromCache: true);
     }
 
     public void UpdateProfile(ApiProviderProfile updated, ProviderDescriptor? descriptor, bool hasSecret, bool isTargetActive)
@@ -258,6 +269,44 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
 
         ApplyTruthfulCapabilityFacts(descriptor);
         RefreshInventoryPresentation(updated);
+        ApplyBillingSnapshot(updated.LastBillingSnapshot, fromCache: true);
+    }
+
+    public void ApplyBillingSnapshot(ProviderBillingSnapshot? snapshot, bool fromCache)
+    {
+        if (snapshot is null)
+        {
+            var hasCatalogRecipe = Descriptor?.Capabilities?.Balance?.Status == CapabilityStatus.Supported ||
+                                   Descriptor?.Capabilities?.Usage?.Status == CapabilityStatus.Supported;
+            BillingDiagnostic = hasCatalogRecipe
+                ? "A billing recipe is available. Refresh balance & usage to inspect it."
+                : "No supported billing endpoint was detected.";
+            return;
+        }
+
+        var status = fromCache && snapshot.Status is ProviderBillingStatus.Live or ProviderBillingStatus.Partial
+            ? ProviderBillingStatus.Cached
+            : snapshot.Status;
+        BillingDiagnostic = !string.IsNullOrWhiteSpace(snapshot.Diagnostic)
+            ? snapshot.Diagnostic
+            : $"{status}. Last observed {snapshot.ObservedAt.ToLocalTime():g}.";
+
+        var balance = snapshot.Balance ?? snapshot.Remaining;
+        BalanceSummary = FormatBillingValue(balance, snapshot.Currency ?? snapshot.Unit, status);
+        UsageSummary = FormatBillingValue(snapshot.Used, snapshot.Currency ?? snapshot.Unit, status);
+    }
+
+    private static string FormatBillingValue(decimal? value, string? unit, ProviderBillingStatus status)
+    {
+        if (!value.HasValue)
+        {
+            return status == ProviderBillingStatus.Unsupported ? "Not supported" : "Unknown";
+        }
+
+        var formatted = value.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        var suffix = string.IsNullOrWhiteSpace(unit) ? " (unit unknown)" : $" {unit.Trim()}";
+        var freshness = status == ProviderBillingStatus.Cached ? " · cached" : string.Empty;
+        return formatted + suffix + freshness;
     }
 
     public void SetDiscoveredModels(IReadOnlyList<string> models)

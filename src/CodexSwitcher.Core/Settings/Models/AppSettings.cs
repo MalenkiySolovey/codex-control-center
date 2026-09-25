@@ -65,6 +65,39 @@ public sealed class AppSettings
     /// <summary>Exigir verificação do usuário do Windows antes de revelar códigos 2FA/TOTP.</summary>
     public bool RequireWindowsVerificationForTotpReveal { get; set; } = true;
 
+    /// <summary>Controls whether informational application notifications are presented.</summary>
+    public bool ShowInformationalNotifications { get; set; } = true;
+
+    /// <summary>Controls whether successful application notifications are presented.</summary>
+    public bool ShowSuccessNotifications { get; set; } = true;
+
+    /// <summary>Controls whether warning application notifications are presented.</summary>
+    public bool ShowWarningNotifications { get; set; } = true;
+
+    /// <summary>Controls whether error application notifications are presented.</summary>
+    public bool ShowErrorNotifications { get; set; } = true;
+
+    /// <summary>Whether global notifications are automatically dismissed.</summary>
+    public bool NotificationAutoDismissEnabled { get; set; } = true;
+
+    /// <summary>Records that the previous-version scheduled-task migration has been confirmed.</summary>
+    public bool LegacyRefreshTaskCleanupCompleted { get; set; }
+
+    /// <summary>
+    /// The global notification dismissal timeout. Unsupported persisted values are normalized
+    /// to the default instead of causing startup or timer failures.
+    /// </summary>
+    public int NotificationAutoDismissSeconds
+    {
+        get => _notificationAutoDismissSeconds;
+        set => _notificationAutoDismissSeconds = value is 3 or 5 or 10 or 15 or 30 or 60
+            ? value
+            : DefaultNotificationAutoDismissSeconds;
+    }
+    private int _notificationAutoDismissSeconds = DefaultNotificationAutoDismissSeconds;
+
+    public const int DefaultNotificationAutoDismissSeconds = 10;
+
     /// <summary>Duração em minutos da sessão de autorização de verificação do Windows (1 a 60 minutos, padrão 5).</summary>
     public int TotpWindowsVerificationDurationMinutes
     {

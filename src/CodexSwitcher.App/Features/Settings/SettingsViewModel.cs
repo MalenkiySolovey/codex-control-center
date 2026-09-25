@@ -61,6 +61,11 @@ namespace CodexSwitcher.App.Features.Settings;
 
 public sealed class SettingsViewModel : INotifyPropertyChanged
 {
+    private static readonly int[] NotificationAutoDismissSecondOptions = [3, 5, 10, 15, 30, 60];
+    private int _runtimeDiagnosticsGeneration;
+    private int _catalogDiagnosticsGeneration;
+    private int _verificationStatusGeneration;
+
     private readonly AppSettings _settings;
     private readonly SettingsStore _settingsStore;
     private readonly ICodexRuntimeResolver _runtimeResolver;
@@ -87,28 +92,28 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     public string IndependenceStatement => Loc.IndependenceNotice;
     public string DataRootPath => _paths.Root;
 
-    private string _detectedExecutablePath = string.Empty;
+    private string _detectedExecutablePath = "Loading…";
     public string DetectedExecutablePath
     {
         get => _detectedExecutablePath;
         private set => SetField(ref _detectedExecutablePath, value);
     }
 
-    private string _detectedVersion = string.Empty;
+    private string _detectedVersion = "Loading…";
     public string DetectedVersion
     {
         get => _detectedVersion;
         private set => SetField(ref _detectedVersion, value);
     }
 
-    private string _rateLimitsCapability = string.Empty;
+    private string _rateLimitsCapability = "Loading…";
     public string RateLimitsCapability
     {
         get => _rateLimitsCapability;
         private set => SetField(ref _rateLimitsCapability, value);
     }
 
-    private string _accountActivityCapability = string.Empty;
+    private string _accountActivityCapability = "Loading…";
     public string AccountActivityCapability
     {
         get => _accountActivityCapability;
@@ -185,6 +190,77 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         }
     }
 
+    public bool ShowInformationalNotifications
+    {
+        get => _settings.ShowInformationalNotifications;
+        set => PersistNotificationPreference(_settings.ShowInformationalNotifications, value,
+            () => _settings.ShowInformationalNotifications = value);
+    }
+
+    public bool ShowSuccessNotifications
+    {
+        get => _settings.ShowSuccessNotifications;
+        set => PersistNotificationPreference(_settings.ShowSuccessNotifications, value,
+            () => _settings.ShowSuccessNotifications = value);
+    }
+
+    public bool ShowWarningNotifications
+    {
+        get => _settings.ShowWarningNotifications;
+        set => PersistNotificationPreference(_settings.ShowWarningNotifications, value,
+            () => _settings.ShowWarningNotifications = value);
+    }
+
+    public bool ShowErrorNotifications
+    {
+        get => _settings.ShowErrorNotifications;
+        set => PersistNotificationPreference(_settings.ShowErrorNotifications, value,
+            () => _settings.ShowErrorNotifications = value);
+    }
+
+    public bool NotificationAutoDismissEnabled
+    {
+        get => _settings.NotificationAutoDismissEnabled;
+        set => PersistNotificationPreference(_settings.NotificationAutoDismissEnabled, value,
+            () => _settings.NotificationAutoDismissEnabled = value);
+    }
+
+    public sealed record NotificationDurationOption(int Seconds, string Label);
+
+    public IReadOnlyList<NotificationDurationOption> NotificationAutoDismissDurations { get; }
+
+    private NotificationDurationOption _selectedNotificationAutoDismissDuration = null!;
+    public NotificationDurationOption SelectedNotificationAutoDismissDuration
+    {
+        get => _selectedNotificationAutoDismissDuration;
+        set
+        {
+            if (value is null || !SetField(ref _selectedNotificationAutoDismissDuration, value))
+            {
+                return;
+            }
+
+            _settings.NotificationAutoDismissSeconds = value.Seconds;
+            _settingsStore.Save(_settings);
+        }
+    }
+
+    private void PersistNotificationPreference(
+        bool currentValue,
+        bool newValue,
+        Action update,
+        [CallerMemberName] string? propertyName = null)
+    {
+        if (currentValue == newValue)
+        {
+            return;
+        }
+
+        update();
+        _settingsStore.Save(_settings);
+        OnPropertyChanged(propertyName);
+    }
+
     public sealed record DurationOption(int Minutes, string Label);
 
     public bool RequireWindowsVerificationForTotpReveal => _settings.RequireWindowsVerificationForTotpReveal;
@@ -206,21 +282,21 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         }
     }
 
-    private string _windowsHelloStatus = string.Empty;
+    private string _windowsHelloStatus = "Loading…";
     public string WindowsHelloStatus
     {
         get => _windowsHelloStatus;
         private set => SetField(ref _windowsHelloStatus, value);
     }
 
-    private string _windowsPasswordStatus = string.Empty;
+    private string _windowsPasswordStatus = "Loading…";
     public string WindowsPasswordStatus
     {
         get => _windowsPasswordStatus;
         private set => SetField(ref _windowsPasswordStatus, value);
     }
 
-    private string _windowsVerificationStatus = string.Empty;
+    private string _windowsVerificationStatus = "Loading…";
     public string WindowsVerificationStatus
     {
         get => _windowsVerificationStatus;
@@ -240,9 +316,15 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
 
     public async Task RefreshVerificationMethodsStatusAsync()
     {
+        var generation = System.Threading.Interlocked.Increment(ref _verificationStatusGeneration);
         try
         {
             var status = await _authService.GetVerificationMethodsStatusAsync();
+            if (generation != System.Threading.Volatile.Read(ref _verificationStatusGeneration))
+            {
+                return;
+            }
+
             _availability = status.HelloAvailability;
             _isPasswordSupported = status.IsPasswordSupported;
 
@@ -262,6 +344,11 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         }
         catch
         {
+            if (generation != System.Threading.Volatile.Read(ref _verificationStatusGeneration))
+            {
+                return;
+            }
+
             WindowsVerificationStatus = Loc.WindowsVerificationStatusUnsupported;
         }
 
@@ -274,21 +361,21 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         await _ui.OpenWindowsSignInOptionsAsync();
     }
 
-    private string _catalogVersion = string.Empty;
+    private string _catalogVersion = "Loading…";
     public string CatalogVersion
     {
         get => _catalogVersion;
         private set => SetField(ref _catalogVersion, value);
     }
 
-    private string _catalogSource = string.Empty;
+    private string _catalogSource = "Loading…";
     public string CatalogSource
     {
         get => _catalogSource;
         private set => SetField(ref _catalogSource, value);
     }
 
-    private string _keyBrokerStatus = string.Empty;
+    private string _keyBrokerStatus = "Loading…";
     public string KeyBrokerStatus
     {
         get => _keyBrokerStatus;
@@ -297,6 +384,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
 
     public void RefreshCatalogDiagnostics()
     {
+        System.Threading.Interlocked.Increment(ref _catalogDiagnosticsGeneration);
         if (_catalogService is not null)
         {
             var res = _catalogService.CurrentResult;
@@ -356,8 +444,6 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         _catalogService = catalogService;
         _brokerInstaller = brokerInstaller;
 
-        RefreshCatalogDiagnostics();
-
         var currentMin = _settings.TotpWindowsVerificationDurationMinutes;
         var options = new List<DurationOption>
         {
@@ -376,14 +462,115 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         DurationOptions = options;
         _selectedDuration = options.First(o => o.Minutes == currentMin);
 
+        NotificationAutoDismissDurations = NotificationAutoDismissSecondOptions
+            .Select(seconds => new NotificationDurationOption(seconds, $"{seconds} seconds"))
+            .ToArray();
+        _selectedNotificationAutoDismissDuration = NotificationAutoDismissDurations
+            .First(option => option.Seconds == _settings.NotificationAutoDismissSeconds);
+
         _customExecutablePath = _settings.CodexExecutablePathOverride ?? string.Empty;
-        RefreshDiagnostics();
     }
+
+    /// <summary>
+    /// Loads diagnostics after the Settings window is visible so local runtime discovery and
+    /// migration/catalog inspection cannot delay window creation or its first frame.
+    /// </summary>
+    public async Task LoadDeferredDiagnosticsAsync()
+    {
+        var runtimeGeneration = System.Threading.Volatile.Read(ref _runtimeDiagnosticsGeneration);
+        var catalogGeneration = System.Threading.Volatile.Read(ref _catalogDiagnosticsGeneration);
+        var snapshot = await Task.Run(ReadDeferredDiagnostics);
+        if (runtimeGeneration == System.Threading.Volatile.Read(ref _runtimeDiagnosticsGeneration))
+        {
+            ApplyRuntimeDiagnostics(snapshot.Runtime);
+            CanMigrateLegacy = snapshot.CanMigrateLegacy;
+        }
+
+        if (catalogGeneration == System.Threading.Volatile.Read(ref _catalogDiagnosticsGeneration))
+        {
+            CatalogVersion = snapshot.CatalogVersion;
+            CatalogSource = snapshot.CatalogSource;
+            KeyBrokerStatus = snapshot.KeyBrokerStatus;
+        }
+
+        await RefreshVerificationMethodsStatusAsync();
+    }
+
+    private DeferredDiagnosticsSnapshot ReadDeferredDiagnostics()
+    {
+        CodexRuntimeInfo? candidate = null;
+        try
+        {
+            candidate = _runtimeResolver.ResolveCurrentRuntime(_settings.CodexExecutablePathOverride);
+        }
+        catch
+        {
+            // Diagnostics should not prevent the Settings window from remaining usable.
+        }
+
+        var canMigrate = false;
+        try
+        {
+            canMigrate = _migrationService.CanMigrate();
+        }
+        catch
+        {
+            // A missing or inaccessible legacy path is presented as unavailable.
+        }
+
+        var catalogVersion = "-";
+        var catalogSource = "-";
+        try
+        {
+            if (_catalogService is not null)
+            {
+                var result = _catalogService.CurrentResult;
+                catalogVersion = $"{result.Catalog.CatalogVersion} (Schema {result.Catalog.SchemaVersion})";
+                catalogSource = $"{result.ActiveLayer} ({result.Catalog.Providers.Count} providers)";
+            }
+        }
+        catch
+        {
+            // Keep the diagnostics non-blocking and allow other Settings content to work.
+        }
+
+        var keyBrokerStatus = "-";
+        try
+        {
+            if (_brokerInstaller is not null)
+            {
+                keyBrokerStatus = _brokerInstaller.IsInstalledAndValid() ? "Installed & Verified" : "Available";
+            }
+        }
+        catch
+        {
+            // The broker status is informational; its failure does not block Settings.
+        }
+
+        return new DeferredDiagnosticsSnapshot(candidate, canMigrate, catalogVersion, catalogSource, keyBrokerStatus);
+    }
+
+    private sealed record DeferredDiagnosticsSnapshot(
+        CodexRuntimeInfo? Runtime,
+        bool CanMigrateLegacy,
+        string CatalogVersion,
+        string CatalogSource,
+        string KeyBrokerStatus);
 
     public void RefreshDiagnostics()
     {
+        System.Threading.Interlocked.Increment(ref _runtimeDiagnosticsGeneration);
         var candidate = _runtimeResolver.ResolveCurrentRuntime(_settings.CodexExecutablePathOverride);
-        if (candidate is not null)
+        ApplyRuntimeDiagnostics(candidate);
+
+        CanMigrateLegacy = _migrationService.CanMigrate();
+
+        _ = RefreshVerificationMethodsStatusAsync();
+    }
+
+    private void ApplyRuntimeDiagnostics(CodexRuntimeInfo? candidate)
+    {
+        if (candidate is not null && !string.IsNullOrWhiteSpace(candidate.ExecutablePath))
         {
             DetectedExecutablePath = candidate.ExecutablePath;
             DetectedVersion = candidate.Version ?? "Unknown";
@@ -397,10 +584,6 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
             RateLimitsCapability = Loc.CapabilityUnavailable;
             AccountActivityCapability = Loc.CapabilityUnsupported;
         }
-
-        CanMigrateLegacy = _migrationService.CanMigrate();
-
-        _ = RefreshVerificationMethodsStatusAsync();
     }
 
     public async Task<bool> SetRequireWindowsVerificationAsync(bool enable)

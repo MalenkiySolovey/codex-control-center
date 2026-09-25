@@ -83,7 +83,9 @@ public sealed partial class MainWindow : Window
         CodexSwitcher.Infra.Common.Paths.AppPaths paths,
         Func<CodexSwitcher.App.Features.Settings.SettingsViewModel> settingsVmFactory)
     {
+        StartupTracer.Instance.RecordMilestone("T7b:MainWindowXamlInitializationStarted");
         InitializeComponent();
+        StartupTracer.Instance.RecordMilestone("T7c:MainWindowXamlInitializationCompleted");
 
         _chromeService = chromeService ?? throw new ArgumentNullException(nameof(chromeService));
         _lifecycleCoordinator = lifecycleCoordinator ?? throw new ArgumentNullException(nameof(lifecycleCoordinator));
@@ -172,6 +174,10 @@ public sealed partial class MainWindow : Window
 
     private void OnVisibilityChanged(object sender, WindowVisibilityChangedEventArgs args)
     {
+        if (args.Visible)
+        {
+            StartupTracer.Instance.RecordMilestone("T10a:FirstWindowVisible");
+        }
         UpdateForegroundState();
     }
 

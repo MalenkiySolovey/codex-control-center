@@ -35,6 +35,7 @@ public sealed class FakeProcessManager : IProcessManager
     public bool RemnantAfterClose { get; set; }
     public bool ThrowOnRelaunch { get; set; }
     public bool CloseCalled { get; set; }
+    public bool CloseDesktopGracefullyResult { get; set; } = true;
     public bool TryLaunchDesktopCalled { get; set; }
     public bool TryLaunchDesktopResult { get; set; } = true;
     public bool TryOpenThreadDeepLinkCalled { get; set; }
@@ -66,6 +67,18 @@ public sealed class FakeProcessManager : IProcessManager
         CloseCalled = true;
         _closed = true;
         return Task.FromResult(targets);
+    }
+
+    public Task<bool> CloseDesktopGracefullyAsync(
+        TimeSpan gracefulTimeout,
+        CancellationToken cancellationToken = default)
+    {
+        CloseCalled = true;
+        if (CloseDesktopGracefullyResult)
+        {
+            Running.RemoveAll(process => process.Kind == CodexProcessKind.DesktopApp);
+        }
+        return Task.FromResult(CloseDesktopGracefullyResult);
     }
 
     public void Relaunch(CodexProcessInfo process)

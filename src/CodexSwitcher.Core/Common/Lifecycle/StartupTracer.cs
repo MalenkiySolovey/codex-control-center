@@ -38,6 +38,8 @@ public sealed class StartupTracer
     private readonly long _startTimestamp;
     private readonly List<StartupMilestoneTiming> _milestones = [];
     private readonly object _lock = new();
+    private readonly TaskCompletionSource _interactiveReached =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public long StartTimestamp => _startTimestamp;
 
@@ -60,7 +62,15 @@ public sealed class StartupTracer
         {
             _milestones.Add(new StartupMilestoneTiming(name, timestamp, elapsedMs));
         }
+
+        if (name.Equals("T12:UIInteractive", StringComparison.OrdinalIgnoreCase))
+        {
+            _interactiveReached.TrySetResult();
+        }
     }
+
+    public Task WaitForInteractiveAsync(CancellationToken cancellationToken = default) =>
+        _interactiveReached.Task.WaitAsync(cancellationToken);
 
     public IReadOnlyList<StartupMilestoneTiming> Milestones
     {
@@ -99,8 +109,14 @@ public sealed class StartupTracer
     {
         try
         {
+            var configuredDirectory = System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_PERF_DIR");
+            if (directoryPath is null && string.IsNullOrWhiteSpace(configuredDirectory) && !IsPersistenceEnabled())
+            {
+                return;
+            }
+
             var dir = directoryPath
-                ?? System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_PERF_DIR")
+                ?? configuredDirectory
                 ?? Path.Combine(Path.GetTempPath(), "codex-switchboard-perf");
 
             Directory.CreateDirectory(dir);
@@ -118,5 +134,12 @@ public sealed class StartupTracer
             File.WriteAllText(summaryPath, FormatSummary());
         }
         catch { }
+    }
+
+    private static bool IsPersistenceEnabled()
+    {
+        var value = System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_ENABLE_PERF_TRACE");
+        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 }

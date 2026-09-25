@@ -58,6 +58,11 @@ namespace CodexSwitcher.Infra.Common.Logging;
 /// </summary>
 public sealed class FileAuditLog : IAuditLog
 {
+    public const long MaxFileBytes = 1_048_576;
+    public const int RetainedRotatedFiles = 3;
+    private const int MaxRecordCharacters = 16_384;
+    private const string TruncationMarker = "...[truncated]";
+
     private readonly string _path;
     private readonly Lock _gate = new();
 
@@ -72,11 +77,73 @@ public sealed class FileAuditLog : IAuditLog
     public void Record(string action, string outcome, string? detail = null)
     {
         var line = $"{DateTimeOffset.UtcNow:O}\t{Sanitize(action)}\t{Sanitize(outcome)}\t{Sanitize(detail)}{Environment.NewLine}";
+        if (line.Length > MaxRecordCharacters)
+        {
+            var prefixLength = MaxRecordCharacters - TruncationMarker.Length - Environment.NewLine.Length;
+            if (prefixLength > 0 && char.IsHighSurrogate(line[prefixLength - 1])
+                && prefixLength < line.Length && char.IsLowSurrogate(line[prefixLength]))
+            {
+                prefixLength--;
+            }
+            line = line[..prefixLength] + TruncationMarker + Environment.NewLine;
+        }
+
+        var lineBytes = Encoding.UTF8.GetByteCount(line);
         lock (_gate)
         {
+            if (!RotateIfNeeded(lineBytes))
+            {
+                // Retention is intentionally bounded even when another process temporarily locks
+                // a rotated file. A dropped audit entry is preferable to unbounded disk growth.
+                System.Diagnostics.Debug.WriteLine("[AuditLog] Record skipped because bounded rotation could not complete.");
+                return;
+            }
+
             File.AppendAllText(_path, line, Encoding.UTF8);
         }
     }
+
+    private bool RotateIfNeeded(int incomingBytes)
+    {
+        try
+        {
+            if (!File.Exists(_path))
+            {
+                return true;
+            }
+
+            var existingBytes = new FileInfo(_path).Length;
+            if (existingBytes == 0 || existingBytes + incomingBytes <= MaxFileBytes)
+            {
+                return true;
+            }
+
+            var oldest = RotatedPath(RetainedRotatedFiles);
+            if (File.Exists(oldest))
+            {
+                File.Delete(oldest);
+            }
+
+            for (var generation = RetainedRotatedFiles - 1; generation >= 1; generation--)
+            {
+                var source = RotatedPath(generation);
+                if (File.Exists(source))
+                {
+                    File.Move(source, RotatedPath(generation + 1), overwrite: true);
+                }
+            }
+
+            File.Move(_path, RotatedPath(1), overwrite: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Logging remains best-effort if Windows temporarily locks a retained generation.
+            return false;
+        }
+    }
+
+    private string RotatedPath(int generation) => $"{_path}.{generation}";
 
     private static string Sanitize(string? value) =>
         string.IsNullOrEmpty(value) ? "-" : value.Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' ');

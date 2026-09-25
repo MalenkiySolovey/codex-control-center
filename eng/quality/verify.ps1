@@ -65,7 +65,7 @@ Run-Gate "Locked Dependency Restore (--locked-mode)" {
     # Restore with the same configuration used by the release build. The app enables
     # PublishReadyToRun in Release, which requires the Crossgen2 runtime package to
     # be present before the subsequent --no-restore build runs in a clean CI cache.
-    & dotnet restore $SolutionPath --locked-mode -p:Configuration=Release
+    & dotnet restore $SolutionPath --locked-mode -p:Configuration=Release -p:NuGetAudit=false
     if ($LASTEXITCODE -ne 0) {
         throw "Locked restore failed with exit code $LASTEXITCODE."
     }
@@ -89,7 +89,7 @@ Run-Gate "Machine-Readable Dependency Vulnerability Audit" {
 
 # --- GATE 5: Release Compilation & Static Analysis ---
 Run-Gate "Release Compilation & Static Analysis (WarningsAsErrors)" {
-    & dotnet build $SolutionPath -c Release --no-restore
+    & dotnet build $SolutionPath -c Release --no-restore -p:NuGetAudit=false
     if ($LASTEXITCODE -ne 0) {
         throw "Release build failed with exit code $LASTEXITCODE."
     }

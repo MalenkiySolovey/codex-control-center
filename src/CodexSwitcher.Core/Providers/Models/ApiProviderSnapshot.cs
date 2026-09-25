@@ -77,3 +77,34 @@ public sealed record ApiProviderSnapshot
     /// <summary>Sanitized error message if inspection failed. Never contains secrets or URLs with tokens.</summary>
     public string? Error { get; init; }
 }
+
+/// <summary>
+/// Persistable, credential-free provider billing observation for card rendering.
+/// It intentionally contains normalized facts only, never raw provider payloads.
+/// </summary>
+public sealed record ProviderBillingSnapshot
+{
+    public decimal? Balance { get; init; }
+    public decimal? Used { get; init; }
+    public decimal? Limit { get; init; }
+    public decimal? Remaining { get; init; }
+    public string? Currency { get; init; }
+    public string? Unit { get; init; }
+    public string? Period { get; init; }
+    public DateTimeOffset? ResetAt { get; init; }
+    public string? Source { get; init; }
+    public DateTimeOffset ObservedAt { get; init; }
+    public ProviderBillingStatus Status { get; init; } = ProviderBillingStatus.Unknown;
+    public string? Diagnostic { get; init; }
+}
+
+public enum ProviderBillingStatus
+{
+    Unknown,
+    Live,
+    Cached,
+    Unsupported,
+    AuthRejected,
+    Unavailable,
+    Partial,
+}

@@ -215,15 +215,16 @@ public sealed class ArchitectureBoundaryTests
         Assert.Equal(typeof(ISwitchPlanBuilder), primarySwitchCtor.GetParameters()[0].ParameterType);
         Assert.Equal(typeof(ISwitchTransactionExecutor), primarySwitchCtor.GetParameters()[1].ParameterType);
 
-        // DeclarativeProviderInspector decomposed constructor has exactly 3 parameters
+        // DeclarativeProviderInspector also accepts the bounded generic billing-strategy registry.
         var inspectorType = typeof(DeclarativeProviderInspector);
         var inspectorCtors = inspectorType.GetConstructors();
         var primaryInspectorCtor = inspectorCtors.MaxBy(c => c.GetParameters().Length);
         Assert.NotNull(primaryInspectorCtor);
-        Assert.Equal(3, primaryInspectorCtor.GetParameters().Length);
+        Assert.Equal(4, primaryInspectorCtor.GetParameters().Length);
         Assert.Equal(typeof(IProviderProbePlanner), primaryInspectorCtor.GetParameters()[0].ParameterType);
         Assert.Equal(typeof(ISafeProviderHttpTransport), primaryInspectorCtor.GetParameters()[1].ParameterType);
         Assert.Equal(typeof(IProviderProbeResponseMapper), primaryInspectorCtor.GetParameters()[2].ParameterType);
+        Assert.Equal(typeof(IEnumerable<IGenericProviderBillingStrategy>), primaryInspectorCtor.GetParameters()[3].ParameterType);
     }
 
     [Fact]

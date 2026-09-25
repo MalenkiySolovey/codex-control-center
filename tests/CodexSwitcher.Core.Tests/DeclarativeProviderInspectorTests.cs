@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text;
+using CodexSwitcher.Core.Providers.Catalog;
+using CodexSwitcher.Core.Providers.Contracts;
 using CodexSwitcher.Infra.Providers.Inspection;
 using Xunit;
 
@@ -7,6 +9,40 @@ namespace CodexSwitcher.Core.Tests;
 
 public sealed class DeclarativeProviderInspectorTests
 {
+    private sealed class DocumentedGenericUsageStrategy : IGenericProviderBillingStrategy
+    {
+        public string Id => "documented-test-usage";
+        public int Order => 10;
+
+        public ProviderCapabilityRecipe? CreateRecipe(Uri providerOrigin) =>
+            string.Equals(providerOrigin.Host, "custom-proxy.internal", StringComparison.OrdinalIgnoreCase)
+                ? new ProviderCapabilityRecipe
+                {
+                    Status = CapabilityStatus.Supported,
+                    Strategy = "json-http",
+                    Requests =
+                    [
+                        new RecipeRequest
+                        {
+                            Id = "usage",
+                            Method = "GET",
+                            Path = "/usage",
+                            Auth = "bearer",
+                        }
+                    ],
+                    Outputs = new RecipeResponseMapping
+                    {
+                        Used = new JsonFieldMapping
+                        {
+                            RequestId = "usage",
+                            Pointer = "/total",
+                            Type = "decimal",
+                        }
+                    }
+                }
+                : null;
+    }
+
     private sealed class MockHttpHandler : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }
@@ -299,5 +335,42 @@ public sealed class DeclarativeProviderInspectorTests
         Assert.Null(snapshot.Balance);
         Assert.Equal(CapabilityStatus.Unknown, snapshot.Capabilities["balance"]);
         Assert.Equal(CapabilityStatus.Unknown, snapshot.Capabilities["usage"]);
+    }
+
+    [Fact]
+    public async Task InspectGenericUnknown_UsesOnlyAnInjectedDocumentedReadOnlyStrategy()
+    {
+        var mock = new MockHttpHandler
+        {
+            ResponseFactory = request => request.RequestUri!.AbsolutePath switch
+            {
+                "/v1/models" => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{ \"data\": [] }", Encoding.UTF8, "application/json")
+                },
+                "/v1/usage" => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{ \"total\": 18.75 }", Encoding.UTF8, "application/json")
+                },
+                _ => throw new InvalidOperationException($"Unexpected inspection path: {request.RequestUri.AbsolutePath}")
+            }
+        };
+
+        var planner = new ProviderProbePlanner();
+        using var transport = new SafeProviderHttpTransport(new HttpClient(mock));
+        using var inspector = new DeclarativeProviderInspector(
+            planner,
+            transport,
+            new ProviderProbeResponseMapper(),
+            [new DocumentedGenericUsageStrategy()]);
+
+        var snapshot = await inspector.InspectGenericUnknownAsync("https://custom-proxy.internal/v1", "sk-custom-key");
+
+        Assert.Null(snapshot.Balance);
+        Assert.Equal(18.75m, snapshot.UsedCredits);
+        Assert.Equal(CapabilityStatus.Unknown, snapshot.Capabilities["balance"]);
+        Assert.Equal(CapabilityStatus.Supported, snapshot.Capabilities["usage"]);
+        Assert.Equal(["/v1/models", "/v1/usage"], mock.RequestHistory.Select(request => request.RequestUri!.AbsolutePath));
+        Assert.All(mock.RequestHistory, request => Assert.Equal("Bearer", request.Headers.Authorization?.Scheme));
     }
 }

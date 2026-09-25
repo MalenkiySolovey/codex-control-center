@@ -59,15 +59,55 @@ namespace CodexSwitcher.App.Views;
 
 public sealed partial class SettingsWindow : Window
 {
+    private bool _initialDiagnosticsStarted;
+    private readonly string? _performanceTracePrefix;
+
     public SettingsViewModel ViewModel { get; }
 
-    public SettingsWindow(SettingsViewModel viewModel)
+    public SettingsWindow(SettingsViewModel viewModel, string? performanceTracePrefix = null)
     {
         ViewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        _performanceTracePrefix = performanceTracePrefix;
         InitializeComponent();
 
         Title = ViewModel.Loc.SettingsTitle;
+        if (Content is FrameworkElement root)
+        {
+            root.Loaded += (_, _) => RecordSettingsOpenPhase("UsefulFrame");
+        }
         ConfigureWindow();
+        Activated += OnWindowActivated;
+        RecordSettingsOpenPhase("WindowCreated");
+    }
+
+    private async void OnWindowActivated(object sender, WindowActivatedEventArgs args)
+    {
+        if (_initialDiagnosticsStarted)
+        {
+            return;
+        }
+
+        _initialDiagnosticsStarted = true;
+        RecordSettingsOpenPhase("WindowActivated");
+        try
+        {
+            await Task.Yield();
+            RecordSettingsOpenPhase("Interactive");
+            await ViewModel.LoadDeferredDiagnosticsAsync();
+            RecordSettingsOpenPhase("DiagnosticsComplete");
+        }
+        catch
+        {
+            // Settings remains usable if optional diagnostics fail during initial load.
+        }
+    }
+
+    private void RecordSettingsOpenPhase(string phase)
+    {
+        if (!string.IsNullOrWhiteSpace(_performanceTracePrefix))
+        {
+            StartupTracer.Instance.RecordMilestone($"{_performanceTracePrefix}:{phase}");
+        }
     }
 
     private void ConfigureWindow()

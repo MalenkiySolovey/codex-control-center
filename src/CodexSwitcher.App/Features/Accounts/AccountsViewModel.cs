@@ -77,6 +77,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     private readonly TotpPresentationCoordinator _totp;
     private readonly AccountUsageCoordinator _usage;
     private readonly ICodexTargetSwitchService? _targetSwitchService;
+    private readonly ICodexSignedOutService? _signedOutService;
     private readonly IAppNotificationService _notifications;
     private readonly IAppBusyService _busy;
 
@@ -124,7 +125,8 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         AccountUsageCoordinator usageCoordinator,
         IAppNotificationService notifications,
         IAppBusyService busy,
-        ICodexTargetSwitchService? targetSwitchService = null)
+        ICodexTargetSwitchService? targetSwitchService = null,
+        ICodexSignedOutService? signedOutService = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _switch = switchService ?? throw new ArgumentNullException(nameof(switchService));
@@ -137,6 +139,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         _notifications = notifications ?? throw new ArgumentNullException(nameof(notifications));
         _busy = busy ?? throw new ArgumentNullException(nameof(busy));
         _targetSwitchService = targetSwitchService;
+        _signedOutService = signedOutService;
 
         _usage.RefreshingStateChanged += r => IsRefreshingUsage = r;
 
@@ -160,25 +163,45 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
         StartupTracer.Instance.RecordMilestone("T13:CachedCardsVisible");
+    }
+
+    private int _postInteractiveInitializationStarted;
+
+    public void StartPostInteractiveInitialization()
+    {
+        if (Interlocked.Exchange(ref _postInteractiveInitializationStarted, 1) != 0)
+        {
+            return;
+        }
+
         _usage.StartTimers(() => _profiles.Profiles);
 
-        // Background initial refresh across accounts
         if (_profiles.Profiles.Count > 0)
         {
             StartupTracer.Instance.RecordMilestone("T14:BackgroundInitScheduled");
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    _profiles.AuditOrphanVaultBlobs();
-                    await _usage.TriggerBackgroundRefreshForProfiles(_profiles.Profiles).ConfigureAwait(false);
-                }
-                finally
-                {
-                    StartupTracer.Instance.RecordMilestone("T15:BackgroundInitFinished");
-                    StartupTracer.Instance.FlushToFile();
-                }
-            });
+            _ = RunPostInteractiveRefreshAsync();
+        }
+    }
+
+    private async Task RunPostInteractiveRefreshAsync()
+    {
+        try
+        {
+            await Task.Run(_profiles.AuditOrphanVaultBlobs).ConfigureAwait(false);
+            await _usage.TriggerBackgroundRefreshForProfiles(_profiles.Profiles).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // App shutdown owns cancellation; a later launch can retry the refresh.
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[StartupRefresh] Background initialization failed: {ex.GetType().Name}");
+        }
+        finally
+        {
+            StartupTracer.Instance.RecordMilestone("T15:BackgroundInitFinished");
+            StartupTracer.Instance.FlushToFile();
         }
     }
 
@@ -385,7 +408,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 
         var profile = _profiles.AddFromAuthJson(authJson, null);
         var nick = await _ui.PromptTextAsync(Loc.NicknameTitle, Loc.NicknamePrompt,
-            profile.DisplayName, Loc.Save);
+            profile.DetectedDisplayName ?? string.Empty, Loc.Save);
         if (!string.IsNullOrWhiteSpace(nick))
             _profiles.Rename(profile.Id, nick);
 
@@ -439,6 +462,55 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             var active = _profiles.Profiles.FirstOrDefault(p => p.IsActive);
             ShowInfo(Loc.DetectKnownTitle,
                 Loc.DetectKnownMsg(active?.DisplayName ?? Loc.CodexAccount), InfoBarSeverity.Informational);
+        }
+    }
+
+    [RelayCommand]
+    private async Task OpenCodexSignInAsync()
+    {
+        if (_signedOutService is null)
+        {
+            ShowInfo(Loc.OpenCodexSignInConfirmTitle, "The signed-out Codex workflow is unavailable.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        var confirmed = await _ui.ConfirmAsync(
+            Loc.OpenCodexSignInConfirmTitle,
+            Loc.OpenCodexSignInConfirmMessage,
+            Loc.OpenCodexSignInConfirmButton,
+            destructive: true);
+        if (!confirmed)
+        {
+            return;
+        }
+
+        SignedOutOpenAiResult? result = null;
+        await RunBusy(Loc.OpenCodexSignIn, async () =>
+        {
+            result = await _signedOutService.OpenSignInAsync();
+        });
+
+        if (result is null)
+        {
+            return;
+        }
+
+        ShowInfo(
+            Loc.OpenCodexSignIn,
+            result.Message,
+            result.Succeeded ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
+        if (result.Succeeded)
+        {
+            _lastActiveTarget = null;
+            _lastIsRoutingActiveToApi = false;
+            if (TargetStateChanged is not null)
+            {
+                TargetStateChanged.Invoke(this, EventArgs.Empty);
+            }
+            else
+            {
+                Rebuild(null, isRoutingActiveToApi: false);
+            }
         }
     }
 

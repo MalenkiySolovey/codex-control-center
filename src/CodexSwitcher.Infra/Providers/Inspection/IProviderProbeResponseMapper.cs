@@ -26,4 +26,14 @@ public interface IProviderProbeResponseMapper
         ref decimal? creditLimit,
         ref decimal? remainingCredits,
         ref string? currency);
+
+    /// <summary>Maps outputs from a bounded set of named read-only responses.</summary>
+    void MapBalanceAndUsageResponses(
+        IReadOnlyDictionary<string, ProbeHttpResponse> responses,
+        RecipeResponseMapping? mapping,
+        ref decimal? balance,
+        ref decimal? usedCredits,
+        ref decimal? creditLimit,
+        ref decimal? remainingCredits,
+        ref string? currency);
 }

@@ -60,10 +60,12 @@ namespace CodexSwitcher.App.Services;
 public sealed class WinUiDispatcher : IUiDispatcher
 {
     private readonly DispatcherQueue _queue;
+    private readonly IAppLifetime? _lifetime;
 
-    public WinUiDispatcher(DispatcherQueue queue)
+    public WinUiDispatcher(DispatcherQueue queue, IAppLifetime? lifetime = null)
     {
         _queue = queue ?? throw new ArgumentNullException(nameof(queue));
+        _lifetime = lifetime;
     }
 
     public bool HasThreadAccess => _queue.HasThreadAccess;
@@ -72,13 +74,54 @@ public sealed class WinUiDispatcher : IUiDispatcher
     {
         ArgumentNullException.ThrowIfNull(action);
 
-        if (_queue.HasThreadAccess)
+        if (IsStopping)
         {
-            action();
+            return;
+        }
+
+        bool hasThreadAccess;
+        try
+        {
+            hasThreadAccess = _queue.HasThreadAccess;
+        }
+        catch (ObjectDisposedException) when (IsStopping)
+        {
+            return;
+        }
+        catch (System.Runtime.InteropServices.COMException) when (IsStopping)
+        {
+            return;
+        }
+
+        if (hasThreadAccess)
+        {
+            if (!IsStopping)
+            {
+                action();
+            }
         }
         else
         {
-            _queue.TryEnqueue(() => action());
+            try
+            {
+                _queue.TryEnqueue(() =>
+                {
+                    if (!IsStopping)
+                    {
+                        action();
+                    }
+                });
+            }
+            catch (ObjectDisposedException) when (IsStopping)
+            {
+                // The window dispatcher may already be closed while cancellation callbacks unwind.
+            }
+            catch (System.Runtime.InteropServices.COMException) when (IsStopping)
+            {
+                // A stopped WinUI dispatcher must not turn a late background update into an app crash.
+            }
         }
     }
+
+    private bool IsStopping => _lifetime?.ApplicationStopping.IsCancellationRequested == true;
 }
