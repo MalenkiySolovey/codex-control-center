@@ -31,7 +31,7 @@ public sealed class StartupShutdownPerformanceLifecycleTests
             temp.Combine("cat.sig"),
             temp.Combine("cat.prev.json"),
             temp.Combine("cat.local.json"),
-            "0.2.1");
+            "0.2.2");
 
         // Service construction must be instant and not touch filesystem or crypto signature
         var catalogService = new ProviderCatalogService(loader);

@@ -37,7 +37,7 @@ public sealed class SafeProviderHttpTransport : ISafeProviderHttpTransport, IDis
             {
                 Timeout = TimeSpan.FromSeconds(15)
             };
-            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CodexSwitchboard/0.2.1");
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CodexSwitchboard/0.2.2");
             _ownsHttpClient = true;
         }
     }

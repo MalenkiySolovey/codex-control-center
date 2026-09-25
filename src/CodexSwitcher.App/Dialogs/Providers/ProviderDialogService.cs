@@ -642,14 +642,6 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
     public async Task<EditApiProviderResult?> PromptEditApiProviderAsync(ApiProviderProfile profile, ProviderDescriptor? descriptor)
     {
         var panel = new StackPanel { Spacing = 10, HorizontalAlignment = HorizontalAlignment.Stretch };
-        panel.Children.Add(new TextBlock
-        {
-            Text = _loc.EditProviderDialogTitle,
-            FontSize = 18,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Margin = new Thickness(0),
-            TextWrapping = TextWrapping.Wrap,
-        });
 
         var nicknameBox = new TextBox
         {

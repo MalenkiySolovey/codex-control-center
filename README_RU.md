@@ -8,9 +8,9 @@
 ![Платформа](https://img.shields.io/badge/платформа-Windows%2010%20%7C%2011%20x64-0078D6?logo=windows)
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet)
 ![Интерфейс](https://img.shields.io/badge/интерфейс-WinUI%203%20Fluent-2E9BFF)
-![Тесты](https://img.shields.io/badge/тесты-938%20пройдены-3DDC84)
+![Тесты](https://img.shields.io/badge/тесты-966%20пройдены-3DDC84)
 ![Архитектура](https://img.shields.io/badge/архитектура-x64-blue)
-![Релиз](https://img.shields.io/badge/релиз-v0.2.1-brightgreen)
+![Релиз](https://img.shields.io/badge/релиз-v0.2.2-brightgreen)
 
 ---
 
@@ -212,7 +212,7 @@ Codex Switchboard построен по модульной многослойн�
 
 Готовые исполняемые сборки для Windows x64 доступны в разделе [GitHub Releases](../../releases).
 
-1. Скачайте архив **`CodexSwitchboard-0.2.1-win-x64.zip`** из последнего релиза.
+1. Скачайте архив **`CodexSwitchboard-0.2.2-win-x64.zip`** из последнего релиза.
 2. Распакуйте архив в любую удобную папку.
 3. Запустите **`CodexSwitchboard.exe`**.
 
@@ -224,7 +224,7 @@ Codex Switchboard построен по модульной многослойн�
 - [.NET 10 SDK (x64)](https://dotnet.microsoft.com/download/dotnet/10.0), зафиксированный через `global.json` (`10.0.102` с `latestPatch`).
 
 ### 1. Проверка качества (одна команда разработчика)
-Запуск всех пороговых шлюзов качества (восстановление по lock-файлам, проверка форматирования, аудит уязвимостей зависимостей, Release-сборка с предупреждениями как ошибками и полный набор из 938 тестов):
+Запуск всех пороговых шлюзов качества (восстановление по lock-файлам, проверка форматирования, аудит уязвимостей зависимостей, Release-сборка с предупреждениями как ошибками и полный набор из 966 тестов):
 ```powershell
 powershell -ExecutionPolicy Bypass -File eng/quality/verify.ps1
 ```
@@ -241,16 +241,16 @@ dotnet restore CodexSwitcher.slnx --locked-mode
 # Сборка проекта в конфигурации Release
 dotnet build CodexSwitcher.slnx -c Release --no-restore
 
-# Запуск полного набора офлайн-тестов (938 тестов)
+# Запуск полного набора офлайн-тестов (966 тестов)
 dotnet test CodexSwitcher.slnx -c Release --no-build --no-restore
 ```
 
 ### 3. Создание детерминированного установочного архива
 Запустите скрипт сборки, тестирования, санитарной очистки и упаковки:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.2.1"
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.2.2"
 ```
-Файлы сборки: `dist/v0.2.1/CodexSwitchboard-0.2.1-win-x64.zip`, контрольная сумма `dist/v0.2.1/SHA256SUMS.txt` и манифест содержимого `dist/v0.2.1/manifest-sha256.txt`. Версионные каталоги сохраняют артефакты других сборок.
+Файлы сборки: `dist/v0.2.2/CodexSwitchboard-0.2.2-win-x64.zip`, контрольная сумма `dist/v0.2.2/SHA256SUMS.txt` и манифест содержимого `dist/v0.2.2/manifest-sha256.txt`. Версионные каталоги сохраняют артефакты других сборок.
 
 ---
 

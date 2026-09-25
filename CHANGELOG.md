@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.2] - 2026-09-25
+
+### Added
+- Replaced the crowded top action strip with a compact two-row toolbar while keeping account actions and Search available.
+- Added an Open Codex sign-in flow with explicit signed-out state and safer account display-name detection.
+- Added configurable notification severity and auto-dismiss behavior, plus bounded cleanup for abandoned app-owned temporary and generated-catalog artifacts.
+- Added catalog-driven multi-response billing recipes with live-versus-cached provenance for provider balance and usage.
+
+### Improved
+- Unified per-profile model inventory refresh, persistence, and catalog generation; exact model slugs and profile isolation are retained, and inactive-profile refreshes do not mutate active routing.
+- Continue Chat reloads and validates the exact destination provider/model, verifies the persistent fork, and labels the new continuation `[copy]` without renaming the source.
+- Reworked the API provider editor as a centered, width-constrained modal with wrapping content, validation that keeps the editor open, and an always-available Save action.
+- Deferred non-critical Settings diagnostics and startup maintenance until the UI is interactive; improved lifecycle instrumentation and cancellation behavior.
+- Improved notifications, provider probing/response mapping, secret handling, and routing/configuration reliability.
+
+### Исправлено и улучшено
+- Длинная верхняя панель команд заменена компактной панелью в два ряда; действия с аккаунтами и поиск остались доступны.
+- Добавлен вход в Codex с явным состоянием выхода и более надёжным определением отображаемого имени аккаунта.
+- Добавлены настройки важности уведомлений и их автоскрытия, а также ограниченная очистка оставшихся временных файлов и каталогов моделей приложения.
+- Добавлены каталожные сценарии расчёта баланса и использования по нескольким ответам с указанием актуальности данных.
+- Обновление списка моделей, его сохранение и генерация каталогов унифицированы для каждого профиля; точные идентификаторы моделей и изоляция каталогов сохраняются, а обновление неактивного профиля не изменяет активную маршрутизацию.
+- Continue Chat заново загружает и проверяет точные целевые провайдер и модель, подтверждает сохранение копии беседы и помечает продолжение `[copy]`, не переименовывая источник.
+- Редактор API-провайдера стал центрируемым модальным окном с ограниченной шириной, переносом содержимого, проверкой полей без закрытия окна и постоянно доступной кнопкой Save.
+- Диагностика настроек и некритичная очистка запускаются после готовности интерфейса; улучшены отмена и контроль жизненного цикла.
+- Повышена надёжность уведомлений, проверки провайдеров, обработки ответов, хранения секретов и настройки маршрутизации.
+
+---
+
 ## [0.2.1] - 2026-09-24
 
 ### Added

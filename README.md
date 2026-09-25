@@ -8,9 +8,9 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-0078D6?logo=windows)
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet)
 ![UI](https://img.shields.io/badge/UI-WinUI%203%20Fluent-2E9BFF)
-![Tests](https://img.shields.io/badge/tests-938%20passing-3DDC84)
+![Tests](https://img.shields.io/badge/tests-966%20passing-3DDC84)
 ![Architecture](https://img.shields.io/badge/architecture-x64-blue)
-![Release](https://img.shields.io/badge/release-v0.2.1-brightgreen)
+![Release](https://img.shields.io/badge/release-v0.2.2-brightgreen)
 
 ---
 
@@ -211,7 +211,7 @@ All configuration, credentials, and cache files reside strictly on your local co
 
 Pre-built Windows x64 binaries are available under [GitHub Releases](../../releases).
 
-1. Download **`CodexSwitchboard-0.2.1-win-x64.zip`** from the latest release.
+1. Download **`CodexSwitchboard-0.2.2-win-x64.zip`** from the latest release.
 2. Extract the archive to any folder.
 3. Run **`CodexSwitchboard.exe`**.
 
@@ -223,7 +223,7 @@ Pre-built Windows x64 binaries are available under [GitHub Releases](../../relea
 - [.NET 10 SDK (x64)](https://dotnet.microsoft.com/download/dotnet/10.0) pinned via `global.json` (`10.0.102` with `latestPatch`).
 
 ### 1. Developer Verification (Single Command)
-Run all repository quality gates (locked restore, format check, dependency vulnerability audit, release build with warnings as errors, and full 938-test suite):
+Run all repository quality gates (locked restore, format check, dependency vulnerability audit, release build with warnings as errors, and full 966-test suite):
 ```powershell
 powershell -ExecutionPolicy Bypass -File eng/quality/verify.ps1
 ```
@@ -240,16 +240,16 @@ dotnet restore CodexSwitcher.slnx --locked-mode
 # Build solution in Release configuration
 dotnet build CodexSwitcher.slnx -c Release --no-restore
 
-# Run the complete offline test suite (938 tests)
+# Run the complete offline test suite (966 tests)
 dotnet test CodexSwitcher.slnx -c Release --no-build --no-restore
 ```
 
 ### 3. Package Local Release Candidate
 Execute the packaging script to build, test, sanitize, and produce a deterministic release archive:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.2.1"
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.2.2"
 ```
-Output artifacts: `dist/v0.2.1/CodexSwitchboard-0.2.1-win-x64.zip`, `dist/v0.2.1/SHA256SUMS.txt`, and payload manifest `dist/v0.2.1/manifest-sha256.txt`. Versioned output directories preserve artifacts from other builds.
+Output artifacts: `dist/v0.2.2/CodexSwitchboard-0.2.2-win-x64.zip`, `dist/v0.2.2/SHA256SUMS.txt`, and payload manifest `dist/v0.2.2/manifest-sha256.txt`. Versioned output directories preserve artifacts from other builds.
 
 ---
 
