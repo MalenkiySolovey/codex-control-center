@@ -71,6 +71,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
 
     private readonly IApiProviderStore _apiProviderStore;
     private readonly IApiModelInventoryRefreshService _modelRefreshService;
+    private readonly IProviderInspectionService? _providerInspectionService;
     private readonly IApiKeySecretStore _secretStore;
     private readonly ICodexTargetSwitchService _targetSwitchService;
     private readonly ICodexThreadHandoffService _threadHandoffService;
@@ -117,7 +118,8 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         IAppLifetime? appLifetime = null,
         IProviderCompatibilityProbeService? probeService = null,
         IProcessManager? processManager = null,
-        IUiDispatcher? dispatcher = null)
+        IUiDispatcher? dispatcher = null,
+        IProviderInspectionService? providerInspectionService = null)
     {
         _apiProviderStore = apiProviderStore ?? throw new ArgumentNullException(nameof(apiProviderStore));
         _modelRefreshService = modelRefreshService ?? throw new ArgumentNullException(nameof(modelRefreshService));
@@ -135,6 +137,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         _probeService = probeService;
         _processManager = processManager;
         _dispatcher = dispatcher ?? ImmediateUiDispatcher.Instance;
+        _providerInspectionService = providerInspectionService;
         _modelRefreshService.RefreshStateChanged += OnRefreshStateChanged;
 
         appLifetime?.ApplicationStopping.Register(() => CancelOperations());
@@ -815,6 +818,61 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         finally
         {
             item.IsLoadingModels = false;
+        }
+    }
+
+    [RelayCommand]
+    public async Task RefreshBillingAsync(ApiProviderItemViewModel? item)
+    {
+        if (item is null || item.IsRefreshingBilling)
+        {
+            return;
+        }
+
+        if (!item.HasSecret)
+        {
+            ShowInfo("Provider billing", "Add an API key before refreshing provider billing.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        if (_providerInspectionService is null)
+        {
+            ShowInfo("Provider billing", "Provider inspection is unavailable.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        item.IsRefreshingBilling = true;
+        try
+        {
+            var observation = await _providerInspectionService.InspectAsync(item.Id, _cts.Token);
+            if (_apiProviderStore.GetById(item.Id) is { } persisted)
+            {
+                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive);
+                item.ApplyBillingSnapshot(persisted.LastBillingSnapshot, fromCache: false);
+            }
+
+            var snapshot = _apiProviderStore.GetById(item.Id)?.LastBillingSnapshot;
+            var hasBillingValue = snapshot?.Balance.HasValue == true || snapshot?.Used.HasValue == true ||
+                                  snapshot?.Remaining.HasValue == true || snapshot?.Limit.HasValue == true;
+            var warning = snapshot?.Status is ProviderBillingStatus.AuthRejected or ProviderBillingStatus.Unavailable ||
+                          (!hasBillingValue && snapshot?.Status is ProviderBillingStatus.Unknown or ProviderBillingStatus.Unsupported);
+            var message = snapshot?.Diagnostic ?? observation.Error ?? "Provider billing was refreshed.";
+            ShowInfo("Provider billing", message, warning ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            item.BillingDiagnostic = "Billing refresh canceled.";
+        }
+        catch
+        {
+            // Do not surface raw provider exceptions in the UI. The secure
+            // inspection transport already returns sanitized diagnostics.
+            item.BillingDiagnostic = "Provider billing refresh failed; the last cached values were kept.";
+            ShowInfo("Provider billing", item.BillingDiagnostic, InfoBarSeverity.Warning);
+        }
+        finally
+        {
+            item.IsRefreshingBilling = false;
         }
     }
 

@@ -75,12 +75,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISecretProtector>(_ => new DpapiSecretProtector());
         services.AddSingleton<IAuditLog>(_ => new FileAuditLog(paths.AuditLogPath));
 
-        services.AddSingleton<IUiDispatcher>(_ =>
+        services.AddSingleton<IUiDispatcher>(sp =>
         {
             try
             {
                 var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
-                return queue is not null ? new WinUiDispatcher(queue) : ImmediateUiDispatcher.Instance;
+                return queue is not null
+                    ? new WinUiDispatcher(queue, sp.GetRequiredService<IAppLifetime>())
+                    : ImmediateUiDispatcher.Instance;
             }
             catch
             {
@@ -122,6 +124,16 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICodexCapabilityCache, CodexCapabilityCache>();
         services.AddSingleton<ICodexRuntimeResolver>(sp => new CodexRuntimeResolver(
             sp.GetRequiredService<ICodexCapabilityCache>()));
+        services.AddSingleton<ICodexSignedOutService>(sp => new CodexSignedOutService(
+            sp.GetRequiredService<ICodexRuntimeResolver>(),
+            sp.GetRequiredService<AppSettings>(),
+            sp.GetRequiredService<IProcessManager>(),
+            sp.GetRequiredService<ISwitchboardCodexProcessRegistry>(),
+            sp.GetRequiredService<ProfileService>(),
+            sp.GetRequiredService<ICodexRoutingConfigStore>(),
+            sp.GetRequiredService<IFileSystem>(),
+            sp.GetRequiredService<AppPaths>(),
+            sp.GetRequiredService<IAuditLog>()));
         services.AddSingleton<ICodexRuntimeModelCatalogVerifier>(sp => new CodexRuntimeModelCatalogVerifier(
             sp.GetRequiredService<ICodexRuntimeResolver>(),
             sp.GetRequiredService<AppSettings>(),
@@ -270,7 +282,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IDeclarativeProviderInspector>(sp => new DeclarativeProviderInspector(
             sp.GetRequiredService<IProviderProbePlanner>(),
             sp.GetRequiredService<ISafeProviderHttpTransport>(),
-            sp.GetRequiredService<IProviderProbeResponseMapper>()));
+            sp.GetRequiredService<IProviderProbeResponseMapper>(),
+            sp.GetServices<IGenericProviderBillingStrategy>()));
         services.AddSingleton<IProviderModelCache, ProviderModelCache>();
         services.AddSingleton<IProviderInspectionService>(sp => new ProviderInspectionService(
             sp.GetRequiredService<IApiProviderStore>(),
@@ -359,6 +372,7 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddSingleton<INotificationScheduler, SystemNotificationScheduler>();
         services.AddSingleton<IAppNotificationService, AppNotificationService>();
         services.AddSingleton<IAppBusyService, AppBusyService>();
         services.AddSingleton<IThemeService, WinUiThemeService>();

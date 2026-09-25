@@ -716,7 +716,7 @@ public sealed class ManualQaBugfixTests
     public void Scenario10_Shutdown_TempCleanup_CleansUsagePrefixDirectories()
     {
         var tempBase = Path.GetTempPath();
-        var dir1 = Path.Combine(tempBase, $"usage-unit-test-{Guid.NewGuid():N}");
+        var dir1 = Path.Combine(tempBase, $"usage-{Guid.NewGuid():N}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir1);
         File.WriteAllText(Path.Combine(dir1, "file.txt"), "data");
 

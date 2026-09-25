@@ -118,7 +118,124 @@ public sealed class ProviderInspectionService : IProviderInspectionService
             };
         }
 
+        PersistBillingObservation(providerProfileId, descriptor, snapshot);
+
         return snapshot;
+    }
+
+    private void PersistBillingObservation(Guid profileId, ProviderDescriptor? descriptor, ApiProviderSnapshot observation)
+    {
+        var latestProfile = _apiProviderStore.GetById(profileId);
+        if (latestProfile is null)
+        {
+            return;
+        }
+
+        var current = latestProfile.LastBillingSnapshot;
+        var hasObservedFact = observation.Balance.HasValue || observation.UsedCredits.HasValue ||
+                              observation.Usage.HasValue || observation.RemainingCredits.HasValue ||
+                              observation.CreditLimit.HasValue;
+        var hasSupportedRecipe = IsCapability(observation, "balance", CapabilityStatus.Supported) ||
+                                 IsCapability(observation, "usage", CapabilityStatus.Supported);
+        var allUnsupported = IsCapability(observation, "balance", CapabilityStatus.Unsupported) &&
+                             IsCapability(observation, "usage", CapabilityStatus.Unsupported);
+
+        var next = new ProviderBillingSnapshot
+        {
+            Balance = observation.Balance,
+            Used = observation.UsedCredits ?? observation.Usage,
+            Limit = observation.CreditLimit,
+            Remaining = observation.RemainingCredits,
+            Currency = NormalizeFact(observation.Currency),
+            Unit = NormalizeFact(observation.Currency),
+            ResetAt = observation.ResetAt,
+            Source = descriptor?.DisplayName,
+            ObservedAt = observation.LastCheckedAt,
+            Status = hasObservedFact
+                ? string.IsNullOrWhiteSpace(observation.Error) ? ProviderBillingStatus.Live : ProviderBillingStatus.Partial
+                : allUnsupported
+                    ? ProviderBillingStatus.Unsupported
+                    : hasSupportedRecipe
+                        ? ClassifyFailedObservation(observation.Error)
+                        : ProviderBillingStatus.Unknown,
+            Diagnostic = BuildBillingDiagnostic(observation, hasObservedFact, allUnsupported, hasSupportedRecipe),
+        };
+
+        if (current is null)
+        {
+            if (next.Status == ProviderBillingStatus.Unknown)
+            {
+                return;
+            }
+        }
+        else if (!hasObservedFact)
+        {
+            // A failed or unsupported refresh never replaces a good last-known
+            // value with zero/unknown. Retain it and mark it as cached.
+            next = current with
+            {
+                Status = ProviderBillingStatus.Cached,
+                Diagnostic = next.Diagnostic ?? current.Diagnostic,
+            };
+        }
+        else
+        {
+            next = next with
+            {
+                Balance = next.Balance ?? current.Balance,
+                Used = next.Used ?? current.Used,
+                Limit = next.Limit ?? current.Limit,
+                Remaining = next.Remaining ?? current.Remaining,
+                Currency = next.Currency ?? current.Currency,
+                Unit = next.Unit ?? current.Unit,
+                Period = next.Period ?? current.Period,
+                ResetAt = next.ResetAt ?? current.ResetAt,
+                Source = next.Source ?? current.Source,
+            };
+        }
+
+        latestProfile.LastBillingSnapshot = next;
+        _apiProviderStore.Save(latestProfile);
+    }
+
+    private static bool IsCapability(ApiProviderSnapshot snapshot, string name, CapabilityStatus status) =>
+        snapshot.Capabilities.TryGetValue(name, out var actual) && actual == status;
+
+    private static string? NormalizeFact(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static ProviderBillingStatus ClassifyFailedObservation(string? error)
+    {
+        if (error?.Contains("HTTP 401", StringComparison.OrdinalIgnoreCase) == true ||
+            error?.Contains("HTTP 403", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return ProviderBillingStatus.AuthRejected;
+        }
+
+        return string.IsNullOrWhiteSpace(error) ? ProviderBillingStatus.Unknown : ProviderBillingStatus.Unavailable;
+    }
+
+    private static string? BuildBillingDiagnostic(
+        ApiProviderSnapshot observation,
+        bool hasObservedFact,
+        bool allUnsupported,
+        bool hasSupportedRecipe)
+    {
+        if (hasObservedFact)
+        {
+            return string.IsNullOrWhiteSpace(observation.Error)
+                ? null
+                : SanitizeMessage(observation.Error);
+        }
+
+        if (allUnsupported || !hasSupportedRecipe)
+        {
+            return "No supported billing endpoint was detected.";
+        }
+
+        return string.IsNullOrWhiteSpace(observation.Error)
+            ? "The provider billing endpoint did not return a supported value."
+            : SanitizeMessage(observation.Error);
     }
 
     /// <inheritdoc />
@@ -159,7 +276,7 @@ public sealed class ProviderInspectionService : IProviderInspectionService
             {
                 // The generic inspector is itself restricted to GET /models
                 // and never guesses balance, usage, or inference endpoints.
-                snapshot = await _inspector.InspectGenericUnknownAsync(
+                snapshot = await _inspector.DiscoverGenericUnknownModelsAsync(
                     profile.BaseUrl,
                     apiKey,
                     cancellationToken).ConfigureAwait(false);

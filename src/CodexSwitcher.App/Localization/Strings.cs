@@ -88,6 +88,15 @@ public sealed class Strings
     public string RefreshAll => S("Renovar todas", "Refresh all");
     public string RefreshAllTooltip => S("Renovar todas agora", "Refresh all now");
     public string SignInOAuth => S("Entrar com OAuth", "Sign in with OAuth");
+    public string OpenCodexSignIn => S("Abrir login do Codex", "Open Codex sign-in");
+    public string OpenCodexSignInTooltip => S(
+        "Prepara o Codex desconectado sem remover contas salvas no Switchboard.",
+        "Sign out the live Codex session without removing saved Switchboard accounts.");
+    public string OpenCodexSignInConfirmTitle => S("Abrir login do Codex?", "Open Codex sign-in?");
+    public string OpenCodexSignInConfirmMessage => S(
+        "A sessão ativa do Codex será encerrada e a janela será reaberta. As contas salvas, credenciais do cofre e dados 2FA do Switchboard serão preservados. Você fará login manualmente no Codex.",
+        "The live Codex session will be signed out and Desktop reopened. Saved Switchboard accounts, vault credentials, and 2FA data will be preserved. You will sign in manually in Codex.");
+    public string OpenCodexSignInConfirmButton => S("Preparar login", "Prepare sign-in");
     public string DetectAccount => S("Detectar conta", "Detect account");
     public string DetectAccountTooltip => S(
         "Procurar a conta logada no Codex agora e importar se for nova",

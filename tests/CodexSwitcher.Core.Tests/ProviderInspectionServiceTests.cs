@@ -118,6 +118,18 @@ public sealed class ProviderInspectionServiceTests
             LastInspectedApiKey = apiKey;
             return Task.FromResult(ResultToReturn);
         }
+
+        public Task<ApiProviderSnapshot> DiscoverGenericUnknownModelsAsync(
+            string rawBaseUrl,
+            string? apiKey,
+            CancellationToken ct = default)
+        {
+            if (ExceptionToThrow != null) throw ExceptionToThrow;
+            GenericCalled = true;
+            LastInspectedBaseUrl = rawBaseUrl;
+            LastInspectedApiKey = apiKey;
+            return Task.FromResult(ResultToReturn);
+        }
     }
 
     private sealed class FakeModelCache : IProviderModelCache

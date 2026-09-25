@@ -186,6 +186,9 @@ public sealed class ApiProviderProfile
     /// <summary>Latest capability probe report for this profile/model.</summary>
     public ProviderProbeReport? LastProbeReport { get; set; }
 
+    /// <summary>Last normalized billing observation; contains no credentials or raw response body.</summary>
+    public ProviderBillingSnapshot? LastBillingSnapshot { get; set; }
+
     /// <summary>User-facing display name.</summary>
     public string DisplayName =>
         !string.IsNullOrWhiteSpace(Nickname) ? Nickname :

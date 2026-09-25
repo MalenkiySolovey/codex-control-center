@@ -26,6 +26,16 @@
         <conv:IntToVisibilityConverter x:Key="IntToVis" />
         <conv:ApiCardBorderBrushConverter x:Key="ApiCardBorder" />
         <conv:ApiCardBackgroundConverter x:Key="ApiCardBg" />
+        <Style x:Key="CompactToolbarButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="8,2" />
+        </Style>
+        <Style x:Key="CompactToolbarSearchBoxStyle" TargetType="AutoSuggestBox">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="8,2" />
+        </Style>
     </UserControl.Resources>
 
     <Grid>
@@ -45,78 +55,112 @@
             </StackPanel>
         </Grid>
 
-        <!-- Header + toolbar -->
-        <Grid Grid.Row="1" Margin="24,12,24,8" ColumnDefinitions="*,Auto">
-            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+        <!-- Page heading remains a separate, unchanged-height row above the compact toolbar. -->
+        <Grid Grid.Row="1" Margin="24,12,24,8" RowDefinitions="Auto,Auto">
+            <StackPanel Grid.Row="0" VerticalAlignment="Center">
                 <TextBlock Text="{x:Bind Loc.AccountsHeader}" FontSize="26" FontWeight="Bold" />
                 <TextBlock Text="{x:Bind Loc.AccountsSubtitle}" Opacity="0.7" />
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                <Button Command="{x:Bind ViewModel.Accounts.RefreshAllCommand}"
+            <Grid Grid.Row="1" Margin="0,8,0,0"
+                  RowDefinitions="Auto,Auto"
+                  ColumnDefinitions="Auto,*,Auto,Auto,Auto"
+                  ColumnSpacing="6" RowSpacing="6">
+                <Button Grid.Row="0" Grid.Column="0"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Command="{x:Bind ViewModel.Accounts.RefreshAllCommand}"
                         ToolTipService.ToolTip="{x:Bind Loc.RefreshAllTooltip}"
                         Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE72C;" FontSize="14" />
                         <TextBlock Text="{x:Bind Loc.RefreshAll}" />
                     </StackPanel>
                 </Button>
-                <AutoSuggestBox x:Name="SearchBox" PlaceholderText="{x:Bind Loc.SearchPlaceholder}" Width="200" QueryIcon="Find"
+                <AutoSuggestBox Grid.Row="0" Grid.Column="1"
+                                x:Name="SearchBox"
+                                Style="{StaticResource CompactToolbarSearchBoxStyle}"
+                                MinWidth="120"
+                                HorizontalAlignment="Stretch"
+                                PlaceholderText="{x:Bind Loc.SearchPlaceholder}" QueryIcon="Find"
                                 Text="{x:Bind ViewModel.Accounts.SearchText, Mode=TwoWay}"
                                 Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}" />
-                <Button Command="{x:Bind ViewModel.Accounts.DetectAccountCommand}"
+                <Button Grid.Row="0" Grid.Column="2"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Command="{x:Bind ViewModel.Accounts.DetectAccountCommand}"
                         ToolTipService.ToolTip="{x:Bind Loc.DetectAccountTooltip}"
                         Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE721;" FontSize="14" />
                         <TextBlock Text="{x:Bind Loc.DetectAccount}" />
                     </StackPanel>
                 </Button>
-                <Button Command="{x:Bind ViewModel.Accounts.ImportAccountsCommand}"
+                <Button Grid.Row="1" Grid.Column="0"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Command="{x:Bind ViewModel.Accounts.ImportAccountsCommand}"
                         ToolTipService.ToolTip="{x:Bind Loc.ImportAccountsTooltip}"
                         Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE8B7;" FontSize="14" />
                         <TextBlock Text="{x:Bind Loc.ImportAccounts}" />
                     </StackPanel>
                 </Button>
-                <Button Command="{x:Bind ViewModel.Accounts.ExportAllCommand}"
+                <Button Grid.Row="1" Grid.Column="1"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Command="{x:Bind ViewModel.Accounts.ExportAllCommand}"
                         ToolTipService.ToolTip="{x:Bind Loc.ExportAllTooltip}"
                         Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE74E;" FontSize="14" />
                         <TextBlock Text="{x:Bind Loc.ExportAll}" />
                     </StackPanel>
                 </Button>
-                <Button Command="{x:Bind ViewModel.Accounts.AddAccountCommand}"
+                <Button Grid.Row="0" Grid.Column="3"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Command="{x:Bind ViewModel.Accounts.AddAccountCommand}"
                         Background="{ThemeResource BrandAccentBrush}" Foreground="{ThemeResource BrandOnAccentBrush}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE710;" FontSize="14" />
                         <TextBlock Text="{x:Bind Loc.SignInOAuth}" />
                     </StackPanel>
                 </Button>
-                <Button Click="OnOpenBrowserClick" ToolTipService.ToolTip="{x:Bind Loc.BrowserTooltip}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Grid.Row="0" Grid.Column="4"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Command="{x:Bind ViewModel.Accounts.OpenCodexSignInCommand}"
+                        ToolTipService.ToolTip="{x:Bind Loc.OpenCodexSignInTooltip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE72D;" FontSize="14" />
+                        <TextBlock Text="{x:Bind Loc.OpenCodexSignIn}" />
+                    </StackPanel>
+                </Button>
+                <Button Grid.Row="1" Grid.Column="2"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Click="OnOpenBrowserClick" ToolTipService.ToolTip="{x:Bind Loc.BrowserTooltip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
                         <SymbolIcon Symbol="Globe" />
                         <TextBlock Text="{x:Bind Loc.BrowserButton}" />
                     </StackPanel>
                 </Button>
-                <Button Click="OnOpen2FaClick" ToolTipService.ToolTip="{x:Bind Loc.TwoFactorTooltip}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Grid.Row="1" Grid.Column="3"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Click="OnOpen2FaClick" ToolTipService.ToolTip="{x:Bind Loc.TwoFactorTooltip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE72E;" FontSize="14" />
                         <TextBlock Text="{x:Bind Loc.TwoFactorButton}" />
                     </StackPanel>
                 </Button>
-                <Button Click="OnOpenSettingsClick" ToolTipService.ToolTip="{x:Bind Loc.SettingsButtonTooltip}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Grid.Row="1" Grid.Column="4"
+                        Style="{StaticResource CompactToolbarButtonStyle}"
+                        Click="OnOpenSettingsClick" ToolTipService.ToolTip="{x:Bind Loc.SettingsButtonTooltip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE713;" FontSize="14" />
                         <TextBlock Text="{x:Bind Loc.SettingsButton}" />
                     </StackPanel>
                 </Button>
-            </StackPanel>
+            </Grid>
         </Grid>
 
         <!-- InfoBar -->
         <InfoBar Grid.Row="2" Margin="24,4"
+                 IsClosable="True"
                  IsOpen="{x:Bind ViewModel.Notifications.IsOpen, Mode=TwoWay}"
                  Severity="{x:Bind ViewModel.Notifications.Severity, Mode=OneWay}"
                  Title="{x:Bind ViewModel.Notifications.Title, Mode=OneWay}"
@@ -916,6 +960,12 @@
                                                                 <FontIcon Glyph="&#xE70F;" />
                                                             </MenuFlyoutItem.Icon>
                                                         </MenuFlyoutItem>
+                                                        <MenuFlyoutItem Text="Refresh balance &amp; usage" Click="OnRefreshProviderBillingClick"
+                                                                        IsEnabled="{x:Bind CanRefreshBilling, Mode=OneWay}">
+                                                            <MenuFlyoutItem.Icon>
+                                                                <FontIcon Glyph="&#xE72C;" />
+                                                            </MenuFlyoutItem.Icon>
+                                                        </MenuFlyoutItem>
                                                         <MenuFlyoutItem Text="Clone Provider" Click="OnCloneApiProviderClick">
                                                             <MenuFlyoutItem.Icon>
                                                                 <FontIcon Glyph="&#xE8C8;" />
@@ -996,13 +1046,15 @@
                                             <!-- Balance fact -->
                                             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                                                 <TextBlock Text="Balance:" FontSize="11" Opacity="0.7" />
-                                                <TextBlock Text="{x:Bind BalanceSummary}" FontSize="11" FontWeight="Medium" />
+                                                <TextBlock Text="{x:Bind BalanceSummary, Mode=OneWay}" FontSize="11" FontWeight="Medium"
+                                                           ToolTipService.ToolTip="{x:Bind BillingDiagnostic, Mode=OneWay}" />
                                             </StackPanel>
 
                                             <!-- Usage fact -->
                                             <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                                                 <TextBlock Text="Usage:" FontSize="11" Opacity="0.7" />
-                                                <TextBlock Text="{x:Bind UsageSummary}" FontSize="11" FontWeight="Medium" />
+                                                <TextBlock Text="{x:Bind UsageSummary, Mode=OneWay}" FontSize="11" FontWeight="Medium"
+                                                           ToolTipService.ToolTip="{x:Bind BillingDiagnostic, Mode=OneWay}" />
                                             </StackPanel>
                                         </Grid>
                                     </Border>

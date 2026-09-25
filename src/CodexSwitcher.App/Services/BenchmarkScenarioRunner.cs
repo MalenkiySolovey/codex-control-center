@@ -76,7 +76,7 @@ public static class BenchmarkScenarioRunner
             {
                 shellVm.Accounts.RefreshAllCommand.Execute(null);
             });
-            await Task.Delay(100).ConfigureAwait(false);
+            await Task.Delay(Math.Max(100, delayMs)).ConfigureAwait(false);
             window.DispatcherQueue.TryEnqueue(() => window.Close());
             return;
         }
@@ -87,7 +87,7 @@ public static class BenchmarkScenarioRunner
             {
                 shellVm.Accounts.RefreshAllCommand.Execute(null);
             });
-            await Task.Delay(150).ConfigureAwait(false);
+            await Task.Delay(Math.Max(150, delayMs)).ConfigureAwait(false);
             window.DispatcherQueue.TryEnqueue(() => window.Close());
             return;
         }
@@ -98,7 +98,7 @@ public static class BenchmarkScenarioRunner
             {
                 shellVm.Accounts.RefreshAllCommand.Execute(null);
             });
-            await Task.Delay(50).ConfigureAwait(false);
+            await Task.Delay(Math.Max(50, delayMs)).ConfigureAwait(false);
             window.DispatcherQueue.TryEnqueue(() => window.Close());
             return;
         }
@@ -113,7 +113,22 @@ public static class BenchmarkScenarioRunner
                     shellVm.ApiProviders.DiscoverModelsCommand.Execute(firstProvider);
                 }
             });
-            await Task.Delay(100).ConfigureAwait(false);
+            await Task.Delay(Math.Max(100, delayMs)).ConfigureAwait(false);
+            window.DispatcherQueue.TryEnqueue(() => window.Close());
+            return;
+        }
+
+        if (scenario == "COMPATIBILITY")
+        {
+            window.DispatcherQueue.TryEnqueue(() =>
+            {
+                var providerWithCredential = shellVm.ApiProviders.Items.FirstOrDefault(provider => provider.HasSecret);
+                if (providerWithCredential is not null)
+                {
+                    shellVm.ApiProviders.RetestCompatibilityCommand.Execute(providerWithCredential);
+                }
+            });
+            await Task.Delay(Math.Max(100, delayMs)).ConfigureAwait(false);
             window.DispatcherQueue.TryEnqueue(() => window.Close());
             return;
         }
@@ -127,7 +142,7 @@ public static class BenchmarkScenarioRunner
                 {
                     shellVm.Accounts.SwitchCommand.Execute(firstItem);
                 });
-                await Task.Delay(300).ConfigureAwait(false);
+                await Task.Delay(Math.Max(300, delayMs)).ConfigureAwait(false);
             }
             window.DispatcherQueue.TryEnqueue(() => window.Close());
             return;

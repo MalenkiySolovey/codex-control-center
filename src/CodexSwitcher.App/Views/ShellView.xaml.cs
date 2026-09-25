@@ -58,6 +58,7 @@ using CodexSwitcher.App.Features.Settings;
 using CodexSwitcher.App.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 
 namespace CodexSwitcher.App.Views;
@@ -78,6 +79,7 @@ public sealed partial class ShellView : UserControl
         InitializeComponent();
         TrySetTitleBarIcon();
         Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
     }
 
     public void Initialize(ShellViewModel viewModel, AppPaths paths, Func<SettingsViewModel> settingsVmFactory)
@@ -110,11 +112,45 @@ public sealed partial class ShellView : UserControl
             await ViewModel.LoadCommand.ExecuteAsync(null);
         }
 
+        if (DispatcherQueue.HasThreadAccess)
+        {
+            CompositionTarget.Rendering += OnFirstFrameRendered;
+        }
+        else
+        {
+            DispatcherQueue.TryEnqueue(() => CompositionTarget.Rendering += OnFirstFrameRendered);
+        }
+    }
+
+    private int _firstFrameScheduled;
+    private int _isUnloaded;
+
+    private void OnFirstFrameRendered(object? sender, object args)
+    {
+        CompositionTarget.Rendering -= OnFirstFrameRendered;
+        if (Interlocked.Exchange(ref _firstFrameScheduled, 1) != 0)
+        {
+            return;
+        }
+
+        StartupTracer.Instance.RecordMilestone("T13b:CachedContentFirstRender");
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
+            if (Volatile.Read(ref _isUnloaded) != 0)
+            {
+                return;
+            }
+
             StartupTracer.Instance.RecordMilestone("T12:UIInteractive");
+            ViewModel.Accounts.StartPostInteractiveInitialization();
             StartupTracer.Instance.FlushToFile();
         });
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs args)
+    {
+        Interlocked.Exchange(ref _isUnloaded, 1);
+        CompositionTarget.Rendering -= OnFirstFrameRendered;
     }
 
     private TotpWindow? _totpWindow;
@@ -151,6 +187,7 @@ public sealed partial class ShellView : UserControl
     }
 
     private SettingsWindow? _settingsWindow;
+    private int _settingsOpenTraceSequence;
 
     private void OnOpenSettingsClick(object sender, RoutedEventArgs e)
     {
@@ -160,8 +197,12 @@ public sealed partial class ShellView : UserControl
             return;
         }
 
+        var tracePrefix = $"S{System.Threading.Interlocked.Increment(ref _settingsOpenTraceSequence):D3}:SettingsOpen";
+        StartupTracer.Instance.RecordMilestone($"{tracePrefix}:Click");
+
         var factory = _settingsVmFactory ?? throw new InvalidOperationException("SettingsViewModel factory não inicializada.");
         var vm = factory();
+        StartupTracer.Instance.RecordMilestone($"{tracePrefix}:ViewModelCreated");
 
         vm.OnMigrationCompleted = () =>
         {
@@ -174,7 +215,7 @@ public sealed partial class ShellView : UserControl
             });
         };
 
-        _settingsWindow = new SettingsWindow(vm);
+        _settingsWindow = new SettingsWindow(vm, tracePrefix);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Activate();
     }
@@ -296,6 +337,11 @@ public sealed partial class ShellView : UserControl
     private void OnEditApiProviderClick(object sender, RoutedEventArgs e)
     {
         if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.EditApiProviderCommand.Execute(item);
+    }
+
+    private void OnRefreshProviderBillingClick(object sender, RoutedEventArgs e)
+    {
+        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.RefreshBillingCommand.Execute(item);
     }
 
     private void OnCloneApiProviderClick(object sender, RoutedEventArgs e)

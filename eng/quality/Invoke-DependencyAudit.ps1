@@ -20,7 +20,7 @@ Write-Host "Auditing dependencies for: $resolvedSolution" -ForegroundColor Cyan
 
 # 1. Run machine-readable vulnerability check
 Write-Host "Querying NuGet advisory database via dotnet CLI (JSON format)..." -ForegroundColor Yellow
-$jsonRaw = & dotnet package list --project $resolvedSolution --include-transitive --vulnerable --format json --output-version 1 2>&1
+$jsonRaw = & dotnet package list --project $resolvedSolution --include-transitive --vulnerable --format json --output-version 1 --no-restore 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to execute 'dotnet package list --vulnerable'. Exit code: $LASTEXITCODE. Output: $jsonRaw"
     exit $LASTEXITCODE
@@ -82,7 +82,7 @@ if ($vulnerabilities.Count -gt 0) {
 # 2. Check outdated if requested
 if ($IncludeOutdated) {
     Write-Host "`nQuerying outdated packages (informational)..." -ForegroundColor Yellow
-    $outdatedRaw = & dotnet package list --project $resolvedSolution --outdated --format json --output-version 1 2>&1
+    $outdatedRaw = & dotnet package list --project $resolvedSolution --outdated --format json --output-version 1 --no-restore 2>&1
     if ($LASTEXITCODE -eq 0) {
         $outdatedReport = $outdatedRaw | ConvertFrom-Json
         $outdatedList = @()

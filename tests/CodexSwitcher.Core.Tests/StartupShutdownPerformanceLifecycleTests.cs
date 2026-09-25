@@ -3,6 +3,8 @@ using CodexSwitcher.Core.Accounts.Services;
 using CodexSwitcher.Core.Common.Lifecycle;
 using CodexSwitcher.Core.Providers.Catalog;
 using CodexSwitcher.Core.Tests.TestSupport;
+using CodexSwitcher.App.Composition;
+using CodexSwitcher.Infra.Common.Paths;
 using Xunit;
 
 namespace CodexSwitcher.Core.Tests;
@@ -58,6 +60,35 @@ public sealed class StartupShutdownPerformanceLifecycleTests
         var registry = new SwitchboardCodexProcessRegistry();
         // At startup before any background worker or account server is spawned, owned process count must be 0
         Assert.Empty(registry.GetOwnedProcessIds());
+    }
+
+    [Fact]
+    public void HostBuilder_DoesNotSweepOwnedTempDirectoriesBeforeFirstWindow()
+    {
+        using var temp = new TempDir();
+        var paths = new AppPaths(temp.Root);
+        paths.EnsureDirectories();
+        var stale = Path.Combine(paths.TempRoot, $"usage-{Guid.NewGuid():N}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stale);
+        Directory.SetCreationTimeUtc(stale, DateTime.UtcNow.AddMinutes(-10));
+
+        SwitchboardHostBuilder.CreateApplicationBuilder(paths);
+
+        Assert.True(Directory.Exists(stale));
+    }
+
+    [Fact]
+    public async Task StartupTracer_ReleasesDeferredMaintenanceOnlyAfterInteractiveMilestone()
+    {
+        var tracer = new StartupTracer(Stopwatch.GetTimestamp());
+        var interactive = tracer.WaitForInteractiveAsync();
+
+        Assert.False(interactive.IsCompleted);
+        tracer.RecordMilestone("T11:ShellLoaded");
+        Assert.False(interactive.IsCompleted);
+
+        tracer.RecordMilestone("T12:UIInteractive");
+        await interactive.WaitAsync(TimeSpan.FromSeconds(1));
     }
 
     [Fact]

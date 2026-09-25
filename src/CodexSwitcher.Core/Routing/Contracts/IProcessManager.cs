@@ -55,6 +55,14 @@ public interface IProcessManager
         TimeSpan gracefulTimeout,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Requests a graceful close of only the identified Codex Desktop processes.
+    /// Never kills a process; returns false if any targeted desktop process remains.
+    /// </summary>
+    Task<bool> CloseDesktopGracefullyAsync(
+        TimeSpan gracefulTimeout,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Relança um processo reabrível (só app desktop). Lança em falha para o chamador tratar.</summary>
     void Relaunch(CodexProcessInfo process);
 

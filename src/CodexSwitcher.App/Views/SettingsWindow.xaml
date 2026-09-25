@@ -114,6 +114,36 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Global notification policy -->
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Notifications" FontSize="16" FontWeight="SemiBold" />
+                        <TextBlock Text="Show" Opacity="0.8" />
+                        <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="4">
+                            <CheckBox Grid.Row="0" Grid.Column="0" Content="Information"
+                                      IsChecked="{x:Bind ViewModel.ShowInformationalNotifications, Mode=TwoWay}" />
+                            <CheckBox Grid.Row="0" Grid.Column="1" Content="Success"
+                                      IsChecked="{x:Bind ViewModel.ShowSuccessNotifications, Mode=TwoWay}" />
+                            <CheckBox Grid.Row="1" Grid.Column="0" Content="Warnings"
+                                      IsChecked="{x:Bind ViewModel.ShowWarningNotifications, Mode=TwoWay}" />
+                            <CheckBox Grid.Row="1" Grid.Column="1" Content="Errors"
+                                      IsChecked="{x:Bind ViewModel.ShowErrorNotifications, Mode=TwoWay}" />
+                        </Grid>
+                        <ToggleSwitch Header="Automatically hide notifications"
+                                      IsOn="{x:Bind ViewModel.NotificationAutoDismissEnabled, Mode=TwoWay}" />
+                        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                            <TextBlock Text="Hide after" VerticalAlignment="Center" />
+                            <ComboBox ItemsSource="{x:Bind ViewModel.NotificationAutoDismissDurations}"
+                                      SelectedItem="{x:Bind ViewModel.SelectedNotificationAutoDismissDuration, Mode=TwoWay}"
+                                      DisplayMemberPath="Label"
+                                      IsEnabled="{x:Bind ViewModel.NotificationAutoDismissEnabled, Mode=OneWay}"
+                                      MinWidth="150" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
                 <!-- 2FA Security Card -->
                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"

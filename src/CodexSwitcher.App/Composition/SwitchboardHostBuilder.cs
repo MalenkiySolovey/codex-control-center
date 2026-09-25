@@ -3,6 +3,7 @@ using CodexSwitcher.Infra.Common.Storage;
 using CodexSwitcher.Infra.Security.Hardening;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using CodexSwitcher.Core.Common.Lifecycle;
 
 namespace CodexSwitcher.App.Composition;
 
@@ -19,7 +20,7 @@ public static class SwitchboardHostBuilder
         var appPaths = paths ?? new AppPaths();
         appPaths.EnsureDirectories();
         DirectoryHardening.TryRestrictToCurrentUser(appPaths.Root);
-        TempCleanup.SweepLoginTemp(appPaths.TempRoot);
+        StartupTracer.Instance.RecordMilestone("T4a:AppDirectoriesReady");
 
         var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -37,6 +38,7 @@ public static class SwitchboardHostBuilder
         }
 
         builder.Services.AddSwitchboardServices(appPaths);
+        StartupTracer.Instance.RecordMilestone("T4b:ServiceRegistrationCompleted");
 
         return builder;
     }
@@ -48,7 +50,10 @@ public static class SwitchboardHostBuilder
     {
         var builder = CreateApplicationBuilder(paths, validateContainer);
         configureServices?.Invoke(builder.Services);
-        return builder.Build();
+        StartupTracer.Instance.RecordMilestone("T4c:HostBuildStarted");
+        var host = builder.Build();
+        StartupTracer.Instance.RecordMilestone("T4d:HostBuildCompleted");
+        return host;
     }
 
     public static IHost CreateHost(

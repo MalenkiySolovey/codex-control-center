@@ -307,4 +307,71 @@ public sealed class ProviderInspectionDecompositionTests
         Assert.Equal(100m, snapshot.CreditLimit);
         Assert.Equal("USD", snapshot.Currency);
     }
+
+    [Fact]
+    public async Task DeclarativeProviderInspector_CombinesNamedReadOnlyBillingResponses()
+    {
+        var mock = new MockHttpHandler
+        {
+            ResponseFactory = request => request.RequestUri!.AbsolutePath switch
+            {
+                "/v1/models" => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{ \"data\": [{ \"id\": \"model\" }] }", Encoding.UTF8, "application/json")
+                },
+                "/v1/quota" => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{ \"limit\": 40, \"currency\": \"USD\" }", Encoding.UTF8, "application/json")
+                },
+                "/v1/usage" => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{ \"used\": 13.25 }", Encoding.UTF8, "application/json")
+                },
+                _ => throw new InvalidOperationException($"Unexpected inspection path: {request.RequestUri.AbsolutePath}")
+            }
+        };
+
+        var descriptor = CreateTestDescriptor();
+        descriptor.Capabilities!.Balance = new ProviderCapabilityRecipe
+        {
+            Status = CapabilityStatus.Supported,
+            Strategy = "json-http",
+            Requests =
+            [
+                new RecipeRequest { Id = "quota", Method = "GET", Path = "/quota", Auth = "bearer" },
+                new RecipeRequest { Id = "usage", Method = "GET", Path = "/usage", Auth = "bearer" },
+            ],
+            Outputs = new RecipeResponseMapping
+            {
+                Limit = new JsonFieldMapping { RequestId = "quota", Pointer = "/limit", Type = "decimal" },
+                Used = new JsonFieldMapping { RequestId = "usage", Pointer = "/used", Type = "decimal" },
+                Remaining = new JsonFieldMapping
+                {
+                    Operation = "subtract",
+                    Sources = ["limit", "used"],
+                    Type = "decimal",
+                },
+                Currency = new CurrencyMapping { RequestId = "quota", Pointer = "/currency" },
+            },
+        };
+        descriptor.Capabilities.Usage = new ProviderCapabilityRecipe
+        {
+            Status = CapabilityStatus.Unknown,
+            Strategy = "unknown",
+        };
+
+        var planner = new ProviderProbePlanner();
+        using var transport = new SafeProviderHttpTransport(new HttpClient(mock));
+        using var inspector = new DeclarativeProviderInspector(planner, transport, new ProviderProbeResponseMapper());
+
+        var snapshot = await inspector.InspectAsync(descriptor, "https://api.provider.test/v1", "sk-multi-response-key");
+
+        Assert.Equal(13.25m, snapshot.UsedCredits);
+        Assert.Equal(40m, snapshot.CreditLimit);
+        Assert.Equal(26.75m, snapshot.RemainingCredits);
+        Assert.Equal(26.75m, snapshot.Balance);
+        Assert.Equal("USD", snapshot.Currency);
+        Assert.Equal(1, mock.RequestHistory.Count(request => request.RequestUri!.AbsolutePath == "/v1/quota"));
+        Assert.Equal(1, mock.RequestHistory.Count(request => request.RequestUri!.AbsolutePath == "/v1/usage"));
+    }
 }

@@ -43,12 +43,13 @@ public sealed record AuthFileInfo(
     string? IdToken,
     string? AccountId);
 
-/// <summary>Claims decodificados localmente do id_token (JWT), sem rede. Ver §7 e ponto 12.</summary>
+/// <summary>Claims decodificados localmente do id_token (JWT), sem rede; nomes servem apenas para exibição.</summary>
 public sealed record AccountClaims(
     string? Sub,
     string? Email,
     DateTimeOffset? ExpiresAt,
-    string? PlanType);
+    string? PlanType,
+    string? DisplayName = null);
 
 /// <summary>Caminhos do Codex relevantes ao app (o slot ativo é externo, gerido pelo Codex).</summary>
 public sealed record CodexPaths(

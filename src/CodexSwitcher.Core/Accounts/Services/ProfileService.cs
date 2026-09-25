@@ -130,7 +130,7 @@ public sealed class ProfileService
 
         foreach (var profile in Profiles)
         {
-            if (profile.DetectedSubscription is not null)
+            if (profile.DetectedSubscription is not null && !string.IsNullOrWhiteSpace(profile.DetectedDisplayName))
                 continue;
 
             try
@@ -138,24 +138,14 @@ public sealed class ProfileService
                 if (profile.IsActive && _fs.FileExists(_paths.ActiveAuthPath))
                 {
                     var activeBytes = _fs.ReadAllBytes(_paths.ActiveAuthPath);
-                    var sub = SubscriptionJwtClaimExtractor.Extract(activeBytes, now);
-                    if (sub is not null)
-                    {
-                        profile.DetectedSubscription = sub;
-                        changed = true;
-                        continue;
-                    }
+                    changed |= EnrichDetectedMetadata(profile, activeBytes, now);
                 }
 
-                if (_vault.Exists(profile.Id))
+                if ((profile.DetectedSubscription is null || string.IsNullOrWhiteSpace(profile.DetectedDisplayName)) &&
+                    _vault.Exists(profile.Id))
                 {
                     var blob = _vault.LoadBlob(profile.Id);
-                    var sub = SubscriptionJwtClaimExtractor.Extract(blob, now);
-                    if (sub is not null)
-                    {
-                        profile.DetectedSubscription = sub;
-                        changed = true;
-                    }
+                    changed |= EnrichDetectedMetadata(profile, blob, now);
                 }
             }
             catch
@@ -167,6 +157,38 @@ public sealed class ProfileService
         if (changed)
             _store.SaveAll(Profiles);
     }
+
+    private static bool EnrichDetectedMetadata(ProfileMetadata profile, byte[] authJson, DateTimeOffset now)
+    {
+        var (_, claims) = AuthJsonReader.Identify(authJson);
+        if (!MatchesKnownAccountSub(profile, claims))
+        {
+            return false;
+        }
+
+        var changed = false;
+        if (string.IsNullOrWhiteSpace(profile.DetectedDisplayName) && !string.IsNullOrWhiteSpace(claims.DisplayName))
+        {
+            profile.DetectedDisplayName = claims.DisplayName;
+            changed = true;
+        }
+
+        if (profile.DetectedSubscription is null)
+        {
+            var subscription = SubscriptionJwtClaimExtractor.Extract(authJson, now);
+            if (subscription is not null)
+            {
+                profile.DetectedSubscription = subscription;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    private static bool MatchesKnownAccountSub(ProfileMetadata profile, AccountClaims claims) =>
+        string.IsNullOrWhiteSpace(profile.AccountSub) ||
+        string.Equals(profile.AccountSub, claims.Sub, StringComparison.Ordinal);
 
     /// <summary>Reconcilia; em caso de drift (Codex renovou externamente) faz write-back no cofre.</summary>
     public ReconciliationResult Reconcile()
@@ -183,6 +205,12 @@ public sealed class ProfileService
                 var info = AuthJsonReader.TryRead(activeBytes);
                 if (info?.LastRefresh is { } lr) profile.LastRefreshedAt = lr;
                 if (profile.HealthStatus is HealthStatus.Unknown) profile.HealthStatus = HealthStatus.Valid;
+                var (_, claims) = AuthJsonReader.Identify(activeBytes);
+                if (MatchesKnownAccountSub(profile, claims) &&
+                    !string.IsNullOrWhiteSpace(claims.DisplayName))
+                {
+                    profile.DetectedDisplayName = claims.DisplayName;
+                }
                 var sub = SubscriptionJwtClaimExtractor.Extract(activeBytes, _clock.UtcNow);
                 if (sub is not null) profile.DetectedSubscription = sub;
                 _store.SaveAll(Profiles);
@@ -259,7 +287,8 @@ public sealed class ProfileService
             existing.LastRefreshedAt = file?.LastRefresh ?? _clock.UtcNow;
             var sub = SubscriptionJwtClaimExtractor.Extract(authJson, _clock.UtcNow);
             if (sub is not null) existing.DetectedSubscription = sub;
-            if (!string.IsNullOrWhiteSpace(nickname)) existing.Nickname = nickname!;
+            if (!string.IsNullOrWhiteSpace(claims.DisplayName)) existing.DetectedDisplayName = claims.DisplayName;
+            if (!string.IsNullOrWhiteSpace(nickname)) existing.Nickname = nickname.Trim();
             _store.SaveAll(Profiles);
             _audit.Record("add", "updated-existing", existing.DisplayName);
             return existing;
@@ -267,8 +296,9 @@ public sealed class ProfileService
 
         var profile = new ProfileMetadata
         {
-            Nickname = nickname ?? claims.Email ?? string.Empty,
+            Nickname = nickname?.Trim() ?? string.Empty,
             AccountEmail = claims.Email,
+            DetectedDisplayName = claims.DisplayName,
             AccountSub = claims.Sub,
             AuthMode = file?.AuthMode,
             PlanType = claims.PlanType,
@@ -422,8 +452,9 @@ public sealed class ProfileService
                     var profile = new ProfileMetadata
                     {
                         Id = orphanId,
-                        Nickname = claims.Email ?? string.Empty,
+                        Nickname = string.Empty,
                         AccountEmail = claims.Email,
+                        DetectedDisplayName = claims.DisplayName,
                         AccountSub = claims.Sub,
                         AuthMode = file?.AuthMode ?? "chatgpt",
                         PlanType = claims.PlanType ?? "free",
@@ -491,6 +522,8 @@ public sealed class ProfileService
         p.BlobFingerprint = _vault.SaveBlob(p.Id, authJson);
         if (!string.IsNullOrEmpty(claims.Sub)) p.AccountSub = claims.Sub;
         if (!string.IsNullOrEmpty(claims.Email)) p.AccountEmail = claims.Email;
+        if (MatchesKnownAccountSub(p, claims) && !string.IsNullOrEmpty(claims.DisplayName))
+            p.DetectedDisplayName = claims.DisplayName;
         if (!string.IsNullOrEmpty(claims.PlanType)) p.PlanType = claims.PlanType;
         if (!string.IsNullOrEmpty(file?.AuthMode)) p.AuthMode = file.AuthMode;
         p.HealthStatus = HealthStatus.Valid;

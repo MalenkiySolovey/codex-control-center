@@ -905,17 +905,7 @@ public sealed class ProviderCompatibilityProbeService : IProviderCompatibilityPr
         }
         finally
         {
-            try
-            {
-                if (Directory.Exists(tempDir))
-                {
-                    Directory.Delete(tempDir, recursive: true);
-                }
-            }
-            catch
-            {
-                // Non-fatal cleanup
-            }
+            TempCleanup.TryForceDelete(tempDir);
         }
     }
 
@@ -1124,13 +1114,55 @@ public sealed class ProviderCompatibilityProbeService : IProviderCompatibilityPr
             return (-1, string.Empty, "Failed to start process");
         }
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(linked.Token);
+        var stderrTask = process.StandardError.ReadToEndAsync(linked.Token);
 
-        await process.WaitForExitAsync(ct).ConfigureAwait(false);
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+            var stdout = await stdoutTask.ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            return (process.ExitCode, stdout, stderr);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                // The runner owns this process and only attempts to stop this process tree.
+            }
 
-        return (process.ExitCode, stdout, stderr);
+            try
+            {
+                await process.WaitForExitAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or TimeoutException or InvalidOperationException)
+            {
+                // Cleanup remains bounded; the stale owned temp folder can be retried next launch.
+            }
+
+            try
+            {
+                await Task.WhenAll(stdoutTask, stderrTask)
+                    .WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or TimeoutException or InvalidOperationException) { }
+
+            if (ct.IsCancellationRequested)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            throw new TimeoutException("Codex compatibility probe exceeded its two-minute process limit.");
+        }
     }
 }

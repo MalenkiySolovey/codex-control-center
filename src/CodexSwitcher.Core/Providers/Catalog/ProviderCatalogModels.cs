@@ -165,12 +165,26 @@ public sealed class ProviderCapabilityRecipe
     [JsonPropertyName("request")]
     public RecipeRequest? Request { get; set; }
 
+    /// <summary>
+    /// Optional bounded request set for capabilities that combine more than one
+    /// read-only response. The legacy single <see cref="Request"/> remains valid.
+    /// </summary>
+    [JsonPropertyName("requests")]
+    public List<RecipeRequest>? Requests { get; set; }
+
     [JsonPropertyName("response")]
     public RecipeResponseMapping? Response { get; set; }
+
+    /// <summary>Named-response output mapping used by multi-request recipes.</summary>
+    [JsonPropertyName("outputs")]
+    public RecipeResponseMapping? Outputs { get; set; }
 }
 
 public sealed class RecipeRequest
 {
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
     [JsonPropertyName("method")]
     public string Method { get; set; } = "GET";
 
@@ -214,6 +228,18 @@ public sealed class JsonFieldMapping
     [JsonPropertyName("pointer")]
     public string Pointer { get; set; } = string.Empty;
 
+    /// <summary>Response identifier for a multi-request recipe; null selects the single legacy response.</summary>
+    [JsonPropertyName("requestId")]
+    public string? RequestId { get; set; }
+
+    /// <summary>Bounded numeric operation: direct, scale, add, or subtract.</summary>
+    [JsonPropertyName("operation")]
+    public string? Operation { get; set; }
+
+    /// <summary>References another named numeric output, never an executable expression.</summary>
+    [JsonPropertyName("sources")]
+    public List<string>? Sources { get; set; }
+
     [JsonPropertyName("type")]
     public string Type { get; set; } = "decimal";
 
@@ -232,6 +258,9 @@ public sealed class CurrencyMapping
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1720:Identifiers should not contain type names", Justification = "Matches RFC 6901 JSON pointer property name in catalog schema.")]
     [JsonPropertyName("pointer")]
     public string? Pointer { get; set; }
+
+    [JsonPropertyName("requestId")]
+    public string? RequestId { get; set; }
 }
 
 public sealed class ProviderEvidence

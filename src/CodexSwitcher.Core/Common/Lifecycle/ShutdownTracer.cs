@@ -182,8 +182,22 @@ public sealed class ShutdownTracer
     {
         try
         {
+            var configuredDirectory = System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_PERF_DIR");
+            var persistenceEnabled = string.Equals(
+                    System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_ENABLE_PERF_TRACE"),
+                    "1",
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_ENABLE_PERF_TRACE"),
+                    "true",
+                    StringComparison.OrdinalIgnoreCase);
+            if (directoryPath is null && string.IsNullOrWhiteSpace(configuredDirectory) && !persistenceEnabled)
+            {
+                return;
+            }
+
             var dir = directoryPath
-                ?? System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_PERF_DIR")
+                ?? configuredDirectory
                 ?? Path.Combine(Path.GetTempPath(), "codex-switchboard-perf");
 
             Directory.CreateDirectory(dir);
