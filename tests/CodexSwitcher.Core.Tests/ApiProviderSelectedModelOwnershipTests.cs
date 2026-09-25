@@ -118,14 +118,14 @@ public sealed class ApiProviderSelectedModelOwnershipTests
     }
 
     [Fact]
-    public void AppInformationalVersionIsStableV021()
+    public void AppInformationalVersionMatchesPreviewTarget()
     {
         var informationalVersion = typeof(ApiProviderItemViewModel).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion
             .Split('+')[0];
 
-        Assert.Equal("0.2.1", informationalVersion);
+        Assert.Equal("0.2.1-preview.19", informationalVersion);
     }
 
     [Theory]
