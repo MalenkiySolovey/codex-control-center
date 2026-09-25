@@ -99,8 +99,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         string title,
         UIElement content,
         string primaryButtonText,
-        string? secondaryButtonText = null,
-        double? width = null)
+        string? secondaryButtonText = null)
     {
         var dialog = new ContentDialog
         {
@@ -115,12 +114,6 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         if (!string.IsNullOrWhiteSpace(secondaryButtonText))
         {
             dialog.SecondaryButtonText = secondaryButtonText;
-        }
-
-        if (width is { } requestedWidth && double.IsFinite(requestedWidth) && requestedWidth > 0)
-        {
-            dialog.Width = requestedWidth;
-            dialog.MaxWidth = requestedWidth;
         }
 
         if (CodexSwitcher.App.App.MainWindowInstance?.Content is FrameworkElement hostContent)
@@ -508,8 +501,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             _loc.ProviderDialogTitle,
             scrollViewer,
             _loc.SaveAndSwitch,
-            _loc.SaveOnly,
-            width: 488);
+            _loc.SaveOnly);
 
         bool isPrimary = false;
         bool confirmed = false;
@@ -1478,8 +1470,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         var dialog = CreateApiProviderEditorDialog(
             _loc.EditProviderDialogTitle,
             scrollViewer,
-            _loc.Save,
-            width: editorWidth);
+            _loc.Save);
 
         CodexModelOverrides? extractedModel = null;
         ApiProviderTransportOverrides? extractedTransport = null;
