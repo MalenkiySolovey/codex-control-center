@@ -123,7 +123,10 @@ public sealed class LiveProductionRuntimeQualificationTests
             return;
         }
 
-        Assert.Contains("0.155.0", runtime.Version);
+        // Codex updates independently of Switchboard; qualify the installed runtime rather than
+        // pinning this integration check to one historical CLI version.
+        Assert.False(string.IsNullOrWhiteSpace(runtime.Version));
+        Assert.False(string.Equals(runtime.Version, "unknown", StringComparison.OrdinalIgnoreCase));
 
         // Prepare isolated CODEX_HOME
         var tempCodexHome = Path.Combine(Path.GetTempPath(), "codex_qual_prod_" + Guid.NewGuid().ToString("N"));

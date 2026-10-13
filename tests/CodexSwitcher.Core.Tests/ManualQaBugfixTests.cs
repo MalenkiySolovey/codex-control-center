@@ -715,11 +715,12 @@ public sealed class ManualQaBugfixTests
     [Fact]
     public void Scenario10_Shutdown_TempCleanup_CleansUsagePrefixDirectories()
     {
-        var tempBase = Path.GetTempPath();
+        using var temp = new TempDir();
+        var tempBase = temp.Root;
         var dir1 = Path.Combine(tempBase, $"usage-{Guid.NewGuid():N}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir1);
         File.WriteAllText(Path.Combine(dir1, "file.txt"), "data");
-
+        Directory.SetCreationTimeUtc(dir1, DateTime.UtcNow.AddMinutes(-1));
         try
         {
             TempCleanup.SweepLoginTemp(tempBase);

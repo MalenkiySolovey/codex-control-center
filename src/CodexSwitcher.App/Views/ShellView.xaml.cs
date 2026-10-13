@@ -77,9 +77,60 @@ public sealed partial class ShellView : UserControl
     public ShellView()
     {
         InitializeComponent();
+        AccountsHeaderGrid.SizeChanged += OnAccountsHeaderSizeChanged;
         TrySetTitleBarIcon();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+    }
+
+    private bool _isAccountsHeaderCompact;
+    private bool _isSearchInSecondaryToolbarRow;
+
+    private void OnAccountsHeaderSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        const double compactLayoutBreakpoint = 1040;
+        var useCompactLayout = e.NewSize.Width < compactLayoutBreakpoint;
+        var useSecondarySearchRow = e.NewSize.Width < 860;
+        SearchBox.Width = useSecondarySearchRow
+            ? Math.Max(220, e.NewSize.Width - 690)
+            : e.NewSize.Width < 1200
+                ? 220
+                : 260;
+
+        if (_isSearchInSecondaryToolbarRow != useSecondarySearchRow)
+        {
+            if (useSecondarySearchRow)
+            {
+                AccountsToolbarPrimaryRow.Children.Remove(SearchBox);
+                AccountsToolbarSecondaryRow.Children.Insert(0, SearchBox);
+            }
+            else
+            {
+                AccountsToolbarSecondaryRow.Children.Remove(SearchBox);
+                AccountsToolbarPrimaryRow.Children.Insert(1, SearchBox);
+            }
+
+            _isSearchInSecondaryToolbarRow = useSecondarySearchRow;
+        }
+
+        if (_isAccountsHeaderCompact == useCompactLayout)
+        {
+            return;
+        }
+
+        _isAccountsHeaderCompact = useCompactLayout;
+        AccountsHeaderGrid.ColumnDefinitions[0].Width = useCompactLayout
+            ? new GridLength(1, GridUnitType.Star)
+            : GridLength.Auto;
+        AccountsHeaderGrid.ColumnDefinitions[1].Width = useCompactLayout
+            ? new GridLength(0)
+            : new GridLength(1, GridUnitType.Star);
+        Grid.SetColumn(AccountsToolbar, useCompactLayout ? 0 : 1);
+        Grid.SetRow(AccountsToolbar, useCompactLayout ? 1 : 0);
+        AccountsToolbar.HorizontalAlignment = useCompactLayout ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+        AccountsToolbar.Margin = useCompactLayout ? new Thickness(0, 8, 0, 0) : new Thickness(0);
+        AccountsToolbarPrimaryRow.HorizontalAlignment = useCompactLayout ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+        AccountsToolbarSecondaryRow.HorizontalAlignment = useCompactLayout ? HorizontalAlignment.Left : HorizontalAlignment.Right;
     }
 
     public void Initialize(ShellViewModel viewModel, AppPaths paths, Func<SettingsViewModel> settingsVmFactory)

@@ -62,6 +62,8 @@ public sealed class DialogHostContext : IDialogHost
 
     public void Attach(Window window) => _window = window;
 
+    public Window OwnerWindow => _window ?? throw new InvalidOperationException("UI host not attached.");
+
     public XamlRoot XamlRoot =>
         _window?.Content?.XamlRoot ?? throw new InvalidOperationException("UI host not attached.");
 

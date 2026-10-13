@@ -95,38 +95,9 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         _settings = settings;
     }
 
-    private ContentDialog CreateApiProviderEditorDialog(
-        string title,
-        UIElement content,
-        string primaryButtonText,
-        string? secondaryButtonText = null)
-    {
-        var dialog = new ContentDialog
-        {
-            Title = title,
-            Content = content,
-            PrimaryButtonText = primaryButtonText,
-            CloseButtonText = _loc.Cancel,
-            DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = XamlRoot,
-        };
-
-        if (!string.IsNullOrWhiteSpace(secondaryButtonText))
-        {
-            dialog.SecondaryButtonText = secondaryButtonText;
-        }
-
-        if (CodexSwitcher.App.App.MainWindowInstance?.Content is FrameworkElement hostContent)
-        {
-            dialog.RequestedTheme = hostContent.RequestedTheme;
-        }
-
-        return dialog;
-    }
-
     public async Task<AddApiProviderResult?> PromptAddApiProviderAsync(IReadOnlyList<ProviderDescriptor> descriptors)
     {
-        var panel = new StackPanel { Spacing = 12, Width = 440 };
+        var panel = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
 
         var providerCombo = new ComboBox
         {
@@ -470,6 +441,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             }
         };
 
+        panel.Children.Add(errorBar);
         panel.Children.Add(providerCombo);
         panel.Children.Add(nicknameBox);
         panel.Children.Add(routePoolLabelBox);
@@ -487,28 +459,26 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         modelCombo.TextSubmitted += (_, _) => advanced.UpdateModelContextHint(GetSelectedModelString());
         advanced.UpdateModelContextHint(GetSelectedModelString());
 
-        panel.Children.Add(errorBar);
-
-        var scrollViewer = new ScrollViewer
-        {
-            Content = panel,
-            MaxHeight = 560,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        };
-
-        var dialog = CreateApiProviderEditorDialog(
+        var editor = new ProviderEditorWindow(
+            Host.OwnerWindow,
             _loc.ProviderDialogTitle,
-            scrollViewer,
+            panel,
             _loc.SaveAndSwitch,
+            _loc.Cancel,
             _loc.SaveOnly);
 
         bool isPrimary = false;
-        bool confirmed = false;
         CodexModelOverrides? extractedModel = null;
         ApiProviderTransportOverrides? extractedTransport = null;
 
-        dialog.PrimaryButtonClick += (s, args) =>
+        void ShowGeneralValidation(string message)
+        {
+            errorBar.Title = message;
+            errorBar.IsOpen = true;
+            errorBar.StartBringIntoView();
+        }
+
+        bool ValidateAndExtract(ProviderEditorAction action)
         {
             var key = passwordBox.Password?.Trim();
             var name = nicknameBox.Text?.Trim();
@@ -517,89 +487,38 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
 
             if (string.IsNullOrWhiteSpace(key))
             {
-                errorBar.Title = _loc.ApiKeyRequired;
-                errorBar.IsOpen = true;
-                args.Cancel = true;
-                return;
+                ShowGeneralValidation(_loc.ApiKeyRequired);
+                return false;
             }
             if (string.IsNullOrWhiteSpace(name))
             {
-                errorBar.Title = "Name is required.";
-                errorBar.IsOpen = true;
-                args.Cancel = true;
-                return;
+                ShowGeneralValidation("Name is required.");
+                return false;
             }
             if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out _))
             {
-                errorBar.Title = "Valid Base URL is required.";
-                errorBar.IsOpen = true;
-                args.Cancel = true;
-                return;
+                ShowGeneralValidation("Valid Base URL is required.");
+                return false;
             }
 
             var (m, t, err) = advanced.ValidateAndExtract(_loc, selModel);
             if (err != null)
             {
-                errorBar.Title = err;
-                errorBar.IsOpen = true;
-                args.Cancel = true;
-                return;
+                ShowGeneralValidation(err);
+                return false;
             }
 
+            errorBar.IsOpen = false;
             extractedModel = m;
             extractedTransport = t;
-            isPrimary = true;
-            confirmed = true;
-        };
-
-        dialog.SecondaryButtonClick += (s, args) =>
-        {
-            var key = passwordBox.Password?.Trim();
-            var name = nicknameBox.Text?.Trim();
-            var url = baseUrlBox.Text?.Trim();
-            var selModel = GetSelectedModelString();
-
-            if (string.IsNullOrWhiteSpace(key))
-            {
-                errorBar.Title = _loc.ApiKeyRequired;
-                errorBar.IsOpen = true;
-                args.Cancel = true;
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                errorBar.Title = "Name is required.";
-                errorBar.IsOpen = true;
-                args.Cancel = true;
-                return;
-            }
-            if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out _))
-            {
-                errorBar.Title = "Valid Base URL is required.";
-                errorBar.IsOpen = true;
-                args.Cancel = true;
-                return;
-            }
-
-            var (m, t, err) = advanced.ValidateAndExtract(_loc, selModel);
-            if (err != null)
-            {
-                errorBar.Title = err;
-                errorBar.IsOpen = true;
-                args.Cancel = true;
-                return;
-            }
-
-            extractedModel = m;
-            extractedTransport = t;
-            isPrimary = false;
-            confirmed = true;
-        };
+            isPrimary = action == ProviderEditorAction.Primary;
+            return true;
+        }
 
         try
         {
-            var res = await dialog.ShowAsync();
-            if (confirmed)
+            var result = await editor.ShowAsync(ValidateAndExtract);
+            if (result is ProviderEditorAction.Primary or ProviderEditorAction.Secondary)
             {
                 var key = passwordBox.Password?.Trim() ?? string.Empty;
                 var selectedTag = (providerCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "custom";
@@ -914,8 +833,15 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         };
         var addManualButton = new Button
         {
-            Content = _loc.AddManualModel,
+            Content = new TextBlock
+            {
+                Text = _loc.AddManualModel,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = TextAlignment.Center,
+            },
             HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 196,
+            Width = 196,
         };
         var inventoryCountText = new TextBlock
         {
@@ -1013,8 +939,10 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             var setDefault = new Button
             {
                 Padding = new Thickness(8, 3, 8, 3),
+                MinWidth = 128,
                 VerticalAlignment = VerticalAlignment.Center,
             };
+            ToolTipService.SetToolTip(setDefault, "Set this model as the default.");
             setDefault.Click += (_, _) =>
             {
                 var entry = workingInventory.Models.FirstOrDefault(model =>
@@ -1074,7 +1002,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
                 controls.NameText.Text = entry.DisplayName ?? entry.Slug;
                 controls.DetailsText.Text = $"{entry.Slug} · {entry.DiscoverySource} · {entry.Availability}";
                 var isSelected = string.Equals(entry.Slug, workingInventory.SelectedModel, StringComparison.Ordinal);
-                controls.DefaultButton.Content = isSelected ? "Default" : "Use as default";
+                controls.DefaultButton.Content = isSelected ? "Default" : "Set default";
                 controls.DefaultButton.IsEnabled = entry.Enabled && !isSelected;
             }
         }
@@ -1172,12 +1100,11 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
         };
 
-        void ShowGeneralValidation(string message, Control? focusTarget = null)
+        void ShowGeneralValidation(string message)
         {
             errorBar.Title = message;
             errorBar.IsOpen = true;
             errorBar.StartBringIntoView();
-            focusTarget?.Focus(FocusState.Programmatic);
         }
 
         void ShowDefaultValidation()
@@ -1407,13 +1334,13 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             }
         };
 
+        panel.Children.Add(errorBar);
         panel.Children.Add(nicknameBox);
         panel.Children.Add(routePoolLabelBox);
         panel.Children.Add(routeCombo);
         panel.Children.Add(baseUrlBox);
         panel.Children.Add(passwordBox);
         panel.Children.Add(passwordHint);
-        panel.Children.Add(errorBar);
         panel.Children.Add(actionsPanel);
         panel.Children.Add(compatibilityConsentPanel);
         panel.Children.Add(compatibilityInfoBar);
@@ -1423,29 +1350,19 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         advancedSettings.AttachTo(panel);
         advancedSettings.UpdateModelContextHint(GetSelectedModelString());
 
-        var rootSize = XamlRoot.Size;
-        var layout = SafeModalLayoutCalculator.Calculate(rootSize.Width, rootSize.Height);
-        var editorWidth = Math.Max(1, Math.Min(layout.Width, 820));
-        var editorHeight = Math.Max(180, Math.Min(layout.MaxHeight, 860));
+        var editor = new ProviderEditorWindow(
+            Host.OwnerWindow,
+            _loc.EditProviderDialogTitle,
+            panel,
+            _loc.Save,
+            _loc.Cancel);
 
-        var scrollViewer = new ScrollViewer
-        {
-            Content = panel,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            Padding = new Thickness(24, 16, 24, 16),
-            MaxHeight = Math.Min(layout.ContentMaxHeight, Math.Max(180, editorHeight - 96)),
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        };
         void ConstrainEditorContentWidth()
         {
-            // A vertical StackPanel inside ScrollViewer can otherwise measure
-            // children at their natural width and let long text/buttons escape
-            // the editor viewport instead of wrapping.
-            var availableWidth = scrollViewer.ActualWidth -
-                scrollViewer.Padding.Left -
-                scrollViewer.Padding.Right -
-                18;
+            // ProviderEditorWindow already constrains the body to the inner
+            // viewport width. Reusing the viewport calculation here would
+            // subtract its padding twice and make nested controls overflow.
+            var availableWidth = panel.Width;
             if (double.IsFinite(availableWidth) && availableWidth > 0)
             {
                 panel.Width = availableWidth;
@@ -1453,50 +1370,42 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
                 compatibilityConsentPanel.Width = availableWidth;
                 compatibilityInfoBar.MaxWidth = availableWidth;
                 errorBar.MaxWidth = availableWidth;
-                inventoryPanel.Width = Math.Max(1, availableWidth - inventoryPanel.Padding.Left - inventoryPanel.Padding.Right);
-                inventoryDescription.Width = inventoryPanel.Width;
-                inventoryFilterBox.Width = inventoryPanel.Width;
-                invertVisibleButton.MaxWidth = inventoryPanel.Width;
-                manualModelPanel.Width = inventoryPanel.Width;
-                inventoryCountText.Width = inventoryPanel.Width;
-                defaultValidationBar.MaxWidth = inventoryPanel.Width;
-                inventoryList.Width = inventoryPanel.Width;
+                inventoryPanel.Width = availableWidth;
+                var inventoryContentWidth = Math.Max(1, availableWidth - inventoryPanel.Padding.Left - inventoryPanel.Padding.Right);
+                inventoryDescription.Width = inventoryContentWidth;
+                inventoryFilterBox.Width = inventoryContentWidth;
+                invertVisibleButton.MaxWidth = inventoryContentWidth;
+                manualModelPanel.Width = inventoryContentWidth;
+                inventoryCountText.Width = inventoryContentWidth;
+                defaultValidationBar.MaxWidth = inventoryContentWidth;
+                inventoryList.Width = inventoryContentWidth;
                 inventoryExpander.Width = availableWidth;
             }
         }
-        scrollViewer.SizeChanged += (_, _) => ConstrainEditorContentWidth();
-        panel.Width = Math.Max(1, editorWidth - scrollViewer.Padding.Left - scrollViewer.Padding.Right - 18);
-
-        var dialog = CreateApiProviderEditorDialog(
-            _loc.EditProviderDialogTitle,
-            scrollViewer,
-            _loc.Save);
+        editor.BodyScrollViewer.SizeChanged += (_, _) => ConstrainEditorContentWidth();
 
         CodexModelOverrides? extractedModel = null;
         ApiProviderTransportOverrides? extractedTransport = null;
         var isSaved = false;
 
-        dialog.PrimaryButtonClick += (_sender, args) =>
+        bool ValidateAndSave(ProviderEditorAction action)
         {
             if (string.IsNullOrWhiteSpace(nicknameBox.Text))
             {
-                ShowGeneralValidation("Name is required.", nicknameBox);
-                args.Cancel = true;
-                return;
+                ShowGeneralValidation("Name is required.");
+                return false;
             }
             if (string.IsNullOrWhiteSpace(baseUrlBox.Text) || !Uri.TryCreate(baseUrlBox.Text.Trim(), UriKind.Absolute, out _))
             {
-                ShowGeneralValidation("Valid Base URL is required.", baseUrlBox);
-                args.Cancel = true;
-                return;
+                ShowGeneralValidation("Valid Base URL is required.");
+                return false;
             }
 
             var selModel = GetSelectedModelString();
             if (string.IsNullOrWhiteSpace(selModel))
             {
                 ShowDefaultValidation();
-                args.Cancel = true;
-                return;
+                return false;
             }
 
             var selectedInventoryItem = workingInventory.Models.FirstOrDefault(entry =>
@@ -1504,24 +1413,21 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             if (selectedInventoryItem is null)
             {
                 ShowDefaultValidation();
-                args.Cancel = true;
-                return;
+                return false;
             }
             if (!selectedInventoryItem.Enabled)
             {
                 workingInventory.SelectedModel = null;
                 ShowDefaultValidation();
-                args.Cancel = true;
-                return;
+                return false;
             }
             workingInventory.SelectedModel = selModel;
 
             var (m, t, err) = advancedSettings!.ValidateAndExtract(_loc, selModel);
             if (err != null)
             {
-                ShowGeneralValidation(err, advancedSettings.Expander);
-                args.Cancel = true;
-                return;
+                ShowGeneralValidation(err);
+                return false;
             }
 
             extractedModel = m;
@@ -1538,11 +1444,12 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             }
 
             isSaved = true;
-        };
+            return true;
+        }
 
-        var result = await dialog.ShowAsync();
+        var result = await editor.ShowAsync(ValidateAndSave);
 
-        if (result == ContentDialogResult.Primary && isSaved)
+        if (result == ProviderEditorAction.Primary && isSaved)
         {
             var routeTag = (routeCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? profile.SelectedRouteId ?? string.Empty;
             return new EditApiProviderResult

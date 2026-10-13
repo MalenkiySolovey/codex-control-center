@@ -60,6 +60,7 @@ namespace CodexSwitcher.App.Dialogs.Shared;
 public interface IDialogHost
 {
     void Attach(Window window);
+    Window OwnerWindow { get; }
     XamlRoot XamlRoot { get; }
     IntPtr WindowHandle { get; }
     void InitializePicker(object picker);
