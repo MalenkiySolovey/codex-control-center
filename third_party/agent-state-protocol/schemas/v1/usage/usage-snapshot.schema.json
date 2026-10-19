@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:codex-control-center:agent-state:v1:usage:usage-snapshot",
+  "$id": "urn:agent-state-protocol:v1:usage:usage-snapshot",
   "title": "UsageSnapshot",
   "description": "A provenance- and freshness-aware observation; unknown values are null, never zero by convention.",
   "type": "object",

@@ -18,8 +18,8 @@ public sealed class AgentStateContractTests
     [Fact]
     public void EveryDraft202012SchemaAndCanonicalExampleValidates()
     {
-        var schemaDirectory = Path.Combine(FindRepositoryRoot(), "contracts", "agent-state", "v1", "schemas");
-        var exampleDirectory = Path.Combine(FindRepositoryRoot(), "contracts", "agent-state", "v1", "examples");
+        var schemaDirectory = Path.Combine(GetProtocolRoot(), "schemas", "v1");
+        var exampleDirectory = Path.Combine(GetProtocolRoot(), "examples", "v1");
         var schemaFiles = Directory.EnumerateFiles(schemaDirectory, "*.schema.json", SearchOption.AllDirectories).ToArray();
 
         Assert.NotEmpty(schemaFiles);
@@ -27,6 +27,9 @@ public sealed class AgentStateContractTests
         {
             var schemaJson = JsonNode.Parse(File.ReadAllText(schemaPath))!;
             Assert.Equal("https://json-schema.org/draft/2020-12/schema", schemaJson["$schema"]?.GetValue<string>());
+            var schemaId = schemaJson["$id"]?.GetValue<string>() ?? string.Empty;
+            Assert.StartsWith("urn:agent-state-protocol:v1:", schemaId, StringComparison.Ordinal);
+            Assert.DoesNotContain("codex-control-center", schemaId, StringComparison.OrdinalIgnoreCase);
             using var schemaDocument = JsonDocument.Parse(schemaJson.ToJsonString());
             var metaResult = MetaSchemas.Draft202012.Evaluate(schemaDocument.RootElement);
             Assert.True(metaResult.IsValid, $"Schema is not valid Draft 2020-12: {Path.GetFileName(schemaPath)}");
@@ -137,7 +140,7 @@ public sealed class AgentStateContractTests
     [Fact]
     public void GeneralStateExamplesContainNoSecretValuesOrPersonalEmailAddresses()
     {
-        var examples = Path.Combine(FindRepositoryRoot(), "contracts", "agent-state", "v1", "examples");
+        var examples = Path.Combine(GetProtocolRoot(), "examples", "v1");
         var forbiddenNames = new[]
         {
             "access_token", "refresh_token", "id_token", "api_key", "apikey", "totpsecret",
@@ -163,10 +166,13 @@ public sealed class AgentStateContractTests
         });
 
     private static JsonNode ReadExample(string name) => JsonNode.Parse(File.ReadAllText(
-        Path.Combine(FindRepositoryRoot(), "contracts", "agent-state", "v1", "examples", name)))!;
+        Path.Combine(GetProtocolRoot(), "examples", "v1", name)))!;
 
     private static string GetSchemaPath(string group, string name) => Path.Combine(
-        FindRepositoryRoot(), "contracts", "agent-state", "v1", "schemas", group, name);
+        GetProtocolRoot(), "schemas", "v1", group, name);
+
+    private static string GetProtocolRoot() => Path.Combine(
+        FindRepositoryRoot(), "third_party", "agent-state-protocol");
 
     private static void AssertValid(JsonSchema schema, JsonNode instance, string label)
     {
@@ -213,7 +219,7 @@ public sealed class AgentStateContractTests
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
-            if (Directory.Exists(Path.Combine(directory.FullName, "contracts", "agent-state", "v1")))
+            if (Directory.Exists(Path.Combine(directory.FullName, "third_party", "agent-state-protocol")))
                 return directory.FullName;
         }
 

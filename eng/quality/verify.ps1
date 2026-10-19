@@ -14,6 +14,7 @@ $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $SolutionPath = Join-Path $RepoRoot "CodexSwitcher.slnx"
 $GlobalJsonPath = Join-Path $RepoRoot "global.json"
 $DependencyAuditScript = Join-Path $RepoRoot "eng\quality\Invoke-DependencyAudit.ps1"
+$ProtocolVerifyScript = Join-Path $RepoRoot "eng\protocol\verify-agent-state-protocol.ps1"
 $BuildReleaseScript = Join-Path $RepoRoot "scripts\build-release.ps1"
 
 Write-Host "====================================================================" -ForegroundColor Cyan
@@ -21,7 +22,7 @@ Write-Host " Codex Switchboard - Repository-Wide Quality Gates Verification" -Fo
 Write-Host " Root: $RepoRoot" -ForegroundColor Cyan
 Write-Host "====================================================================" -ForegroundColor Cyan
 
-$gateCount = if ($SkipPackaging) { 6 } else { 7 }
+$gateCount = if ($SkipPackaging) { 7 } else { 8 }
 $currentGate = 1
 
 function Run-Gate {
@@ -95,15 +96,23 @@ Run-Gate "Release Compilation & Static Analysis (WarningsAsErrors)" {
     }
 }
 
-# --- GATE 6: Full Offline Test Suite & Architecture Invariants ---
-Run-Gate "Regression & Architecture Tests (653+ Offline Suite)" {
+# --- GATE 6: Pinned Protocol Snapshot & Focused Offline DTO Conformance ---
+Run-Gate "Offline Agent State Protocol Snapshot & DTO Conformance" {
+    & powershell -ExecutionPolicy Bypass -File $ProtocolVerifyScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Offline Agent State Protocol verification failed with exit code $LASTEXITCODE."
+    }
+}
+
+# --- GATE 7: Full Offline Test Suite & Architecture Invariants ---
+Run-Gate "Regression & Architecture Tests (995+ Offline Suite)" {
     & dotnet test $SolutionPath -c Release --no-build --no-restore
     if ($LASTEXITCODE -ne 0) {
         throw "Test suite execution failed with exit code $LASTEXITCODE."
     }
 }
 
-# --- GATE 7: Release Packaging & Dual Sanitization (Optional) ---
+# --- GATE 8: Release Packaging & Dual Sanitization (Optional) ---
 if (-not $SkipPackaging) {
     Run-Gate "Deterministic Release Packaging & Artifact Sanitization" {
         & powershell -ExecutionPolicy Bypass -File $BuildReleaseScript -Version $Version -SkipTests

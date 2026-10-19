@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:codex-control-center:agent-state:v1:accounts:account-descriptor",
+  "$id": "urn:agent-state-protocol:v1:accounts:account-descriptor",
   "title": "AccountDescriptor",
   "description": "Redacted account projection; not a profile persistence record.",
   "type": "object",

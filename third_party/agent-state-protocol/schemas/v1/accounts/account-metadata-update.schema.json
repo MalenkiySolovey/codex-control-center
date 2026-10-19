@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:codex-control-center:agent-state:v1:accounts:account-metadata-update",
+  "$id": "urn:agent-state-protocol:v1:accounts:account-metadata-update",
   "title": "AccountMetadataUpdate",
   "description": "Current v1 write concept is a user-selected nickname; expectedRevision is an opaque optional CAS token for owners that support it.",
   "type": "object",

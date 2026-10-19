@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:codex-control-center:agent-state:v1:providers:provider-descriptor",
+  "$id": "urn:agent-state-protocol:v1:providers:provider-descriptor",
   "title": "ProviderDescriptor",
   "description": "Generic language-model provider metadata; not a Codex routing target or model-catalog file.",
   "type": "object",

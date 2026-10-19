@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:codex-control-center:agent-state:v1:common:capability-descriptor",
+  "$id": "urn:agent-state-protocol:v1:common:capability-descriptor",
   "title": "CapabilityDescriptor",
   "type": "object",
   "additionalProperties": false,
