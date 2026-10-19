@@ -94,7 +94,6 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
             // existing encrypted vault before the live slot is cleared.
             stage = "reconcile-profile";
             _authReconciler.Reconcile();
-            _accountRegistry.Save();
             var savedProfileCount = _accountRegistry.Profiles.Count;
             var savedBlobFingerprints = _accountRegistry.Profiles
                 .Select(profile => profile.BlobFingerprint)
@@ -170,7 +169,6 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
 
             stage = "reconcile-signed-out-state";
             _authReconciler.Reconcile();
-            _accountRegistry.Save();
             if (_accountRegistry.Profiles.Count != savedProfileCount ||
                 !_accountRegistry.Profiles.Select(profile => profile.BlobFingerprint)
                     .SequenceEqual(savedBlobFingerprints, StringComparer.Ordinal))
@@ -404,7 +402,6 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
         try
         {
             _authReconciler.Reconcile();
-            _accountRegistry.Save();
         }
         catch
         {

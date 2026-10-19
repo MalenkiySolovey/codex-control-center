@@ -76,7 +76,7 @@ public sealed class CodexAuthReconciler
             if (!_fs.FileExists(_paths.ActiveAuthPath))
                 return false;
 
-            var result = _matcher.Reconcile(_registry.Profiles);
+            var result = _matcher.Reconcile(_registry.SnapshotUnderLock());
             return result is { Match: ActiveMatch.None, ActiveFingerprint: not null };
         }
     }
@@ -116,12 +116,11 @@ public sealed class CodexAuthReconciler
             var profile = _credentials.AddFromAuthJson(authJson, nickname);
             lock (_registry.SyncRoot)
             {
-                profile.IsActive = true;
-                _registry.SaveUnderLock();
+                _registry.SetActiveProfileUnderLock(profile.Id);
             }
 
             _audit.Record("adopt", "ok", profile.DisplayName);
-            return profile;
+            return _registry.Find(profile.Id);
         }
         finally
         {
@@ -141,7 +140,10 @@ public sealed class CodexAuthReconciler
 
     private ReconciliationResult ReconcileUnderLock()
     {
-        var result = _matcher.Reconcile(_registry.Profiles);
+        var profiles = _registry.SnapshotUnderLock();
+        var result = _matcher.Reconcile(profiles);
+        var activeId = profiles.FirstOrDefault(profile => profile.IsActive)?.Id;
+        _registry.SetActiveProfileUnderLock(activeId);
 
         if (result.Match == ActiveMatch.SameAccountDrifted && result.ActiveProfileId is { } id)
         {
@@ -151,7 +153,7 @@ public sealed class CodexAuthReconciler
                 var activeAuthJson = _fs.ReadAllBytes(_paths.ActiveAuthPath);
                 try
                 {
-                    _credentials.PersistReconciledCredential(profile, activeAuthJson);
+                    _credentials.PersistReconciledCredential(id, activeAuthJson);
                     _audit.Record("reconcile", "write-back", profile.DisplayName);
                 }
                 finally
@@ -166,14 +168,14 @@ public sealed class CodexAuthReconciler
 
     private void EnsureDetectedSubscriptionsUnderLock()
     {
-        var changed = false;
         var now = _clock.UtcNow;
 
-        foreach (var profile in _registry.Profiles)
+        foreach (var profile in _registry.SnapshotUnderLock())
         {
             if (profile.DetectedSubscription is not null && !string.IsNullOrWhiteSpace(profile.DetectedDisplayName))
                 continue;
 
+            var changed = false;
             try
             {
                 if (profile.IsActive && _fs.FileExists(_paths.ActiveAuthPath))
@@ -207,9 +209,15 @@ public sealed class CodexAuthReconciler
             {
                 // A transient local read/decryption failure must not fail account loading.
             }
-        }
 
-        if (changed)
-            _registry.SaveUnderLock();
+            if (changed)
+            {
+                _registry.UpdateUnderLock(profile.Id, current =>
+                {
+                    current.DetectedSubscription = profile.DetectedSubscription;
+                    current.DetectedDisplayName = profile.DetectedDisplayName;
+                });
+            }
+        }
     }
 }

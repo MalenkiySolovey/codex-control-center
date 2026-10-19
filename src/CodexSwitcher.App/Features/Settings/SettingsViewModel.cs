@@ -1,4 +1,3 @@
-using CodexSwitcher.Core.Accounts.Contracts;
 using CodexSwitcher.Core.Accounts.Formatting;
 using CodexSwitcher.Core.Accounts.Models;
 using CodexSwitcher.Core.Accounts.Services;
@@ -86,7 +85,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     private readonly ISettingsDialogService _ui;
     private readonly IStartupRegistrationService? _startupRegistrationService;
     private readonly IGlobalHotkeyService? _globalHotkeyService;
-    private readonly IProfileStore? _profileStore;
+    private readonly AccountRegistry? _accountRegistry;
     private readonly IApiProviderStore? _apiProviderStore;
     private readonly IProviderCatalogService? _catalogService;
     private readonly IKeyBrokerInstaller? _brokerInstaller;
@@ -517,7 +516,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         var choices = new List<QuickSwitchTargetChoice> { new(string.Empty, "Not assigned") };
         try
         {
-            foreach (var profile in (_profileStore?.LoadAll() ?? [])
+            foreach (var profile in (_accountRegistry?.Profiles ?? [])
                          .OrderBy(profile => profile.SortOrder)
                          .ThenBy(profile => profile.DisplayName, StringComparer.OrdinalIgnoreCase))
             {
@@ -1044,7 +1043,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         IKeyBrokerInstaller? brokerInstaller = null,
         IStartupRegistrationService? startupRegistrationService = null,
         IGlobalHotkeyService? globalHotkeyService = null,
-        IProfileStore? profileStore = null,
+        AccountRegistry? accountRegistry = null,
         IApiProviderStore? apiProviderStore = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -1058,7 +1057,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         _ui = ui ?? throw new ArgumentNullException(nameof(ui));
         _startupRegistrationService = startupRegistrationService;
         _globalHotkeyService = globalHotkeyService;
-        _profileStore = profileStore;
+        _accountRegistry = accountRegistry;
         _apiProviderStore = apiProviderStore;
         _catalogService = catalogService;
         _brokerInstaller = brokerInstaller;

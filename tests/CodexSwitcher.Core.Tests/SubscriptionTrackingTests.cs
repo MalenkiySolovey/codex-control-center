@@ -199,22 +199,20 @@ public sealed class SubscriptionTrackingTests : IDisposable
         var vault = new VaultService(new DpapiSecretProtector(), _fs, _dir.Combine("vault"));
         var paths = CodexPaths.ForHome(_dir.Combine(".codex"));
         var recon = new ReconciliationService(_fs, paths);
-        var service = AccountServiceGraph.Create(vault, store, recon, _fs, paths, new SystemClock(), new FakeAudit()).Profiles;
-
-        var id = Guid.NewGuid();
-        var profile = new ProfileMetadata { Id = id, Nickname = "Work" };
-        service.Profiles.Add(profile);
-        store.SaveAll(service.Profiles);
+        var graph = AccountServiceGraph.Create(vault, store, recon, _fs, paths, new SystemClock(), new FakeAudit());
+        var profile = graph.Credentials.AddFromAuthJson(
+            Sample.AuthJson(idToken: Sample.Jwt(sub: "tracking-sub")), "Work");
 
         var tracking = new SubscriptionTracking(null, new DateOnly(2026, 10, 1), SubscriptionTrackingMode.Renewal);
-        service.UpdateSubscriptionTracking(id, tracking);
+        graph.Registry.UpdateSubscriptionTracking(profile.Id, tracking);
 
-        Assert.NotNull(profile.SubscriptionTracking);
-        Assert.Equal(new DateOnly(2026, 10, 1), profile.SubscriptionTracking.NextRenewalOrExpiryOn);
+        var updated = graph.Registry.Find(profile.Id)!;
+        Assert.NotNull(updated.SubscriptionTracking);
+        Assert.Equal(new DateOnly(2026, 10, 1), updated.SubscriptionTracking.NextRenewalOrExpiryOn);
 
         // Clear tracking
-        service.UpdateSubscriptionTracking(id, null);
-        Assert.Null(profile.SubscriptionTracking);
+        graph.Registry.UpdateSubscriptionTracking(profile.Id, null);
+        Assert.Null(graph.Registry.Find(profile.Id)?.SubscriptionTracking);
     }
 
     [Fact]

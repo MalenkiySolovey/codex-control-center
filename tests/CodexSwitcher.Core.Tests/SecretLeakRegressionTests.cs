@@ -33,7 +33,7 @@ public sealed class SecretLeakRegressionTests
 
         var vault = new VaultService(new DpapiSecretProtector(), _fs, paths.VaultDir);
         var profileStore = new ProfileStore(_fs, paths.ProfilesPath);
-        var chatGptSwitch = new SwitchService(vault, profileStore, _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
+        var chatGptSwitch = new SwitchService(vault, TestAccountRegistry.CreateLoaded(profileStore, clock, audit), _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
 
         var targetSwitch = new CodexTargetSwitchService(
             chatGptSwitch, routingStore, apiStore, secretStore, brokerInstaller,

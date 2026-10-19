@@ -85,7 +85,7 @@ public sealed class ThirdPartyResponsesToolCompatibilityTests
             var clock = new FakeClock();
             var audit = new FakeAudit();
 
-            ChatGptSwitch = new SwitchService(Vault, ProfileStore, Fs, proc, config, clock, audit, Paths.Codex, Paths.BackupsDir);
+            ChatGptSwitch = new SwitchService(Vault, TestAccountRegistry.CreateLoaded(ProfileStore, clock, audit), Fs, proc, config, clock, audit, Paths.Codex, Paths.BackupsDir);
             PlanBuilder = new SwitchPlanBuilder(ApiStore, SecretStore, BrokerInstaller, RoutingStore, Paths.Codex);
             Executor = new SwitchTransactionExecutor(ChatGptSwitch, RoutingStore, ApiStore, proc, Fs, clock, audit, Paths.Codex, modelCatalogService: CatalogService);
             Facade = new CodexTargetSwitchService(PlanBuilder, Executor);

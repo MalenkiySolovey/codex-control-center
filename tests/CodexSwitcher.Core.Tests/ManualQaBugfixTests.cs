@@ -138,6 +138,7 @@ public sealed class ManualQaBugfixTests
     {
         public TempDir Dir { get; } = new();
         public ProfileService Service { get; }
+        public AccountRegistry Registry { get; }
         public FakeClock Clock { get; } = new();
         public IFileSystem Fs { get; }
         public CodexPaths Paths { get; }
@@ -151,7 +152,9 @@ public sealed class ManualQaBugfixTests
             Store = new ProfileStore(Fs, Dir.Combine("profiles.json"));
             Paths = CodexPaths.ForHome(Dir.Combine(".codex"));
             var recon = new ReconciliationService(Fs, Paths);
-            Service = AccountServiceGraph.Create(Vault, Store, recon, Fs, Paths, Clock, new FakeAudit()).Profiles;
+            var graph = AccountServiceGraph.Create(Vault, Store, recon, Fs, Paths, Clock, new FakeAudit());
+            Service = graph.Profiles;
+            Registry = graph.Registry;
         }
 
         public void Dispose() => Dir.Dispose();
@@ -808,7 +811,7 @@ public sealed class ManualQaBugfixTests
         var (detected, _, _) = env.Service.GetUnmanagedActiveAccountInfo();
 
         Assert.True(detected);
-        Assert.Empty(env.Service.Profiles);
+        Assert.Empty(env.Registry.Profiles);
         Assert.False(File.Exists(env.Dir.Combine("profiles.json")));
         var afterHash = ComputeFileHash(env.Paths.ActiveAuthPath);
         Assert.Equal(beforeHash, afterHash);

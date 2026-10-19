@@ -55,7 +55,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
 
     private readonly AppPaths _paths;
     private readonly AppSettings _settings;
-    private readonly IProfileStore _profileStore;
+    private readonly AccountRegistry _accountRegistry;
     private readonly IApiProviderStore _providerStore;
     private readonly IVaultService _vault;
     private readonly IProfileOperationCoordinator _coordinator;
@@ -113,7 +113,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
     public CodexLaunchService(
         AppPaths paths,
         AppSettings settings,
-        IProfileStore profileStore,
+        AccountRegistry accountRegistry,
         IApiProviderStore providerStore,
         IVaultService vault,
         IProfileOperationCoordinator coordinator,
@@ -127,7 +127,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-        _profileStore = profileStore ?? throw new ArgumentNullException(nameof(profileStore));
+        _accountRegistry = accountRegistry ?? throw new ArgumentNullException(nameof(accountRegistry));
         _providerStore = providerStore ?? throw new ArgumentNullException(nameof(providerStore));
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
@@ -284,7 +284,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
             if (profile.TargetKind == CodexLaunchTargetKind.ChatGptAccount)
             {
                 profileLock = await _coordinator.LockAsync(profile.CredentialProfileId, cancellationToken).ConfigureAwait(false);
-                var account = _profileStore.LoadAll().FirstOrDefault(item => item.Id == profile.CredentialProfileId)
+                var account = _accountRegistry.Find(profile.CredentialProfileId)
                     ?? throw new InvalidOperationException("The selected ChatGPT account no longer exists.");
                 if (account.IsActive)
                 {

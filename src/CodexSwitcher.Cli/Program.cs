@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodexSwitcher.Core.AgentState.V1;
 using CodexSwitcher.Core.Accounts.Models;
 using CodexSwitcher.Core.Providers.Models;
 using CodexSwitcher.Core.Settings.Models;
@@ -177,7 +178,9 @@ internal static class Program
             .ReadAllReadOnly()
             .Where(profile => !string.Equals(profile.AuthMode, "apikey", StringComparison.OrdinalIgnoreCase))
             .OrderBy(profile => profile.SortOrder)
-            .Select((profile, index) => new AccountRow(profile.Id, GetSafeAccountLabel(profile, index + 1)))
+            .Select((profile, index) => new AccountRow(
+                profile.Id,
+                AccountDescriptorProjector.FromProfile(profile, index + 1)))
             .ToArray();
 
     private static FleetSnapshot ReadFleetSnapshot()
@@ -280,24 +283,6 @@ internal static class Program
         value is { } percent && double.IsFinite(percent) && percent is >= 0.0 and <= 100.0
             ? percent
             : null;
-
-    private static string GetSafeAccountLabel(ProfileMetadata profile, int ordinal)
-    {
-        if (!string.IsNullOrWhiteSpace(profile.Nickname) && !LooksLikeEmail(profile.Nickname))
-        {
-            return profile.Nickname.Trim();
-        }
-
-        if (!string.IsNullOrWhiteSpace(profile.DetectedDisplayName) && !LooksLikeEmail(profile.DetectedDisplayName))
-        {
-            return profile.DetectedDisplayName.Trim();
-        }
-
-        // Avoid printing the account email or an auth/token-derived identifier.
-        return $"ChatGPT account {ordinal}";
-    }
-
-    private static bool LooksLikeEmail(string value) => value.Contains('@');
 
     private static CurrentTarget ResolveCurrentTarget(
         CodexSwitcher.Core.Routing.Contracts.CodexRoutingState route,
@@ -423,7 +408,10 @@ internal static class Program
         output.WriteLine("This CLI reads local profile, routing, and usage-cache metadata only; it never accesses credentials or the network, and it does not change routing.");
     }
 
-    private sealed record AccountRow(Guid ProfileId, string Name);
+    private sealed record AccountRow(Guid ProfileId, AccountDescriptor Descriptor)
+    {
+        public string Name => Descriptor.DisplayName;
+    }
 
     private sealed record ProviderRow(
         string Name,

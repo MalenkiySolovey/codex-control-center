@@ -289,6 +289,9 @@ public sealed class UsageServiceTests
 
             var profileStore = new ProfileStore(new PhysicalFileSystem(), dir.Combine("profiles.json"));
             profileStore.SaveAll([profileA, profileB]);
+            var clock = new FakeClock();
+            var audit = new FakeAudit();
+            var registry = TestAccountRegistry.CreateLoaded(profileStore, clock, audit);
 
             var codexPaths = new CodexPaths(dir.Combine(".codex", "auth.json"), dir.Combine(".codex", "config.toml"), dir.Combine(".codex"));
             Directory.CreateDirectory(dir.Combine(".codex"));
@@ -296,12 +299,12 @@ public sealed class UsageServiceTests
 
             var switchService = new SwitchService(
                 vault,
-                profileStore,
+                registry,
                 new PhysicalFileSystem(),
                 new FakeProcessManager(),
                 new FakeConfigStore(),
-                new FakeClock(),
-                new FakeAudit(),
+                clock,
+                audit,
                 codexPaths,
                 dir.Combine("backups"),
                 sharedCoordinator);
@@ -310,7 +313,7 @@ public sealed class UsageServiceTests
 
             // Run concurrent refresh and switch operations touching profile A
             var refreshTask = Task.Run(() => usageService.RefreshAsync(profileA));
-            var switchTask = Task.Run(() => switchService.SwitchAsync([profileA, profileB], profileBId, switchOptions));
+            var switchTask = Task.Run(() => switchService.SwitchAsync(profileBId, switchOptions));
 
             await Task.WhenAll(refreshTask, switchTask);
 

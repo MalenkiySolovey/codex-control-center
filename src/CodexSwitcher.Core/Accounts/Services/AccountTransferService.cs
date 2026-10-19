@@ -115,10 +115,9 @@ public sealed class AccountTransferService
             foreach (var (entry, authJson) in validated)
             {
                 var profile = _credentials.AddFromAuthJson(authJson, entry.Nickname);
-                profile.SortOrder = entry.SortOrder;
+                _registry.SetSortOrderUnderLock(profile.Id, entry.SortOrder);
             }
 
-            _registry.Save();
             _audit.Record("import", "ok", transfer.Accounts.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
             return transfer.Accounts.Count;
         }

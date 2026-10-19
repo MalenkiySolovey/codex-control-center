@@ -68,7 +68,10 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 {
     private static Strings Loc => Strings.Current;
 
-    private readonly ProfileService _profiles;
+    private readonly AccountRegistry _registry;
+    private readonly AccountCredentialService _credentials;
+    private readonly AccountTransferService _transfer;
+    private readonly CodexAuthReconciler _authReconciler;
     private readonly SwitchService _switch;
     private readonly SettingsStore _settingsStore;
     private readonly AppSettings _settings;
@@ -113,14 +116,17 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     public int AccountCount => _all.Count;
     public bool CanReorderItems => string.IsNullOrWhiteSpace(SearchText);
 
-    public ProfileMetadata? ActiveProfile => _profiles.Profiles.FirstOrDefault(p => p.IsActive);
-    public IReadOnlyList<ProfileMetadata> Profiles => _profiles.Profiles;
+    public ProfileMetadata? ActiveProfile => _registry.Profiles.FirstOrDefault(p => p.IsActive);
+    public IReadOnlyList<ProfileMetadata> Profiles => _registry.Profiles;
 
     public event EventHandler? TargetStateChanged;
     public event EventHandler? OrderChanged;
 
     public AccountsViewModel(
-        ProfileService profiles,
+        AccountRegistry registry,
+        AccountCredentialService credentials,
+        AccountTransferService transfer,
+        CodexAuthReconciler authReconciler,
         SwitchService switchService,
         SettingsStore settingsStore,
         AppSettings settings,
@@ -135,7 +141,10 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         IUiDispatcher? dispatcher = null,
         ICodexSignedOutService? signedOutService = null)
     {
-        _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
+        _transfer = transfer ?? throw new ArgumentNullException(nameof(transfer));
+        _authReconciler = authReconciler ?? throw new ArgumentNullException(nameof(authReconciler));
         _switch = switchService ?? throw new ArgumentNullException(nameof(switchService));
         _settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -171,7 +180,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     {
         await RunBusy(Loc.BusyLoading, () =>
         {
-            _profiles.Load(auditOrphans: false);
+            _authReconciler.Load(auditOrphans: false);
             return Task.CompletedTask;
         });
 
@@ -191,9 +200,9 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _usage.StartTimers(() => _profiles.Profiles);
+        _usage.StartTimers(() => _registry.Profiles);
 
-        if (_profiles.Profiles.Count > 0)
+        if (_registry.Profiles.Count > 0)
         {
             StartupTracer.Instance.RecordMilestone("T14:BackgroundInitScheduled");
             _ = RunPostInteractiveRefreshAsync();
@@ -204,8 +213,8 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     {
         try
         {
-            await Task.Run(_profiles.AuditOrphanVaultBlobs).ConfigureAwait(false);
-            await _usage.TriggerBackgroundRefreshForProfiles(_profiles.Profiles).ConfigureAwait(false);
+            await Task.Run(_credentials.AuditOrphanVaultBlobs).ConfigureAwait(false);
+            await _usage.TriggerBackgroundRefreshForProfiles(_registry.Profiles).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -231,7 +240,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 
         var existingMap = _all.ToDictionary(a => a.Id);
         var targetItems = new List<AccountItemViewModel>();
-        var ordered = _profiles.Profiles
+        var ordered = _registry.Profiles
             .OrderBy(p => p.SortOrder)
             .ThenByDescending(p => p.CreatedAt);
         foreach (var p in ordered)
@@ -271,7 +280,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 
     private void UpdateDetectedAccountState()
     {
-        var (detected, email, plan) = _profiles.GetUnmanagedActiveAccountInfo();
+        var (detected, email, plan) = _authReconciler.GetUnmanagedActiveAccountInfo();
         HasDetectedActiveAccount = detected;
         if (detected)
         {
@@ -336,7 +345,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 
     public void SetForegroundActive(bool active)
     {
-        _usage.SetForegroundActive(active, _profiles.Profiles);
+        _usage.SetForegroundActive(active, _registry.Profiles);
     }
 
     public void HideAllRevealedTotp()
@@ -347,7 +356,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task RefreshAllAsync()
     {
-        await _usage.RefreshAllAsync(_profiles.Profiles);
+        await _usage.RefreshAllAsync(_registry.Profiles);
     }
 
     [RelayCommand]
@@ -370,8 +379,8 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         }
         if (!item.CanSwitch) return;
 
-        _profiles.Reconcile();
-        var from = _profiles.Profiles.FirstOrDefault(p => p.IsActive);
+        _authReconciler.Reconcile();
+        var from = _registry.Profiles.FirstOrDefault(p => p.IsActive);
         var plan = _switch.BuildPlan(from, item.Profile, _settings.CloseReopenMode);
 
         if (_settings.AlwaysConfirmSwitch && !await _ui.ConfirmSwitchAsync(plan))
@@ -384,7 +393,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             {
                 var targetRes = await _targetSwitchService.SwitchToChatGptAsync(
                     item.Id,
-                    _profiles.Profiles,
+                    _registry.Profiles.ToList(),
                     SwitchExecutionOptions.From(_settings));
                 var outcome = targetRes.Outcome switch
                 {
@@ -399,13 +408,13 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             else
             {
                 result = await Task.Run(() => _switch.SwitchAsync(
-                    _profiles.Profiles, item.Id, SwitchExecutionOptions.From(_settings)));
+                    item.Id, SwitchExecutionOptions.From(_settings)));
             }
         });
 
         // Account transition succeeded: mark previous account as used
         if (from is not null && result?.Outcome is SwitchOutcome.Success or SwitchOutcome.SuccessWithReopenWarning)
-            _profiles.MarkUsed(from.Id);
+            _registry.MarkUsed(from.Id);
 
         if (TargetStateChanged != null)
         {
@@ -435,11 +444,11 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var profile = _profiles.AddFromAuthJson(authJson, null);
+        var profile = _credentials.AddFromAuthJson(authJson, null);
         var nick = await _ui.PromptTextAsync(Loc.NicknameTitle, Loc.NicknamePrompt,
             profile.DetectedDisplayName ?? string.Empty, Loc.Save);
         if (!string.IsNullOrWhiteSpace(nick))
-            _profiles.Rename(profile.Id, nick);
+            _registry.Rename(profile.Id, nick);
 
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
         ShowInfo(Loc.AddedTitle, Loc.AddedMsg(profile.DisplayName), InfoBarSeverity.Success);
@@ -452,7 +461,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         ProfileMetadata? adopted = null;
         await RunBusy(Loc.BusyImporting, () =>
         {
-            adopted = _profiles.AdoptActiveAccount();
+            adopted = _authReconciler.AdoptActiveAccount();
             return Task.CompletedTask;
         });
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
@@ -470,9 +479,9 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         ProfileMetadata? adopted = null;
         await RunBusy(Loc.BusyDetecting, () =>
         {
-            result = _profiles.Load();
+            result = _authReconciler.Load();
             if (result is { Match: ActiveMatch.None, ActiveFingerprint: not null })
-                adopted = _profiles.AdoptActiveAccount();
+                adopted = _authReconciler.AdoptActiveAccount();
             return Task.CompletedTask;
         });
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
@@ -488,7 +497,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             ShowInfo(Loc.DetectNoneTitle, Loc.DetectNoneMsg, InfoBarSeverity.Informational);
         else
         {
-            var active = _profiles.Profiles.FirstOrDefault(p => p.IsActive);
+            var active = _registry.Profiles.FirstOrDefault(p => p.IsActive);
             ShowInfo(Loc.DetectKnownTitle,
                 Loc.DetectKnownMsg(active?.DisplayName ?? Loc.CodexAccount), InfoBarSeverity.Informational);
         }
@@ -549,18 +558,18 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         var document = await _ui.PickImportFileAsync();
         if (document is null) return;
 
-        var prevProfiles = _profiles.Profiles.ToList();
+        var prevProfiles = _registry.Profiles.ToList();
         var count = 0;
         await RunBusy(Loc.BusyImporting, () =>
         {
-            count = _profiles.Import(document);
+            count = _transfer.Import(document);
             return Task.CompletedTask;
         });
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
         if (count > 0)
         {
             ShowInfo(Loc.ImportedTitle, Loc.ImportedAccountsMsg(count), InfoBarSeverity.Success);
-            var newProfiles = _profiles.Profiles.Where(p => !prevProfiles.Any(prev => prev.Id == p.Id)).ToList();
+            var newProfiles = _registry.Profiles.Where(p => !prevProfiles.Any(prev => prev.Id == p.Id)).ToList();
             if (newProfiles.Count > 0)
             {
                 _ = _usage.TriggerBackgroundRefreshForProfiles(newProfiles);
@@ -577,7 +586,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         var saved = false;
         await RunBusy(Loc.BusyExporting, async () =>
         {
-            saved = await _ui.SaveExportFileAsync("codex-switcher-accounts.codexswitcher", _profiles.ExportAll());
+            saved = await _ui.SaveExportFileAsync("codex-switcher-accounts.codexswitcher", _transfer.ExportAll());
         });
         if (saved) ShowInfo(Loc.ExportedTitle, Loc.ExportedAllMsg(_all.Count), InfoBarSeverity.Success);
     }
@@ -591,7 +600,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         var saved = false;
         await RunBusy(Loc.BusyExporting, async () =>
         {
-            saved = await _ui.SaveExportFileAsync("codex-switcher-account.codexswitcher", _profiles.ExportOne(item.Id));
+            saved = await _ui.SaveExportFileAsync("codex-switcher-account.codexswitcher", _transfer.ExportOne(item.Id));
         });
         if (saved) ShowInfo(Loc.ExportedTitle, Loc.ExportedOneMsg(item.DisplayName), InfoBarSeverity.Success);
     }
@@ -602,7 +611,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         if (item is null) return;
         var nick = await _ui.PromptTextAsync(Loc.RenameTitle, Loc.RenamePrompt, item.DisplayName, Loc.Save);
         if (nick is null) return;
-        _profiles.Rename(item.Id, nick);
+        _registry.Rename(item.Id, nick);
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
     }
 
@@ -614,7 +623,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         if (ReferenceEquals(updated, item.Profile.SubscriptionTracking))
             return;
 
-        _profiles.UpdateSubscriptionTracking(item.Id, updated);
+        _registry.UpdateSubscriptionTracking(item.Id, updated);
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
     }
 
@@ -627,7 +636,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         if (!ok) return;
 
         _usage.Invalidate(item.Id);
-        _profiles.Remove(item.Id);
+        _credentials.Remove(item.Id);
         if (_settings.CollapsedProfileIds.Remove(item.Id))
         {
             _settingsStore.Save(_settings);
@@ -654,7 +663,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     private void MarkNeedsReLogin(AccountItemViewModel? item)
     {
         if (item is null) return;
-        _profiles.MarkNeedsReLogin(item.Id);
+        _registry.MarkNeedsReLogin(item.Id);
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
     }
 
@@ -677,7 +686,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 
         try
         {
-            var updated = _profiles.Reauthenticate(item.Id, authJson);
+            var updated = _authReconciler.Reauthenticate(item.Id, authJson);
             _usage.Invalidate(item.Id);
             Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
             ShowInfo(Loc.AddedTitle, Loc.ReauthenticatedMsg(updated.DisplayName), InfoBarSeverity.Success);
@@ -693,7 +702,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     private void MarkUsed(AccountItemViewModel? item)
     {
         if (item is null) return;
-        _profiles.MarkUsed(item.Id);
+        _registry.MarkUsed(item.Id);
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
     }
 
@@ -701,7 +710,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     private void UnmarkUsed(AccountItemViewModel? item)
     {
         if (item is null) return;
-        _profiles.UnmarkUsed(item.Id);
+        _registry.UnmarkUsed(item.Id);
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
     }
 
@@ -710,7 +719,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     {
         if (orderedIds is null || orderedIds.Count == 0) return;
         if (!CanReorderItems) return;
-        _profiles.Reorder(orderedIds);
+        _registry.Reorder(orderedIds);
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
         OrderChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -737,7 +746,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         }
 
         (orderedIds[currentIndex], orderedIds[targetIndex]) = (orderedIds[targetIndex], orderedIds[currentIndex]);
-        _profiles.Reorder(orderedIds);
+        _registry.Reorder(orderedIds);
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
         OrderChanged?.Invoke(this, EventArgs.Empty);
     }

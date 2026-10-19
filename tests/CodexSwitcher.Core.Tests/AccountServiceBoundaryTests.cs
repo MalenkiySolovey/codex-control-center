@@ -32,6 +32,32 @@ public sealed class AccountServiceBoundaryTests
     }
 
     [Fact]
+    public void AccountRegistry_ReorderPersistenceFailureRestoresOwnedSnapshot()
+    {
+        using var temp = new TempDir();
+        var fs = new FaultInjectingFileSystem(new PhysicalFileSystem());
+        var path = temp.Combine("profiles.json");
+        var store = new ProfileStore(fs, path);
+        var clock = new FakeClock();
+        var audit = new FakeAudit();
+        var first = new ProfileMetadata { Id = Guid.NewGuid(), Nickname = "First", SortOrder = 0 };
+        var second = new ProfileMetadata { Id = Guid.NewGuid(), Nickname = "Second", SortOrder = 1 };
+        store.SaveAll([first, second]);
+
+        var registry = new AccountRegistry(store, clock, audit);
+        registry.Load();
+        fs.FailAtomicWriteForPath = path;
+
+        Assert.Throws<IOException>(() => registry.Reorder([second.Id, first.Id]));
+        Assert.Equal(first.Id, registry.Profiles.OrderBy(profile => profile.SortOrder).First().Id);
+
+        fs.FailAtomicWriteForPath = null;
+        var reloaded = new AccountRegistry(store, clock, audit);
+        reloaded.Load();
+        Assert.Equal(first.Id, reloaded.Profiles.OrderBy(profile => profile.SortOrder).First().Id);
+    }
+
+    [Fact]
     public void AccountCredentialServiceValidatesDeduplicatesAndRejectsStaleRefreshWriteback()
     {
         using var temp = new TempDir();
@@ -67,7 +93,7 @@ public sealed class AccountServiceBoundaryTests
             lastRefresh: "2026-06-26T10:00:00Z");
         Assert.True(graph.Credentials.PersistIsolatedLaunchRefreshUnderLock(original.Id, expectedFingerprint, refreshedAuth));
         Assert.False(graph.Credentials.PersistIsolatedLaunchRefreshUnderLock(original.Id, expectedFingerprint, replacementAuth));
-        Assert.Equal(Fingerprint.Compute(refreshedAuth), duplicate.BlobFingerprint);
+        Assert.Equal(Fingerprint.Compute(refreshedAuth), graph.Registry.Find(original.Id)?.BlobFingerprint);
         Assert.Throws<InvalidDataException>(() => AccountCredentialService.ValidateAuthJson("{}"u8.ToArray()));
     }
 
@@ -152,7 +178,7 @@ public sealed class AccountServiceBoundaryTests
 
         Assert.Equal(ActiveMatch.SameAccountDrifted, graph.AuthReconciler.Reconcile().Match);
         Assert.Equal(driftedAuth, vault.LoadBlob(profile.Id));
-        Assert.Equal(Fingerprint.Compute(driftedAuth), profile.BlobFingerprint);
+        Assert.Equal(Fingerprint.Compute(driftedAuth), graph.Registry.Find(profile.Id)?.BlobFingerprint);
     }
 
     [Fact]

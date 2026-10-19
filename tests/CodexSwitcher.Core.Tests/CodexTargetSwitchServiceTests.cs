@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using CodexSwitcher.Core.Accounts.Services;
 using CodexSwitcher.Core.Tests.TestSupport;
 using Xunit;
 
@@ -37,7 +38,8 @@ public sealed class CodexTargetSwitchServiceTests
 
         var vault = new VaultService(new DpapiSecretProtector(), _fs, paths.VaultDir);
         var profileStore = new ProfileStore(_fs, paths.ProfilesPath);
-        var chatGptSwitch = new SwitchService(vault, profileStore, _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
+        var registry = TestAccountRegistry.CreateLoaded(profileStore, clock, audit);
+        var chatGptSwitch = new SwitchService(vault, registry, _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
 
         var targetSwitch = new CodexTargetSwitchService(
             chatGptSwitch, routingStore, apiStore, secretStore, brokerInstaller,
@@ -102,7 +104,8 @@ public sealed class CodexTargetSwitchServiceTests
 
         var vault = new VaultService(new DpapiSecretProtector(), _fs, paths.VaultDir);
         var profileStore = new ProfileStore(_fs, paths.ProfilesPath);
-        var chatGptSwitch = new SwitchService(vault, profileStore, _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
+        var registry = TestAccountRegistry.CreateLoaded(profileStore, clock, audit);
+        var chatGptSwitch = new SwitchService(vault, registry, _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
 
         var targetSwitch = new CodexTargetSwitchService(
             chatGptSwitch, routingStore, apiStore, secretStore, brokerInstaller,
@@ -115,6 +118,7 @@ public sealed class CodexTargetSwitchServiceTests
             AccountEmail = "active@example.com",
             IsActive = true
         };
+        registry.Add(activeProfile);
 
         var options = new SwitchExecutionOptions(CloseReopenMode.DoNothing, TimeSpan.FromSeconds(5), 5);
         var result = await targetSwitch.SwitchToChatGptAsync(activeProfile.Id, new List<ProfileMetadata> { activeProfile }, options);
@@ -155,7 +159,7 @@ public sealed class CodexTargetSwitchServiceTests
 
         var vault = new VaultService(new DpapiSecretProtector(), _fs, paths.VaultDir);
         var profileStore = new ProfileStore(_fs, paths.ProfilesPath);
-        var chatGptSwitch = new SwitchService(vault, profileStore, _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
+        var chatGptSwitch = new SwitchService(vault, TestAccountRegistry.CreateLoaded(profileStore, clock, audit), _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
 
         var targetSwitch = new CodexTargetSwitchService(
             chatGptSwitch, routingStore, apiStore, secretStore, brokerInstaller,
@@ -217,7 +221,7 @@ public sealed class CodexTargetSwitchServiceTests
 
         var vault = new VaultService(new DpapiSecretProtector(), _fs, paths.VaultDir);
         var profileStore = new ProfileStore(_fs, paths.ProfilesPath);
-        var chatGptSwitch = new SwitchService(vault, profileStore, _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
+        var chatGptSwitch = new SwitchService(vault, TestAccountRegistry.CreateLoaded(profileStore, clock, audit), _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
 
         var targetSwitch = new CodexTargetSwitchService(
             chatGptSwitch, routingStore, apiStore, secretStore, brokerInstaller,
@@ -275,7 +279,7 @@ public sealed class CodexTargetSwitchServiceTests
 
         var vault = new VaultService(new DpapiSecretProtector(), _fs, paths.VaultDir);
         var profileStore = new ProfileStore(_fs, paths.ProfilesPath);
-        var chatGptSwitch = new SwitchService(vault, profileStore, _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
+        var chatGptSwitch = new SwitchService(vault, TestAccountRegistry.CreateLoaded(profileStore, clock, audit), _fs, processManager, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
 
         var targetSwitch = new CodexTargetSwitchService(
             chatGptSwitch, routingStore, apiStore, secretStore, brokerInstaller,
@@ -301,6 +305,7 @@ public sealed class CodexTargetSwitchServiceTests
         public FaultInjectingFileSystem Fs { get; }
         public VaultService Vault { get; }
         public ProfileStore ProfileStore { get; }
+        public AccountRegistry Registry { get; }
         public FakeProcessManager Proc { get; } = new();
         public FakeConfigStore Config { get; } = new();
         public FakeClock Clock { get; } = new();
@@ -313,7 +318,7 @@ public sealed class CodexTargetSwitchServiceTests
         public CodexModelCatalogService CatalogService { get; }
         public SwitchService ChatGptSwitch { get; }
         public CodexTargetSwitchService TargetSwitch { get; }
-        public List<ProfileMetadata> ChatGptProfiles { get; } = [];
+        public List<ProfileMetadata> ChatGptProfiles => Registry.Profiles.ToList();
 
         public TargetSwitchTestEnv()
         {
@@ -326,13 +331,14 @@ public sealed class CodexTargetSwitchServiceTests
             var protector = new DpapiSecretProtector();
             Vault = new VaultService(protector, Fs, Paths.VaultDir);
             ProfileStore = new ProfileStore(Fs, Paths.ProfilesPath);
+            Registry = new AccountRegistry(ProfileStore, Clock, Audit);
             SecretStore = new ApiKeySecretStore(protector, Fs, Paths.ApiKeysDir);
             ApiStore = new ApiProviderStore(Fs, Paths.ApiProvidersPath, SecretStore);
             RoutingStore = new CodexRoutingConfigStore(Fs, Paths);
             BrokerInstaller = new KeyBrokerInstaller(Paths, Fs, brokerExe);
             CatalogService = new CodexModelCatalogService(Fs, Paths);
 
-            ChatGptSwitch = new SwitchService(Vault, ProfileStore, Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
+            ChatGptSwitch = new SwitchService(Vault, Registry, Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
             TargetSwitch = new CodexTargetSwitchService(
                 ChatGptSwitch, RoutingStore, ApiStore, SecretStore, BrokerInstaller,
                 Proc, Fs, Clock, Audit, Paths.Codex, CatalogService);
@@ -350,9 +356,7 @@ public sealed class CodexTargetSwitchServiceTests
                 HealthStatus = HealthStatus.Valid,
             };
             p.BlobFingerprint = Vault.SaveBlob(p.Id, authBytes);
-            ChatGptProfiles.Add(p);
-            ProfileStore.SaveAll(ChatGptProfiles);
-            return p;
+            return Registry.Add(p);
         }
 
         public void SetActiveSlot(byte[] bytes) => Fs.WriteAllBytesAtomic(Paths.Codex.ActiveAuthPath, bytes);
@@ -385,8 +389,8 @@ public sealed class CodexTargetSwitchServiceTests
 
         Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
         Assert.Equal(bBytes, env.ReadActiveSlot());
-        Assert.True(b.IsActive);
-        Assert.False(a.IsActive);
+        Assert.True(env.Registry.Find(b.Id)!.IsActive);
+        Assert.False(env.Registry.Find(a.Id)!.IsActive);
         Assert.True(env.Proc.CloseCalled);
         Assert.Contains(env.Proc.Relaunched, p => p.Pid == 101 && p.Kind == CodexProcessKind.DesktopApp);
         Assert.Contains(result.ClosedProcesses!, p => p.Pid == 101);
@@ -411,7 +415,7 @@ public sealed class CodexTargetSwitchServiceTests
 
         // Vault of outgoing account A must preserve the renewed token
         Assert.Equal(aV2, env.Vault.LoadBlob(a.Id));
-        Assert.Equal(new DateTimeOffset(2026, 6, 30, 0, 0, 0, TimeSpan.Zero), a.LastRefreshedAt);
+        Assert.Equal(new DateTimeOffset(2026, 6, 30, 0, 0, 0, TimeSpan.Zero), env.Registry.Find(a.Id)!.LastRefreshedAt);
     }
 
     [Fact]
@@ -431,8 +435,8 @@ public sealed class CodexTargetSwitchServiceTests
 
         Assert.Equal(TargetSwitchOutcome.RolledBack, result.Outcome);
         Assert.Equal(aBytes, env.ReadActiveSlot()); // original active slot restored
-        Assert.True(a.IsActive);
-        Assert.False(b.IsActive);
+        Assert.True(env.Registry.Find(a.Id)!.IsActive);
+        Assert.False(env.Registry.Find(b.Id)!.IsActive);
         Assert.Contains(env.Proc.Relaunched, p => p.Kind == CodexProcessKind.DesktopApp);
     }
 
@@ -452,8 +456,8 @@ public sealed class CodexTargetSwitchServiceTests
 
         Assert.Equal(TargetSwitchOutcome.AbortedProcessRemnant, result.Outcome);
         Assert.Equal(aBytes, env.ReadActiveSlot()); // auth.json untouched
-        Assert.True(a.IsActive);
-        Assert.False(b.IsActive);
+        Assert.True(env.Registry.Find(a.Id)!.IsActive);
+        Assert.False(env.Registry.Find(b.Id)!.IsActive);
     }
 
     [Fact]
@@ -475,8 +479,8 @@ public sealed class CodexTargetSwitchServiceTests
         Assert.Equal(ErrorCategory.DecryptionFailed, result.Error!.Category);
         Assert.False(env.Proc.CloseCalled); // no apps closed
         Assert.Equal(aBytes, env.ReadActiveSlot()); // active slot intact
-        Assert.True(a.IsActive);
-        Assert.False(b.IsActive);
+        Assert.True(env.Registry.Find(a.Id)!.IsActive);
+        Assert.False(env.Registry.Find(b.Id)!.IsActive);
     }
 
     [Fact]
@@ -497,8 +501,8 @@ public sealed class CodexTargetSwitchServiceTests
 
         Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
         Assert.Equal(bBytes, env.ReadActiveSlot());
-        Assert.True(b.IsActive);
-        Assert.False(a.IsActive);
+        Assert.True(env.Registry.Find(b.Id)!.IsActive);
+        Assert.False(env.Registry.Find(a.Id)!.IsActive);
 
         var routing = env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath);
         Assert.Equal("openai", routing.ModelProvider);
@@ -524,7 +528,7 @@ public sealed class CodexTargetSwitchServiceTests
 
         Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
         Assert.Equal(aBytes, env.ReadActiveSlot()); // auth.json preserved
-        Assert.True(a.IsActive);
+        Assert.True(env.Registry.Find(a.Id)!.IsActive);
 
         var routing = env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath);
         Assert.Equal("openai", routing.ModelProvider);
@@ -593,8 +597,8 @@ public sealed class CodexTargetSwitchServiceTests
 
         Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
         Assert.Equal(bBytes, env.ReadActiveSlot());
-        Assert.True(b.IsActive);
-        Assert.False(a.IsActive);
+        Assert.True(env.Registry.Find(b.Id)!.IsActive);
+        Assert.False(env.Registry.Find(a.Id)!.IsActive);
 
         // API provider store is unaffected
         var storedApi = env.ApiStore.GetById(apiId);

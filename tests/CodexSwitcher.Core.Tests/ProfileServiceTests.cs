@@ -8,6 +8,7 @@ public sealed class ProfileServiceTests
     {
         public TempDir Dir { get; } = new();
         public ProfileService Service { get; }
+        public AccountRegistry Registry { get; }
         public VaultService Vault { get; }
         public FakeClock Clock { get; } = new();
 
@@ -18,7 +19,9 @@ public sealed class ProfileServiceTests
             var store = new ProfileStore(fs, Dir.Combine("profiles.json"));
             var paths = CodexPaths.ForHome(Dir.Combine(".codex"));
             var recon = new ReconciliationService(fs, paths);
-            Service = AccountServiceGraph.Create(Vault, store, recon, fs, paths, Clock, new FakeAudit()).Profiles;
+            var graph = AccountServiceGraph.Create(Vault, store, recon, fs, paths, Clock, new FakeAudit());
+            Service = graph.Profiles;
+            Registry = graph.Registry;
         }
 
         public void Dispose() => Dir.Dispose();
@@ -36,7 +39,7 @@ public sealed class ProfileServiceTests
         Assert.Equal("Trabalho", p.Nickname);
         Assert.Equal("sub-1", p.AccountSub);
         Assert.Equal("user@x.com", p.AccountEmail);
-        Assert.Single(env.Service.Profiles);
+        Assert.Single(env.Registry.Profiles);
     }
 
     [Fact]
@@ -53,9 +56,9 @@ public sealed class ProfileServiceTests
         Assert.NotEqual(first.Id, added.Id);
         Assert.Equal(firstFingerprint, first.BlobFingerprint);
         Assert.Equal("Saved account", first.Nickname);
-        Assert.Equal(2, env.Service.Profiles.Count);
-        Assert.Contains(env.Service.Profiles, profile => profile.Id == first.Id);
-        Assert.Contains(env.Service.Profiles, profile => profile.Id == added.Id);
+        Assert.Equal(2, env.Registry.Profiles.Count);
+        Assert.Contains(env.Registry.Profiles, profile => profile.Id == first.Id);
+        Assert.Contains(env.Registry.Profiles, profile => profile.Id == added.Id);
         Assert.True(env.Vault.Exists(first.Id));
         Assert.True(env.Vault.Exists(added.Id));
         Assert.Equal(newAuth, env.Vault.LoadBlob(added.Id));
@@ -73,8 +76,8 @@ public sealed class ProfileServiceTests
         var p1 = env.Service.AddFromAuthJson(first, "Nome1");
         var p2 = env.Service.AddFromAuthJson(second, null);
 
-        Assert.Same(p1, p2);                       // mesmo perfil (dedupe por sub)
-        Assert.Single(env.Service.Profiles);
+        Assert.Equal(p1.Id, p2.Id);                // mesmo perfil (dedupe por sub)
+        Assert.Single(env.Registry.Profiles);
     }
 
     [Fact]
@@ -85,7 +88,7 @@ public sealed class ProfileServiceTests
 
         env.Service.Remove(p.Id);
 
-        Assert.Empty(env.Service.Profiles);
+        Assert.Empty(env.Registry.Profiles);
     }
 
     [Fact]
@@ -96,8 +99,8 @@ public sealed class ProfileServiceTests
 
         env.Service.Load(); // recarrega do disco
 
-        Assert.Single(env.Service.Profiles);
-        Assert.Equal("One", env.Service.Profiles[0].Nickname);
+        Assert.Single(env.Registry.Profiles);
+        Assert.Equal("One", env.Registry.Profiles[0].Nickname);
     }
 
     [Fact]
@@ -108,7 +111,7 @@ public sealed class ProfileServiceTests
 
         env.Service.MarkUsed(p.Id);
 
-        Assert.Equal(env.Clock.UtcNow, p.MarkedUsedAt);
+        Assert.Equal(env.Clock.UtcNow, env.Registry.Find(p.Id)?.MarkedUsedAt);
     }
 
     [Fact]
@@ -120,7 +123,7 @@ public sealed class ProfileServiceTests
 
         env.Service.UnmarkUsed(p.Id);
 
-        Assert.Null(p.MarkedUsedAt);
+        Assert.Null(env.Registry.Find(p.Id)?.MarkedUsedAt);
     }
 
     [Fact]
@@ -133,9 +136,9 @@ public sealed class ProfileServiceTests
 
         env.Service.Reorder([c.Id, a.Id, b.Id]);
 
-        Assert.Equal(0, c.SortOrder);
-        Assert.Equal(1, a.SortOrder);
-        Assert.Equal(2, b.SortOrder);
+        Assert.Equal(0, env.Registry.Find(c.Id)?.SortOrder);
+        Assert.Equal(1, env.Registry.Find(a.Id)?.SortOrder);
+        Assert.Equal(2, env.Registry.Find(b.Id)?.SortOrder);
     }
 
     [Fact]
@@ -148,7 +151,7 @@ public sealed class ProfileServiceTests
         env.Service.Reorder([b.Id, a.Id]);
         env.Service.Load();
 
-        Assert.Equal("B", env.Service.Profiles.OrderBy(p => p.SortOrder).First().Nickname);
+        Assert.Equal("B", env.Registry.Profiles.OrderBy(p => p.SortOrder).First().Nickname);
     }
 
     [Fact]
@@ -161,7 +164,7 @@ public sealed class ProfileServiceTests
         using var destination = new Env();
         var count = destination.Service.Import(exported);
 
-        var imported = Assert.Single(destination.Service.Profiles);
+        var imported = Assert.Single(destination.Registry.Profiles);
         Assert.Equal(1, count);
         Assert.Equal("portable", imported.AccountSub);
         Assert.Equal("Portátil", imported.Nickname);
@@ -179,7 +182,7 @@ public sealed class ProfileServiceTests
         var count = destination.Service.Import(source.Service.ExportAll());
 
         Assert.Equal(2, count);
-        Assert.Equal(["Second", "First"], destination.Service.Profiles.OrderBy(p => p.SortOrder).Select(p => p.Nickname));
+        Assert.Equal(["Second", "First"], destination.Registry.Profiles.OrderBy(p => p.SortOrder).Select(p => p.Nickname));
     }
 
     [Fact]
@@ -188,7 +191,7 @@ public sealed class ProfileServiceTests
         using var env = new Env();
 
         Assert.Throws<InvalidDataException>(() => env.Service.Import("{}"));
-        Assert.Empty(env.Service.Profiles);
+        Assert.Empty(env.Registry.Profiles);
     }
 
     [Fact]
@@ -201,7 +204,25 @@ public sealed class ProfileServiceTests
         var count = env.Service.Import(authJson);
 
         Assert.Equal(1, count);
-        Assert.Equal("raw", Assert.Single(env.Service.Profiles).AccountSub);
+        Assert.Equal("raw", Assert.Single(env.Registry.Profiles).AccountSub);
+    }
+
+    [Fact]
+    public void AccountRegistry_ReadsAreDefensiveSnapshots()
+    {
+        using var env = new Env();
+        var profile = env.Service.AddFromAuthJson(Sample.AuthJson(idToken: Sample.Jwt(sub: "snapshot")), "Original");
+
+        var listSnapshot = env.Registry.Profiles;
+        var list = Assert.IsAssignableFrom<IList<CodexSwitcher.Core.Accounts.Models.ProfileMetadata>>(listSnapshot);
+        Assert.True(list.IsReadOnly);
+        Assert.NotSame(profile, listSnapshot[0]);
+        listSnapshot[0].Nickname = "Changed through list";
+        var findSnapshot = env.Registry.Find(profile.Id)!;
+        findSnapshot.Nickname = "Changed through find";
+
+        Assert.Equal("Original", env.Registry.Find(profile.Id)?.Nickname);
+        Assert.DoesNotContain("Changed through", env.Service.ExportAll());
     }
 }
 

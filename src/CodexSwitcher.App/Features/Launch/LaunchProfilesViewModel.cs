@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 using CodexSwitcher.App.Dialogs;
 using CodexSwitcher.App.Localization;
 using CodexSwitcher.App.Shell.State;
-using CodexSwitcher.Core.Accounts.Contracts;
+using CodexSwitcher.Core.Accounts.Services;
 using CodexSwitcher.Core.Common.Dispatcher;
 using CodexSwitcher.Core.Providers.Contracts;
 using CodexSwitcher.Core.Providers.Models;
@@ -22,7 +22,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
 {
     private readonly AppSettings _settings;
     private readonly ISettingsStore _settingsStore;
-    private readonly IProfileStore _profileStore;
+    private readonly AccountRegistry _accountRegistry;
     private readonly IApiProviderStore _providerStore;
     private readonly ICodexLaunchService _launchService;
     private readonly IAppNotificationService _notifications;
@@ -79,7 +79,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
     public LaunchProfilesViewModel(
         AppSettings settings,
         ISettingsStore settingsStore,
-        IProfileStore profileStore,
+        AccountRegistry accountRegistry,
         IApiProviderStore providerStore,
         ICodexLaunchService launchService,
         IAppNotificationService notifications,
@@ -89,7 +89,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _settings.CodexLaunchProfiles ??= [];
         _settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
-        _profileStore = profileStore ?? throw new ArgumentNullException(nameof(profileStore));
+        _accountRegistry = accountRegistry ?? throw new ArgumentNullException(nameof(accountRegistry));
         _providerStore = providerStore ?? throw new ArgumentNullException(nameof(providerStore));
         _launchService = launchService ?? throw new ArgumentNullException(nameof(launchService));
         _notifications = notifications ?? throw new ArgumentNullException(nameof(notifications));
@@ -137,7 +137,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
             RunningSessions.Add(session);
         }
 
-        var accountNames = _profileStore.LoadAll().ToDictionary(profile => profile.Id, profile => profile.DisplayName);
+        var accountNames = _accountRegistry.Profiles.ToDictionary(profile => profile.Id, profile => profile.DisplayName);
         var providerNames = _providerStore.GetAll().ToDictionary(profile => profile.Id, profile => profile.DisplayName);
         Profiles.Clear();
         foreach (var profile in _settings.CodexLaunchProfiles.OrderBy(profile => profile.Name, StringComparer.CurrentCultureIgnoreCase))
@@ -497,7 +497,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
         }
         else
         {
-            foreach (var account in _profileStore.LoadAll()
+            foreach (var account in _accountRegistry.Profiles
                          .Where(account => !string.Equals(account.AuthMode, "apikey", StringComparison.OrdinalIgnoreCase))
                          .OrderBy(account => account.SortOrder)
                          .ThenByDescending(account => account.CreatedAt))

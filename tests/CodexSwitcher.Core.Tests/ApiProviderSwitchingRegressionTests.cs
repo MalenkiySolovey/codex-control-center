@@ -65,7 +65,7 @@ public sealed class ApiProviderSwitchingRegressionTests
             BrokerInstaller = new KeyBrokerInstaller(Paths, Fs, brokerExe);
             CatalogService = new CodexModelCatalogService(Fs, Paths);
 
-            ChatGptSwitch = new SwitchService(Vault, ProfileStore, Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
+            ChatGptSwitch = new SwitchService(Vault, TestAccountRegistry.CreateLoaded(ProfileStore, Clock, Audit), Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
             PlanBuilder = new SwitchPlanBuilder(ApiStore, SecretStore, BrokerInstaller, RoutingStore, Paths.Codex);
             Executor = new SwitchTransactionExecutor(ChatGptSwitch, RoutingStore, ApiStore, Proc, Fs, Clock, Audit, Paths.Codex, modelCatalogService: CatalogService);
             Facade = new CodexTargetSwitchService(PlanBuilder, Executor);

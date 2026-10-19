@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using CodexSwitcher.Core.Accounts.Models;
+using CodexSwitcher.Core.Accounts.Services;
 using CodexSwitcher.Core.Common.Enums;
 using CodexSwitcher.Core.Common.Errors;
 using CodexSwitcher.Core.Common.Lifecycle;
@@ -22,6 +23,7 @@ public sealed class CodexTargetSwitchDecompositionTests
         public FaultInjectingFileSystem Fs { get; }
         public VaultService Vault { get; }
         public ProfileStore ProfileStore { get; }
+        public AccountRegistry Registry { get; }
         public FakeProcessManager Proc { get; } = new();
         public FakeConfigStore Config { get; } = new();
         public FakeClock Clock { get; } = new();
@@ -36,7 +38,7 @@ public sealed class CodexTargetSwitchDecompositionTests
         public SwitchPlanBuilder PlanBuilder { get; }
         public SwitchTransactionExecutor Executor { get; }
         public CodexTargetSwitchService Facade { get; }
-        public List<ProfileMetadata> ChatGptProfiles { get; } = [];
+        public List<ProfileMetadata> ChatGptProfiles => Registry.Profiles.ToList();
 
         public DecompositionTestEnv()
         {
@@ -49,13 +51,14 @@ public sealed class CodexTargetSwitchDecompositionTests
             var protector = new DpapiSecretProtector();
             Vault = new VaultService(protector, Fs, Paths.VaultDir);
             ProfileStore = new ProfileStore(Fs, Paths.ProfilesPath);
+            Registry = new AccountRegistry(ProfileStore, Clock, Audit);
             SecretStore = new ApiKeySecretStore(protector, Fs, Paths.ApiKeysDir);
             ApiStore = new ApiProviderStore(Fs, Paths.ApiProvidersPath, SecretStore);
             RoutingStore = new CodexRoutingConfigStore(Fs, Paths);
             BrokerInstaller = new KeyBrokerInstaller(Paths, Fs, brokerExe);
             CatalogService = new CodexModelCatalogService(Fs, Paths);
 
-            ChatGptSwitch = new SwitchService(Vault, ProfileStore, Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
+            ChatGptSwitch = new SwitchService(Vault, Registry, Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
             PlanBuilder = new SwitchPlanBuilder(ApiStore, SecretStore, BrokerInstaller, RoutingStore, Paths.Codex);
             Executor = new SwitchTransactionExecutor(ChatGptSwitch, RoutingStore, ApiStore, Proc, Fs, Clock, Audit, Paths.Codex, modelCatalogService: CatalogService);
             Facade = new CodexTargetSwitchService(PlanBuilder, Executor);
@@ -73,9 +76,7 @@ public sealed class CodexTargetSwitchDecompositionTests
                 HealthStatus = HealthStatus.Valid,
             };
             p.BlobFingerprint = Vault.SaveBlob(p.Id, authBytes);
-            ChatGptProfiles.Add(p);
-            ProfileStore.SaveAll(ChatGptProfiles);
-            return p;
+            return Registry.Add(p);
         }
 
         public void SetActiveSlot(byte[] bytes) => Fs.WriteAllBytesAtomic(Paths.Codex.ActiveAuthPath, bytes);

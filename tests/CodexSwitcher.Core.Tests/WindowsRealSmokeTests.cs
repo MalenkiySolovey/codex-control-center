@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using CodexSwitcher.Core.Accounts.Services;
 using CodexSwitcher.Core.Tests.TestSupport;
 using Xunit;
 
@@ -49,7 +50,8 @@ public sealed class WindowsRealSmokeTests
         var clock = new FakeClock();
         var audit = new FakeAudit();
 
-        var chatGptSwitch = new SwitchService(vault, profileStore, fs, fakeProcesses, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
+        var registry = new AccountRegistry(profileStore, clock, audit);
+        var chatGptSwitch = new SwitchService(vault, registry, fs, fakeProcesses, new FakeConfigStore(), clock, audit, paths.Codex, paths.BackupsDir);
         var targetSwitch = new CodexTargetSwitchService(
             chatGptSwitch, routingStore, apiStore, secretStore, brokerInstaller,
             fakeProcesses, fs, clock, audit, paths.Codex);
@@ -82,8 +84,8 @@ public sealed class WindowsRealSmokeTests
         };
         profB.BlobFingerprint = vault.SaveBlob(profB.Id, bBytes);
 
-        var profiles = new List<ProfileMetadata> { profA, profB };
-        profileStore.SaveAll(profiles);
+        registry.Add(profA);
+        registry.Add(profB);
 
         // Place Account A in live auth.json slot
         fs.WriteAllBytesAtomic(paths.Codex.ActiveAuthPath, aBytes);
@@ -94,26 +96,26 @@ public sealed class WindowsRealSmokeTests
         var options = new SwitchExecutionOptions(CloseReopenMode.Automatic, TimeSpan.FromSeconds(1), 5);
 
         // 1. Switch A -> B
-        var result1 = await targetSwitch.SwitchToChatGptAsync(profB.Id, profiles, options);
+        var result1 = await targetSwitch.SwitchToChatGptAsync(profB.Id, registry.Profiles.ToList(), options);
         Assert.Equal(TargetSwitchOutcome.Success, result1.Outcome);
 
         // Invariant: auth.json has Account B
         var liveSlotB = fs.ReadAllBytes(paths.Codex.ActiveAuthPath);
         Assert.Equal(bBytes, liveSlotB);
-        Assert.True(profB.IsActive);
-        Assert.False(profA.IsActive);
+        Assert.True(registry.Find(profB.Id)!.IsActive);
+        Assert.False(registry.Find(profA.Id)!.IsActive);
         Assert.True(fakeProcesses.CloseCalled);
         Assert.Contains(fakeProcesses.Relaunched, p => p.Pid == 5555);
 
         // 2. Switch B -> A (reverse transition)
-        var result2 = await targetSwitch.SwitchToChatGptAsync(profA.Id, profiles, options);
+        var result2 = await targetSwitch.SwitchToChatGptAsync(profA.Id, registry.Profiles.ToList(), options);
         Assert.Equal(TargetSwitchOutcome.Success, result2.Outcome);
 
         // Invariant: auth.json has Account A
         var liveSlotA = fs.ReadAllBytes(paths.Codex.ActiveAuthPath);
         Assert.Equal(aBytes, liveSlotA);
-        Assert.True(profA.IsActive);
-        Assert.False(profB.IsActive);
+        Assert.True(registry.Find(profA.Id)!.IsActive);
+        Assert.False(registry.Find(profB.Id)!.IsActive);
 
         // 3. Verify zero plaintext secret leaks in audit entries
         foreach (var entry in audit.Entries)

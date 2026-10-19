@@ -113,4 +113,31 @@ public sealed class ProfileMetadata
         : !string.IsNullOrWhiteSpace(DetectedDisplayName) ? DetectedDisplayName!
         : !string.IsNullOrWhiteSpace(AccountEmail) ? AccountEmail!
         : $"Conta {Id.ToString()[..8]}";
+
+    /// <summary>
+    /// Creates an isolated metadata copy for read surfaces. The registry never gives callers
+    /// references to the mutable instances it owns.
+    /// </summary>
+    internal ProfileMetadata CreateSnapshot() => new()
+    {
+        Id = Id,
+        Nickname = Nickname,
+        AccountEmail = AccountEmail,
+        DetectedDisplayName = DetectedDisplayName,
+        AccountSub = AccountSub,
+        AuthMode = AuthMode,
+        PlanType = PlanType,
+        CreatedAt = CreatedAt,
+        LastSwitchedAt = LastSwitchedAt,
+        LastRefreshedAt = LastRefreshedAt,
+        HealthStatus = HealthStatus,
+        LastError = LastError is null ? null : LastError with { },
+        BlobFingerprint = BlobFingerprint,
+        IsActive = IsActive,
+        SchemaVersion = SchemaVersion,
+        MarkedUsedAt = MarkedUsedAt,
+        SortOrder = SortOrder,
+        SubscriptionTracking = SubscriptionTracking is null ? null : SubscriptionTracking with { },
+        DetectedSubscription = DetectedSubscription is null ? null : DetectedSubscription with { },
+    };
 }

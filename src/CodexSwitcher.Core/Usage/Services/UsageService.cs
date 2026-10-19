@@ -59,8 +59,7 @@ public sealed class UsageService : IUsageService, IDisposable
     private readonly CancellationTokenSource _serviceCts;
     private readonly IFileSystem? _fs;
     private readonly CodexPaths? _codexPaths;
-    private readonly IProfileStore? _profileStore;
-    private readonly Action? _onProfilesPersistNeeded;
+    private readonly AccountRegistry? _accountRegistry;
 
     public UsageService(
         ICodexUsageProvider provider,
@@ -69,7 +68,7 @@ public sealed class UsageService : IUsageService, IDisposable
         IProfileOperationCoordinator coordinator,
         IClock clock,
         IAppLifetime? appLifetime)
-        : this(provider, cache, vault, coordinator, clock, null, appLifetime, null, null, null, null)
+        : this(provider, cache, vault, coordinator, clock, null, appLifetime, null, null, null)
     {
     }
 
@@ -83,8 +82,7 @@ public sealed class UsageService : IUsageService, IDisposable
         IAppLifetime? appLifetime = null,
         IFileSystem? fs = null,
         CodexPaths? codexPaths = null,
-        IProfileStore? profileStore = null,
-        Action? onProfilesPersistNeeded = null)
+        AccountRegistry? accountRegistry = null)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -94,8 +92,7 @@ public sealed class UsageService : IUsageService, IDisposable
         _options = options ?? new UsageServiceOptions();
         _fs = fs;
         _codexPaths = codexPaths;
-        _profileStore = profileStore;
-        _onProfilesPersistNeeded = onProfilesPersistNeeded;
+        _accountRegistry = accountRegistry;
 
         _serviceCts = appLifetime is not null
             ? CancellationTokenSource.CreateLinkedTokenSource(appLifetime.ApplicationStopping)
@@ -207,11 +204,15 @@ public sealed class UsageService : IUsageService, IDisposable
                                 if (string.IsNullOrEmpty(profile.AccountSub) || activeClaims.Sub == profile.AccountSub)
                                 {
                                     _vault.SaveBlob(profile.Id, activeBytes);
-                                    profile.BlobFingerprint = activeFp;
-                                    profile.LastRefreshedAt = _clock.UtcNow;
+                                    var refreshedAt = _clock.UtcNow;
                                     var sub = SubscriptionJwtClaimExtractor.Extract(activeBytes, _clock.UtcNow);
-                                    if (sub is not null) profile.DetectedSubscription = sub;
-                                    _onProfilesPersistNeeded?.Invoke();
+                                    UpdateProfileMetadata(profile, current =>
+                                    {
+                                        current.BlobFingerprint = activeFp;
+                                        current.LastRefreshedAt = refreshedAt;
+                                        if (sub is not null)
+                                            current.DetectedSubscription = sub;
+                                    });
                                 }
                             }
                         }
@@ -278,15 +279,14 @@ public sealed class UsageService : IUsageService, IDisposable
             var livePlan = fetchResult.Snapshot?.PlanType;
             if (!string.IsNullOrWhiteSpace(livePlan) && !string.Equals(profile.PlanType, livePlan, StringComparison.OrdinalIgnoreCase))
             {
-                profile.PlanType = livePlan;
-                if (string.Equals(livePlan, "free", StringComparison.OrdinalIgnoreCase))
+                UpdateProfileMetadata(profile, current =>
                 {
-                    if (profile.DetectedSubscription is not null)
+                    current.PlanType = livePlan;
+                    if (string.Equals(livePlan, "free", StringComparison.OrdinalIgnoreCase) && current.DetectedSubscription is not null)
                     {
-                        profile.DetectedSubscription = profile.DetectedSubscription with { IsStale = true };
+                        current.DetectedSubscription = current.DetectedSubscription with { IsStale = true };
                     }
-                }
-                _onProfilesPersistNeeded?.Invoke();
+                });
             }
 
             // Step 3: Handle rotation and update cache
@@ -330,7 +330,7 @@ public sealed class UsageService : IUsageService, IDisposable
                     {
                         var newSub = SubscriptionJwtClaimExtractor.Extract(fetchResult.RotatedAuthJson, _clock.UtcNow);
                         if (newSub is not null)
-                            profile.DetectedSubscription = newSub;
+                            UpdateProfileMetadata(profile, current => current.DetectedSubscription = newSub);
 
                         _cache.Set(
                             profile.Id,
@@ -477,6 +477,12 @@ public sealed class UsageService : IUsageService, IDisposable
                 _inFlight.TryRemove(profile.Id, out _);
             }
         }
+    }
+
+    private void UpdateProfileMetadata(ProfileMetadata profile, Action<ProfileMetadata> update)
+    {
+        update(profile);
+        _accountRegistry?.UpdateUnderLock(profile.Id, update);
     }
 
     public void Dispose()

@@ -14,6 +14,7 @@ public sealed class SwitchServiceTests
         public FaultInjectingFileSystem Fs { get; }
         public VaultService Vault { get; }
         public ProfileStore Store { get; }
+        public AccountRegistry Registry { get; }
         public FakeProcessManager Proc { get; } = new();
         public FakeConfigStore Config { get; } = new();
         public FakeClock Clock { get; } = new();
@@ -21,16 +22,17 @@ public sealed class SwitchServiceTests
         public CodexPaths Paths { get; }
         public string BackupsDir { get; }
         public SwitchService Service { get; }
-        public List<ProfileMetadata> Profiles { get; } = [];
+        public List<ProfileMetadata> Profiles => Registry.Profiles.ToList();
 
         public Env()
         {
             Fs = new FaultInjectingFileSystem(new PhysicalFileSystem());
             Vault = new VaultService(new DpapiSecretProtector(), Fs, Dir.Combine("vault"));
             Store = new ProfileStore(Fs, Dir.Combine("profiles.json"));
+            Registry = new AccountRegistry(Store, Clock, Audit);
             Paths = CodexPaths.ForHome(Dir.Combine(".codex"));
             BackupsDir = Dir.Combine("backups");
-            Service = new SwitchService(Vault, Store, Fs, Proc, Config, Clock, Audit, Paths, BackupsDir);
+            Service = new SwitchService(Vault, Registry, Fs, Proc, Config, Clock, Audit, Paths, BackupsDir);
         }
 
         public ProfileMetadata AddProfile(string nick, byte[] authBytes, bool active)
@@ -43,8 +45,7 @@ public sealed class SwitchServiceTests
                 HealthStatus = HealthStatus.Valid,
             };
             p.BlobFingerprint = Vault.SaveBlob(p.Id, authBytes);
-            Profiles.Add(p);
-            return p;
+            return Registry.Add(p);
         }
 
         public void SetActiveSlot(byte[] bytes) => Fs.WriteAllBytesAtomic(Paths.ActiveAuthPath, bytes);
@@ -72,13 +73,13 @@ public sealed class SwitchServiceTests
         var b = env.AddProfile("B", bBytes, active: false);
         env.SetActiveSlot(aBytes);
 
-        var result = await env.Service.SwitchAsync(env.Profiles, b.Id, AutoOpts);
+        var result = await env.Service.SwitchAsync(b.Id, AutoOpts);
 
         Assert.Equal(SwitchOutcome.Success, result.Outcome);
         Assert.Equal(bBytes, env.ReadActiveSlot());
-        Assert.True(b.IsActive);
-        Assert.False(a.IsActive);
-        Assert.Equal(env.Clock.UtcNow, b.LastSwitchedAt);
+        Assert.True(env.Registry.Find(b.Id)!.IsActive);
+        Assert.False(env.Registry.Find(a.Id)!.IsActive);
+        Assert.Equal(env.Clock.UtcNow, env.Registry.Find(b.Id)!.LastSwitchedAt);
     }
 
     [Fact]
@@ -93,11 +94,11 @@ public sealed class SwitchServiceTests
         var b = env.AddProfile("B", bBytes, active: false);
         env.SetActiveSlot(aV2); // Codex reescreveu o slot com o token novo.
 
-        await env.Service.SwitchAsync(env.Profiles, b.Id, AutoOpts);
+        await env.Service.SwitchAsync(b.Id, AutoOpts);
 
         // O cofre de A deve agora conter v2 (token renovado), não a v1 antiga — ponto 2/3.
         Assert.Equal(aV2, env.Vault.LoadBlob(a.Id));
-        Assert.Equal(new DateTimeOffset(2026, 6, 30, 0, 0, 0, TimeSpan.Zero), a.LastRefreshedAt);
+        Assert.Equal(new DateTimeOffset(2026, 6, 30, 0, 0, 0, TimeSpan.Zero), env.Registry.Find(a.Id)!.LastRefreshedAt);
     }
 
     [Fact]
@@ -110,7 +111,7 @@ public sealed class SwitchServiceTests
         var b = env.AddProfile("B", bBytes, active: false);
         env.SetActiveSlot(aBytes);
 
-        await env.Service.SwitchAsync(env.Profiles, b.Id, AutoOpts);
+        await env.Service.SwitchAsync(b.Id, AutoOpts);
 
         var backups = env.Fs.EnumerateFiles(env.BackupsDir, "auth-*.bin");
         Assert.Single(backups);
@@ -131,12 +132,12 @@ public sealed class SwitchServiceTests
 
         env.Fs.FailAtomicWriteForPath = env.Paths.ActiveAuthPath; // falha só ao gravar o slot ativo
 
-        var result = await env.Service.SwitchAsync(env.Profiles, b.Id, AutoOpts);
+        var result = await env.Service.SwitchAsync(b.Id, AutoOpts);
 
         Assert.Equal(SwitchOutcome.RolledBack, result.Outcome);
         Assert.Equal(aBytes, env.ReadActiveSlot());   // slot ativo intacto = conta A
-        Assert.True(a.IsActive);                        // A continua ativa
-        Assert.False(b.IsActive);                       // B não assumiu
+        Assert.True(env.Registry.Find(a.Id)!.IsActive);  // A continua ativa
+        Assert.False(env.Registry.Find(b.Id)!.IsActive); // B não assumiu
         Assert.Contains(env.Proc.Relaunched, p => p.Kind == CodexProcessKind.DesktopApp); // apps reabertos
     }
 
@@ -152,12 +153,12 @@ public sealed class SwitchServiceTests
         env.Proc.Running = [DesktopApp(), Cli()];
         env.Proc.RemnantAfterClose = true; // uma CLI sobrevive ao encerramento
 
-        var result = await env.Service.SwitchAsync(env.Profiles, b.Id, AutoOpts);
+        var result = await env.Service.SwitchAsync(b.Id, AutoOpts);
 
         Assert.Equal(SwitchOutcome.AbortedProcessRemnant, result.Outcome);
         Assert.Equal(aBytes, env.ReadActiveSlot()); // nada tocado
-        Assert.True(a.IsActive);
-        Assert.False(b.IsActive);
+        Assert.True(env.Registry.Find(a.Id)!.IsActive);
+        Assert.False(env.Registry.Find(b.Id)!.IsActive);
     }
 
     [Fact]
@@ -173,13 +174,13 @@ public sealed class SwitchServiceTests
         // Corrompe o blob de B: bytes que o DPAPI não consegue decifrar.
         File.WriteAllBytes(env.Vault.BlobPath(b.Id), [1, 2, 3, 4, 5, 6, 7, 8]);
 
-        var result = await env.Service.SwitchAsync(env.Profiles, b.Id, AutoOpts);
+        var result = await env.Service.SwitchAsync(b.Id, AutoOpts);
 
         Assert.Equal(SwitchOutcome.Failed, result.Outcome);
         Assert.Equal(ErrorCategory.DecryptionFailed, result.Error!.Category);
         Assert.False(env.Proc.CloseCalled);           // nenhum app foi fechado
         Assert.Equal(aBytes, env.ReadActiveSlot());    // slot intacto
-        Assert.True(a.IsActive);
+        Assert.True(env.Registry.Find(a.Id)!.IsActive);
     }
 
     [Fact]
@@ -191,11 +192,11 @@ public sealed class SwitchServiceTests
         // slot ativo pertence a conta não gerenciada
         env.SetActiveSlot(Sample.AuthJson(accountId: "acct_unmanaged"));
 
-        var result = await env.Service.SwitchAsync(env.Profiles, b.Id, AutoOpts);
+        var result = await env.Service.SwitchAsync(b.Id, AutoOpts);
 
         Assert.Equal(SwitchOutcome.Success, result.Outcome);
         Assert.Equal(bBytes, env.ReadActiveSlot());
-        Assert.True(b.IsActive);
+        Assert.True(env.Registry.Find(b.Id)!.IsActive);
     }
 
     [Fact]
@@ -210,7 +211,7 @@ public sealed class SwitchServiceTests
         env.Proc.Running = [DesktopApp()];
 
         var opts = AutoOpts with { CloseReopenMode = CloseReopenMode.DoNothing };
-        var result = await env.Service.SwitchAsync(env.Profiles, b.Id, opts);
+        var result = await env.Service.SwitchAsync(b.Id, opts);
 
         Assert.Equal(SwitchOutcome.Success, result.Outcome);
         Assert.False(env.Proc.CloseCalled);
@@ -226,7 +227,7 @@ public sealed class SwitchServiceTests
         var a = env.AddProfile("A", aBytes, active: true);
         env.SetActiveSlot(aBytes);
 
-        var result = await env.Service.SwitchAsync(env.Profiles, a.Id, AutoOpts);
+        var result = await env.Service.SwitchAsync(a.Id, AutoOpts);
 
         Assert.Equal(SwitchOutcome.Success, result.Outcome);
         Assert.False(env.Proc.CloseCalled);

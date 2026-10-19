@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "capabilityId": "tool-calling",
+  "supported": true,
+  "extensions": { "source": "catalog-v1" }
+}

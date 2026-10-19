@@ -58,7 +58,7 @@ public sealed record SwitchExecutionOptions(
 public sealed class SwitchService
 {
     private readonly IVaultService _vault;
-    private readonly IProfileStore _profileStore;
+    private readonly AccountRegistry _registry;
     private readonly IFileSystem _fs;
     private readonly IProcessManager _processes;
     private readonly ICodexConfigStore _config;
@@ -72,7 +72,7 @@ public sealed class SwitchService
 
     public SwitchService(
         IVaultService vault,
-        IProfileStore profileStore,
+        AccountRegistry registry,
         IFileSystem fs,
         IProcessManager processes,
         ICodexConfigStore config,
@@ -83,7 +83,7 @@ public sealed class SwitchService
         IProfileOperationCoordinator? coordinator = null)
     {
         _vault = vault ?? throw new ArgumentNullException(nameof(vault));
-        _profileStore = profileStore ?? throw new ArgumentNullException(nameof(profileStore));
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _fs = fs ?? throw new ArgumentNullException(nameof(fs));
         _processes = processes ?? throw new ArgumentNullException(nameof(processes));
         _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -107,19 +107,15 @@ public sealed class SwitchService
         return new SwitchPlan(from, to, toClose, toReopen, hasCli);
     }
 
-    /// <summary>
-    /// Executa a troca. Pressupõe que a confirmação do usuário já ocorreu e que
-    /// <paramref name="allProfiles"/> foi reconciliado (o ativo tem <c>IsActive=true</c>).
-    /// </summary>
+    /// <summary>Executes the switch using the registry's current account snapshot.</summary>
     public async Task<SwitchResult> SwitchAsync(
-        List<ProfileMetadata> allProfiles,
         Guid targetProfileId,
         SwitchExecutionOptions options,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(allProfiles);
         ArgumentNullException.ThrowIfNull(options);
 
+        var allProfiles = _registry.Snapshot().ToList();
         var to = allProfiles.FirstOrDefault(p => p.Id == targetProfileId);
         if (to is null)
             return Fail(ErrorCategory.Unknown, "Perfil de destino não encontrado.");
@@ -146,10 +142,12 @@ public sealed class SwitchService
             }
             catch (SecretDecryptionException)
             {
-                to.HealthStatus = HealthStatus.Unknown;
-                to.LastError = ErrorInfo.Create(ErrorCategory.DecryptionFailed,
-                    "Perfil não pôde ser decifrado neste usuário/máquina.", _clock.UtcNow);
-                _profileStore.SaveAll(allProfiles);
+                _registry.UpdateUnderLock(to.Id, profile =>
+                {
+                    profile.HealthStatus = HealthStatus.Unknown;
+                    profile.LastError = ErrorInfo.Create(ErrorCategory.DecryptionFailed,
+                        "Perfil não pôde ser decifrado neste usuário/máquina.", _clock.UtcNow);
+                });
                 _audit.Record("switch", "failed", "destino não decifrável");
                 return Fail(ErrorCategory.DecryptionFailed,
                     "Não foi possível ler a credencial do perfil de destino. Nada foi alterado.");
@@ -188,17 +186,20 @@ public sealed class SwitchService
             var backupPath = originalActiveBytes is not null
                 ? Path.Combine(_backupsDir, $"auth-{now.UtcDateTime:yyyyMMddTHHmmssfffZ}.bin")
                 : null;
+            string? sourceCredentialFingerprint = null;
+            DateTimeOffset? sourceLastRefreshedAt = null;
+            var sourceCredentialWrittenBack = false;
 
             try
             {
                 // (5) Write-back do slot ativo atual no perfil de origem (preserva refresh/rotação: pontos 2, 3).
                 if (from is not null && originalActiveBytes is not null)
                 {
-                    from.BlobFingerprint = _vault.SaveBlob(from.Id, originalActiveBytes);
+                    sourceCredentialFingerprint = _vault.SaveBlob(from.Id, originalActiveBytes);
                     var info = AuthJsonReader.TryRead(originalActiveBytes);
                     if (info?.LastRefresh is { } lr)
-                        from.LastRefreshedAt = lr;
-                    from.HealthStatus = HealthStatus.Valid;
+                        sourceLastRefreshedAt = lr;
+                    sourceCredentialWrittenBack = true;
                     _audit.Record("write-back", "ok", from.DisplayName);
                 }
 
@@ -222,17 +223,46 @@ public sealed class SwitchService
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecretDecryptionException)
             {
                 // (rollback) Restaurar o slot ativo e reabrir na conta original.
-                return Rollback(allProfiles, from, to, originalActiveBytes, captured, ex);
+                return Rollback(from, to, originalActiveBytes, captured, sourceCredentialFingerprint,
+                    sourceLastRefreshedAt, sourceCredentialWrittenBack, ex);
             }
 
             // (9) Metadados: destino vira ativo; origem deixa de ser.
-            to.LastSwitchedAt = now;
-            to.IsActive = true;
-            to.HealthStatus = to.HealthStatus == HealthStatus.Unknown ? HealthStatus.Valid : to.HealthStatus;
-            to.LastError = null;
-            if (from is not null) from.IsActive = false;
-            to.BlobFingerprint = Fingerprint.Compute(targetBytes);
-            _profileStore.SaveAll(allProfiles);
+            try
+            {
+                var metadataUpdates = new Dictionary<Guid, Action<ProfileMetadata>>
+                {
+                    [to.Id] = profile =>
+                    {
+                        profile.LastSwitchedAt = now;
+                        profile.IsActive = true;
+                        profile.HealthStatus = profile.HealthStatus == HealthStatus.Unknown ? HealthStatus.Valid : profile.HealthStatus;
+                        profile.LastError = null;
+                        profile.BlobFingerprint = Fingerprint.Compute(targetBytes);
+                    },
+                };
+                if (from is not null)
+                {
+                    metadataUpdates[from.Id] = profile =>
+                    {
+                        profile.IsActive = false;
+                        if (sourceCredentialWrittenBack)
+                        {
+                            profile.BlobFingerprint = sourceCredentialFingerprint;
+                            if (sourceLastRefreshedAt is { } refreshedAt)
+                                profile.LastRefreshedAt = refreshedAt;
+                            profile.HealthStatus = HealthStatus.Valid;
+                        }
+                    };
+                }
+
+                _registry.UpdateManyUnderLock(metadataUpdates);
+            }
+            catch (Exception ex)
+            {
+                return Rollback(from, to, originalActiveBytes, captured, sourceCredentialFingerprint,
+                    sourceLastRefreshedAt, sourceCredentialWrittenBack, ex);
+            }
 
             // (10) Reabrir SOMENTE após o slot estar persistido (ponto 25). CLIs não reabrem (ponto 20).
             var reopenFailures = new List<CodexProcessInfo>();
@@ -257,11 +287,13 @@ public sealed class SwitchService
     }
 
     private SwitchResult Rollback(
-        List<ProfileMetadata> allProfiles,
         ProfileMetadata? from,
         ProfileMetadata to,
         byte[]? originalActiveBytes,
         IReadOnlyList<CodexProcessInfo> captured,
+        string? sourceCredentialFingerprint,
+        DateTimeOffset? sourceLastRefreshedAt,
+        bool sourceCredentialWrittenBack,
         Exception cause)
     {
         try
@@ -275,10 +307,33 @@ public sealed class SwitchService
             _audit.Record("switch", "rollback-restore-failed", ex.GetType().Name);
         }
 
-        // Metadados permanecem: origem segue ativa, destino inativo.
-        if (from is not null) from.IsActive = true;
-        to.IsActive = false;
-        _profileStore.SaveAll(allProfiles);
+        // Metadados permanecem: origem segue ativa, destino inativo. Registry owns this commit.
+        try
+        {
+            var metadataUpdates = new Dictionary<Guid, Action<ProfileMetadata>>
+            {
+                [to.Id] = profile => profile.IsActive = false,
+            };
+            if (from is not null)
+            {
+                metadataUpdates[from.Id] = profile =>
+                {
+                    profile.IsActive = true;
+                    if (sourceCredentialWrittenBack)
+                    {
+                        profile.BlobFingerprint = sourceCredentialFingerprint;
+                        if (sourceLastRefreshedAt is { } refreshedAt)
+                            profile.LastRefreshedAt = refreshedAt;
+                        profile.HealthStatus = HealthStatus.Valid;
+                    }
+                };
+            }
+            _registry.UpdateManyUnderLock(metadataUpdates);
+        }
+        catch (Exception ex)
+        {
+            _audit.Record("switch", "rollback-metadata-failed", ex.GetType().Name);
+        }
 
         var reopenFailures = new List<CodexProcessInfo>();
         ReopenDesktop(captured, out reopenFailures);

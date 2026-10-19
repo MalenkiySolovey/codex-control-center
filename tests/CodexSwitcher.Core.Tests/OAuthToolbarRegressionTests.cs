@@ -126,7 +126,7 @@ public sealed class OAuthToolbarRegressionTests
         var loginWindow = ReadSource(Path.Combine("src", "CodexSwitcher.App", "Views", "LoginWindow.xaml.cs"));
 
         Assert.Contains("_ui.RunEphemeralLoginAsync()", addAccount);
-        Assert.Contains("_profiles.AddFromAuthJson(authJson, null)", addAccount);
+        Assert.Contains("_credentials.AddFromAuthJson(authJson, null)", addAccount);
         Assert.DoesNotContain("_targetSwitchService", addAccount);
         Assert.DoesNotContain("TargetStateChanged", addAccount);
         Assert.DoesNotContain("ReturnToOpenAi", addAccount);
@@ -147,7 +147,7 @@ public sealed class OAuthToolbarRegressionTests
         var loginWindow = ReadSource(Path.Combine("src", "CodexSwitcher.App", "Views", "LoginWindow.xaml.cs"));
         var onClosed = GetMethodBody(loginWindow, "private void OnClosed(");
         var cancelGuard = addAccount.IndexOf("if (authJson is null)", StringComparison.Ordinal);
-        var saveProfile = addAccount.IndexOf("_profiles.AddFromAuthJson(authJson, null)", StringComparison.Ordinal);
+        var saveProfile = addAccount.IndexOf("_credentials.AddFromAuthJson(authJson, null)", StringComparison.Ordinal);
 
         Assert.True(cancelGuard >= 0);
         Assert.True(saveProfile > cancelGuard);

@@ -46,6 +46,7 @@ public sealed class ProfilePersistenceIntegrityTests
         public VaultService Vault { get; }
         public ProfileStore Store { get; }
         public CodexPaths Paths { get; }
+        public AccountRegistry Registry { get; }
         public ProfileService ProfilesService { get; }
 
         public TestFixture()
@@ -54,7 +55,9 @@ public sealed class ProfilePersistenceIntegrityTests
             Store = new ProfileStore(Fs, ProfilesPath);
             Paths = CodexPaths.ForHome(TempDir.Combine(".codex"));
             var recon = new ReconciliationService(Fs, Paths);
-            ProfilesService = AccountServiceGraph.Create(Vault, Store, recon, Fs, Paths, Clock, Audit).Profiles;
+            var graph = AccountServiceGraph.Create(Vault, Store, recon, Fs, Paths, Clock, Audit);
+            Registry = graph.Registry;
+            ProfilesService = graph.Profiles;
         }
 
         public List<ProfileMetadata> CreateProfiles(int count)
@@ -137,12 +140,12 @@ public sealed class ProfilePersistenceIntegrityTests
         f.Store.SaveAll(twelve, ProfileSaveIntent.NormalUpdate);
 
         f.ProfilesService.Load();
-        Assert.Equal(12, f.ProfilesService.Profiles.Count);
+        Assert.Equal(12, f.Registry.Profiles.Count);
 
-        var toRemove = f.ProfilesService.Profiles.Last().Id;
+        var toRemove = f.Registry.Profiles[^1].Id;
         f.ProfilesService.Remove(toRemove);
 
-        Assert.Equal(11, f.ProfilesService.Profiles.Count);
+        Assert.Equal(11, f.Registry.Profiles.Count);
         var loaded = f.Store.LoadAll();
         Assert.Equal(11, loaded.Count);
         Assert.DoesNotContain(loaded, p => p.Id == toRemove);
@@ -236,9 +239,9 @@ public sealed class ProfilePersistenceIntegrityTests
         f.Fs.WriteAllBytesAtomic(f.Paths.ActiveAuthPath, activeBytes);
 
         f.ProfilesService.Load();
-        Assert.Equal(12, f.ProfilesService.Profiles.Count);
+        Assert.Equal(12, f.Registry.Profiles.Count);
 
-        var active = f.ProfilesService.Profiles.First(p => p.IsActive);
+        var active = f.Registry.Profiles.First(p => p.IsActive);
         var fakeProvider = new FakeCodexUsageProvider();
 
         // Simulate Plus -> Free plan change returned from live account/read
@@ -266,15 +269,14 @@ public sealed class ProfilePersistenceIntegrityTests
             appLifetime: null,
             fs: f.Fs,
             codexPaths: f.Paths,
-            profileStore: null,
-            onProfilesPersistNeeded: () => f.ProfilesService.Save());
+            accountRegistry: f.Registry);
 
         // Execute refresh for the active profile
         var result = await usageService.RefreshAsync(active, force: true);
         Assert.Equal(UsageStatus.Healthy, result.Status);
 
         // Verify that in memory and on disk, all 12 profiles remain completely intact!
-        Assert.Equal(12, f.ProfilesService.Profiles.Count);
+        Assert.Equal(12, f.Registry.Profiles.Count);
         var loaded = f.Store.LoadAll();
         Assert.Equal(12, loaded.Count);
 
@@ -295,7 +297,7 @@ public sealed class ProfilePersistenceIntegrityTests
 
         // Load profile service (startup)
         f.ProfilesService.Load();
-        Assert.Single(f.ProfilesService.Profiles);
+        Assert.Single(f.Registry.Profiles);
 
         // Invariant: all 12 vault blobs MUST remain intact in vault directory
         var blobsOnDisk = f.Vault.EnumerateBlobs();
@@ -310,8 +312,8 @@ public sealed class ProfilePersistenceIntegrityTests
         Assert.Equal(11, recoveredCount);
 
         // All 12 profiles now exist with their original GUIDs
-        Assert.Equal(12, f.ProfilesService.Profiles.Count);
-        var recoveredIds = f.ProfilesService.Profiles.Select(p => p.Id).ToHashSet();
+        Assert.Equal(12, f.Registry.Profiles.Count);
+        var recoveredIds = f.Registry.Profiles.Select(p => p.Id).ToHashSet();
         foreach (var original in twelve)
         {
             Assert.Contains(original.Id, recoveredIds);

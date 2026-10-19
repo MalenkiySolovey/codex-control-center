@@ -123,7 +123,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICodexLaunchService>(sp => new CodexLaunchService(
             paths,
             sp.GetRequiredService<AppSettings>(),
-            sp.GetRequiredService<IProfileStore>(),
+            sp.GetRequiredService<AccountRegistry>(),
             sp.GetRequiredService<IApiProviderStore>(),
             sp.GetRequiredService<IVaultService>(),
             sp.GetRequiredService<IProfileOperationCoordinator>(),
@@ -240,11 +240,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<AccountCredentialService>();
         services.AddSingleton<AccountTransferService>();
         services.AddSingleton<CodexAuthReconciler>();
-        services.AddSingleton<ProfileService>();
 
         services.AddSingleton(sp => new SwitchService(
             sp.GetRequiredService<VaultService>(),
-            sp.GetRequiredService<ProfileStore>(),
+            sp.GetRequiredService<AccountRegistry>(),
             sp.GetRequiredService<IFileSystem>(),
             sp.GetRequiredService<IProcessManager>(),
             sp.GetRequiredService<ICodexConfigStore>(),
@@ -264,8 +263,7 @@ public static class ServiceCollectionExtensions
             appLifetime: sp.GetRequiredService<IAppLifetime>(),
             fs: sp.GetRequiredService<IFileSystem>(),
             codexPaths: paths.Codex,
-            profileStore: null,
-            onProfilesPersistNeeded: () => sp.GetRequiredService<ProfileService>().Save()));
+            accountRegistry: sp.GetRequiredService<AccountRegistry>()));
 
         services.AddSingleton(sp => new UsagePollingCoordinator(
             sp.GetRequiredService<IUsageService>(),

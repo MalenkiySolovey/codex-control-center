@@ -4,8 +4,8 @@ using CodexSwitcher.Core.Routing.Models;
 namespace CodexSwitcher.Core.Accounts.Services;
 
 /// <summary>
-/// Compatibility facade retained for the existing UI account flows. Domain work lives in
-/// account registry, credential, transfer, subscription metadata, and Codex reconciliation services.
+/// Thin compatibility facade retained for older integrations and tests. Production consumers
+/// must depend on the narrow account registry, credential, transfer, and reconciliation owners.
 /// </summary>
 public sealed class ProfileService
 {
@@ -13,8 +13,6 @@ public sealed class ProfileService
     private readonly AccountCredentialService _credentials;
     private readonly AccountTransferService _transfer;
     private readonly CodexAuthReconciler _authReconciler;
-
-    public List<ProfileMetadata> Profiles => _registry.MutableProfiles;
 
     public ProfileService(
         AccountRegistry registry,
@@ -75,5 +73,4 @@ public sealed class ProfileService
 
     public void Reorder(IReadOnlyList<Guid> orderedIds) => _registry.Reorder(orderedIds);
 
-    public void Save() => _registry.Save();
 }

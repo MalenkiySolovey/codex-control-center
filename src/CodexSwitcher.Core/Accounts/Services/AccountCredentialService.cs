@@ -63,17 +63,19 @@ public sealed class AccountCredentialService
             var existing = _registry.FindByAccountSubUnderLock(claims.Sub);
             if (existing is not null)
             {
-                existing.BlobFingerprint = _vault.SaveBlob(existing.Id, authJson);
-                existing.HealthStatus = HealthStatus.Valid;
-                existing.LastError = null;
-                existing.LastRefreshedAt = file?.LastRefresh ?? _clock.UtcNow;
-                SubscriptionMetadataService.ApplyCurrentCredential(existing, authJson, _clock.UtcNow);
-                if (!string.IsNullOrWhiteSpace(nickname))
-                    existing.Nickname = nickname.Trim();
+                var updated = _registry.UpdateUnderLock(existing.Id, profile =>
+                {
+                    profile.BlobFingerprint = _vault.SaveBlob(profile.Id, authJson);
+                    profile.HealthStatus = HealthStatus.Valid;
+                    profile.LastError = null;
+                    profile.LastRefreshedAt = file?.LastRefresh ?? _clock.UtcNow;
+                    SubscriptionMetadataService.ApplyCurrentCredential(profile, authJson, _clock.UtcNow);
+                    if (!string.IsNullOrWhiteSpace(nickname))
+                        profile.Nickname = nickname.Trim();
+                })!;
 
-                _registry.SaveUnderLock();
-                _audit.Record("add", "updated-existing", existing.DisplayName);
-                return existing;
+                _audit.Record("add", "updated-existing", updated.DisplayName);
+                return updated;
             }
 
             var profile = new ProfileMetadata
@@ -87,13 +89,13 @@ public sealed class AccountCredentialService
                 CreatedAt = _clock.UtcNow,
                 LastRefreshedAt = file?.LastRefresh ?? _clock.UtcNow,
                 HealthStatus = HealthStatus.Valid,
-                SortOrder = _registry.MutableProfiles.Count == 0 ? 0 : _registry.MutableProfiles.Max(item => item.SortOrder) + 1,
+                SortOrder = _registry.NextSortOrderUnderLock(),
             };
             SubscriptionMetadataService.ApplyCurrentCredential(profile, authJson, _clock.UtcNow);
             profile.BlobFingerprint = _vault.SaveBlob(profile.Id, authJson);
-            _registry.AddUnderLock(profile);
-            _audit.Record("add", "ok", profile.DisplayName);
-            return profile;
+            var added = _registry.AddUnderLock(profile);
+            _audit.Record("add", "ok", added.DisplayName);
+            return added;
         }
     }
 
@@ -126,22 +128,24 @@ public sealed class AccountCredentialService
                     throw new InvalidOperationException($"Esta conta já está cadastrada como '{duplicate.DisplayName}'.");
             }
 
-            profile.BlobFingerprint = _vault.SaveBlob(profile.Id, authJson);
-            if (!string.IsNullOrEmpty(claims.Sub)) profile.AccountSub = claims.Sub;
-            if (!string.IsNullOrEmpty(claims.Email)) profile.AccountEmail = claims.Email;
-            if (!string.IsNullOrEmpty(claims.PlanType)) profile.PlanType = claims.PlanType;
-            if (!string.IsNullOrEmpty(file?.AuthMode)) profile.AuthMode = file.AuthMode;
-            profile.HealthStatus = HealthStatus.Valid;
-            profile.LastError = null;
-            profile.LastRefreshedAt = file?.LastRefresh ?? _clock.UtcNow;
-            SubscriptionMetadataService.ApplyCurrentCredential(profile, authJson, _clock.UtcNow);
+            var updated = _registry.UpdateUnderLock(id, current =>
+            {
+                current.BlobFingerprint = _vault.SaveBlob(current.Id, authJson);
+                if (!string.IsNullOrEmpty(claims.Sub)) current.AccountSub = claims.Sub;
+                if (!string.IsNullOrEmpty(claims.Email)) current.AccountEmail = claims.Email;
+                if (!string.IsNullOrEmpty(claims.PlanType)) current.PlanType = claims.PlanType;
+                if (!string.IsNullOrEmpty(file?.AuthMode)) current.AuthMode = file.AuthMode;
+                current.HealthStatus = HealthStatus.Valid;
+                current.LastError = null;
+                current.LastRefreshedAt = file?.LastRefresh ?? _clock.UtcNow;
+                SubscriptionMetadataService.ApplyCurrentCredential(current, authJson, _clock.UtcNow);
 
-            if (profile.IsActive)
-                writeActiveSlotBeforeMetadataSave?.Invoke(authJson);
+                if (current.IsActive)
+                    writeActiveSlotBeforeMetadataSave?.Invoke(authJson);
+            })!;
 
-            _registry.SaveUnderLock();
-            _audit.Record("reauthenticate", "ok", profile.DisplayName);
-            return profile;
+            _audit.Record("reauthenticate", "ok", updated.DisplayName);
+            return updated;
         }
     }
 
@@ -165,7 +169,7 @@ public sealed class AccountCredentialService
 
         lock (_registry.SyncRoot)
         {
-            if (_registry.Profiles.Count == 0)
+            if (_registry.SnapshotUnderLock().Count == 0)
                 _registry.LoadUnderLock();
 
             var profile = _registry.FindUnderLock(profileId);
@@ -188,11 +192,13 @@ public sealed class AccountCredentialService
                 CryptographicOperations.ZeroMemory(currentAuthJson);
             }
 
-            profile.BlobFingerprint = _vault.SaveBlob(profileId, refreshedAuthJson);
-            profile.LastRefreshedAt = _clock.UtcNow;
-            profile.HealthStatus = HealthStatus.Valid;
-            profile.LastError = null;
-            _registry.SaveUnderLock();
+            _registry.UpdateUnderLock(profileId, current =>
+            {
+                current.BlobFingerprint = _vault.SaveBlob(profileId, refreshedAuthJson);
+                current.LastRefreshedAt = _clock.UtcNow;
+                current.HealthStatus = HealthStatus.Valid;
+                current.LastError = null;
+            });
             return true;
         }
     }
@@ -207,7 +213,7 @@ public sealed class AccountCredentialService
 
             _vault.DeleteBlob(id);
             _totpStore?.Delete(id);
-            _registry.RemoveUnderLock(profile, ProfileSaveIntent.ExplicitDelete);
+            _registry.RemoveUnderLock(id, ProfileSaveIntent.ExplicitDelete);
             _audit.Record("remove", "ok", profile.DisplayName);
         }
     }
@@ -216,7 +222,7 @@ public sealed class AccountCredentialService
     {
         lock (_registry.SyncRoot)
         {
-            var knownIds = _registry.Profiles.Select(profile => profile.Id).ToHashSet();
+            var knownIds = _registry.KnownIdsUnderLock();
             return _vault.EnumerateBlobs().Where(id => !knownIds.Contains(id)).ToList();
         }
     }
@@ -236,7 +242,7 @@ public sealed class AccountCredentialService
             if (orphans.Count == 0)
                 return 0;
 
-            var recovered = 0;
+            var recoveredProfiles = new List<ProfileMetadata>();
             foreach (var orphanId in orphans)
             {
                 byte[]? authJson = null;
@@ -259,12 +265,11 @@ public sealed class AccountCredentialService
                         CreatedAt = file?.LastRefresh ?? _clock.UtcNow,
                         LastRefreshedAt = file?.LastRefresh,
                         HealthStatus = HealthStatus.Valid,
-                        SortOrder = _registry.MutableProfiles.Count == 0 ? 0 : _registry.MutableProfiles.Max(item => item.SortOrder) + 1,
+                        SortOrder = _registry.NextSortOrderUnderLock() + recoveredProfiles.Count,
                         BlobFingerprint = Fingerprint.Compute(authJson),
                     };
                     SubscriptionMetadataService.ApplyCurrentCredential(profile, authJson, _clock.UtcNow);
-                    _registry.MutableProfiles.Add(profile);
-                    recovered++;
+                    recoveredProfiles.Add(profile);
                 }
                 catch (Exception ex)
                 {
@@ -277,13 +282,13 @@ public sealed class AccountCredentialService
                 }
             }
 
-            if (recovered > 0)
+            if (recoveredProfiles.Count > 0)
             {
-                _registry.SaveUnderLock(ProfileSaveIntent.NormalUpdate);
-                _audit.Record("recovery", "ok", $"{recovered} orphan profile(s) recovered.");
+                _registry.AddManyUnderLock(recoveredProfiles, ProfileSaveIntent.NormalUpdate);
+                _audit.Record("recovery", "ok", $"{recoveredProfiles.Count} orphan profile(s) recovered.");
             }
 
-            return recovered;
+            return recoveredProfiles.Count;
         }
     }
 
@@ -294,18 +299,20 @@ public sealed class AccountCredentialService
     internal static bool EnrichMissingDetectedMetadata(ProfileMetadata profile, byte[] authJson, DateTimeOffset now) =>
         SubscriptionMetadataService.EnrichMissing(profile, authJson, now);
 
-    internal void PersistReconciledCredential(ProfileMetadata profile, byte[] authJson)
+    internal void PersistReconciledCredential(Guid profileId, byte[] authJson)
     {
         lock (_registry.SyncRoot)
         {
-            profile.BlobFingerprint = _vault.SaveBlob(profile.Id, authJson);
-            var info = AuthJsonReader.TryRead(authJson);
-            if (info?.LastRefresh is { } lastRefresh)
-                profile.LastRefreshedAt = lastRefresh;
-            if (profile.HealthStatus is HealthStatus.Unknown)
-                profile.HealthStatus = HealthStatus.Valid;
-            SubscriptionMetadataService.ApplyCurrentCredential(profile, authJson, _clock.UtcNow);
-            _registry.SaveUnderLock();
+            _registry.UpdateUnderLock(profileId, profile =>
+            {
+                profile.BlobFingerprint = _vault.SaveBlob(profile.Id, authJson);
+                var info = AuthJsonReader.TryRead(authJson);
+                if (info?.LastRefresh is { } lastRefresh)
+                    profile.LastRefreshedAt = lastRefresh;
+                if (profile.HealthStatus is HealthStatus.Unknown)
+                    profile.HealthStatus = HealthStatus.Valid;
+                SubscriptionMetadataService.ApplyCurrentCredential(profile, authJson, _clock.UtcNow);
+            });
         }
     }
 

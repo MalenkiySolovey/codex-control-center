@@ -508,7 +508,6 @@ public sealed class SwitchTransactionExecutor : ISwitchTransactionExecutor
             : options;
 
         var chatGptResult = await _chatGptSwitchService.SwitchAsync(
-            accountPlan.AllChatGptProfiles,
             targetProfile.Id,
             switchOptions,
             cancellationToken).ConfigureAwait(false);
