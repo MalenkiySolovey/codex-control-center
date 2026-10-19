@@ -56,6 +56,41 @@ public class SwitchboardCodexProcessRegistryTests
     }
 
     [Fact]
+    public async Task TerminateAllOwnedProcessesAsync_KillsOnlyTheRegisteredLiveProcess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var owned = StartLongRunningLocalProcess();
+        using var unrelated = StartLongRunningLocalProcess();
+        var registry = new SwitchboardCodexProcessRegistry();
+        registry.RegisterOwnedProcess(owned);
+
+        try
+        {
+            await registry.TerminateAllOwnedProcessesAsync(TimeSpan.FromSeconds(2));
+
+            Assert.True(owned.HasExited);
+            Assert.False(unrelated.HasExited);
+            Assert.Empty(registry.GetOwnedProcessIds());
+        }
+        finally
+        {
+            if (!owned.HasExited)
+            {
+                owned.Kill(entireProcessTree: true);
+            }
+
+            if (!unrelated.HasExited)
+            {
+                unrelated.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    [Fact]
     public void CodexProcessManager_FiltersOutOwnedProcessFromFoundList()
     {
         var registry = new SwitchboardCodexProcessRegistry();
@@ -66,5 +101,57 @@ public class SwitchboardCodexProcessRegistryTests
 
         var managerWithRegistry = new CodexProcessManager(registry);
         Assert.True(registry.IsOwnedProcess(currentPid));
+    }
+
+    [Fact]
+    public async Task CloseGracefullyThenKillAsync_RechecksOwnershipBeforeClosingCapturedTarget()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var process = StartLongRunningLocalProcess();
+        var registry = new SwitchboardCodexProcessRegistry();
+        registry.RegisterOwnedProcess(process);
+        var manager = new CodexProcessManager(registry);
+        var staleCandidate = new CodexProcessInfo(
+            process.Id,
+            process.ProcessName,
+            process.MainModule?.FileName,
+            null,
+            CodexProcessKind.Cli);
+
+        try
+        {
+            var closed = await manager.CloseGracefullyThenKillAsync(
+                [staleCandidate],
+                TimeSpan.Zero);
+
+            Assert.Empty(closed);
+            Assert.False(process.HasExited);
+        }
+        finally
+        {
+            registry.UnregisterOwnedProcess(process.Id);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    private static Process StartLongRunningLocalProcess()
+    {
+        var commandProcessor = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+        var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = commandProcessor,
+            Arguments = "/d /c ping -n 30 127.0.0.1 > nul",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        });
+        return process ?? throw new InvalidOperationException("Could not start the local process used by this test.");
     }
 }

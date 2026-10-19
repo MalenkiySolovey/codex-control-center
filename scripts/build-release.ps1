@@ -4,7 +4,7 @@
 # ==============================================================================
 [CmdletBinding()]
 param(
-    [string]$Version = "0.2.2",
+    [string]$Version = "0.3.0",
     [switch]$SkipTests = $false,
     [switch]$PublicRelease = $false,
     [string]$OutputRoot
@@ -122,6 +122,47 @@ $brokerPublishArgs = @(
 dotnet @brokerPublishArgs
 if ($LASTEXITCODE -ne 0) { throw "Broker publish failed with exit code $LASTEXITCODE" }
 
+Write-Host "Publishing read-only command-line client..." -ForegroundColor Yellow
+$CliPublishDir = Join-Path $StagingDir "cli-publish"
+$cliPublishArgs = @(
+    "publish",
+    "$RepoRoot\src\CodexSwitcher.Cli\CodexSwitcher.Cli.csproj",
+    "-c", "Release",
+    "-r", "win-x64",
+    "--self-contained", "true",
+    "-p:PublishSingleFile=false",
+    "-p:Version=$Version",
+    "-p:InformationalVersion=$Version",
+    "--no-restore",
+    "-o", $CliPublishDir
+)
+dotnet @cliPublishArgs
+if ($LASTEXITCODE -ne 0) { throw "CLI publish failed with exit code $LASTEXITCODE" }
+
+# The main app already bundles the matching self-contained .NET runtime and shared
+# project/package dependencies. Keep those (including its ReadyToRun assemblies)
+# and add only the CLI entrypoint and its launch metadata to avoid bundling a second runtime.
+$cliBundleFiles = @(
+    "codex-switchboard.exe",
+    "codex-switchboard.dll",
+    "codex-switchboard.deps.json",
+    "codex-switchboard.runtimeconfig.json"
+)
+foreach ($fileName in $cliBundleFiles) {
+    $sourcePath = Join-Path $CliPublishDir $fileName
+    if (-not (Test-Path -LiteralPath $sourcePath)) {
+        throw "Expected CLI payload file '$sourcePath' not found."
+    }
+    Copy-Item -LiteralPath $sourcePath -Destination $StagingDir -Force
+}
+
+$resolvedCliPublishDir = [System.IO.Path]::GetFullPath($CliPublishDir)
+$stagingPrefix = $resolvedStagingDir.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $resolvedCliPublishDir.StartsWith($stagingPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "CLI temporary output path escaped the release staging directory."
+}
+Remove-Item -LiteralPath $resolvedCliPublishDir -Recurse -Force
+
 # Verify primary executable name
 $expectedExe = Join-Path $StagingDir "CodexSwitchboard.exe"
 if (-not (Test-Path $expectedExe)) {
@@ -133,13 +174,23 @@ if (-not (Test-Path $expectedBrokerExe)) {
     throw "Expected binary '$expectedBrokerExe' not found in publish staging directory."
 }
 
+$expectedCliExe = Join-Path $StagingDir "codex-switchboard.exe"
+if (-not (Test-Path $expectedCliExe)) {
+    throw "Expected binary '$expectedCliExe' not found in publish staging directory."
+}
+
 # 5. Bundle legal & documentation files
 Write-Host "[5/8] Bundling documentation and licensing notices..." -ForegroundColor Yellow
-$docFiles = @("LICENSE", "README.md", "README_RU.md", "THIRD_PARTY_NOTICES.md", "SECURITY.md", "PRIVACY.md", "CHANGELOG.md")
+$docFiles = @("LICENSE", "README.md", "README_RU.md", "THIRD_PARTY_NOTICES.md", "SECURITY.md", "PRIVACY.md", "CHANGELOG.md", "schemas\codex-switchboard-cli-export-v1.schema.json", "schemas\codex-switchboard-cli-fleet-v1.schema.json", "completions\codex-switchboard.ps1", "completions\codex-switchboard.bash", "completions\codex-switchboard.zsh")
 foreach ($doc in $docFiles) {
     $src = Join-Path $RepoRoot $doc
     if (Test-Path $src) {
-        Copy-Item -Path $src -Destination $StagingDir -Force
+        $destination = Join-Path $StagingDir $doc
+        $destinationDirectory = Split-Path -Parent $destination
+        if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+            New-Item -Path $destinationDirectory -ItemType Directory -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $src -Destination $destination -Force
     } else {
         Write-Warning "Documentation file not found: $doc"
     }

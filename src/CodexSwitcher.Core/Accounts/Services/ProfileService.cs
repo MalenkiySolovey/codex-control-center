@@ -99,6 +99,66 @@ public sealed class ProfileService
     }
 
     /// <summary>
+    /// Persists a credential refresh performed by an isolated long-running CLI session.
+    /// The caller must hold the profile's <see cref="IProfileOperationCoordinator"/> lock for
+    /// the duration of this method. The compare-and-swap check prevents overwriting a credential
+    /// that changed while the child process was running.
+    /// </summary>
+    public bool PersistIsolatedLaunchRefreshUnderLock(
+        Guid profileId,
+        string expectedFingerprint,
+        byte[] refreshedAuthJson)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedFingerprint);
+        ArgumentNullException.ThrowIfNull(refreshedAuthJson);
+
+        using (var refreshedDocument = JsonDocument.Parse(refreshedAuthJson))
+        {
+            if (refreshedDocument.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException("The refreshed Codex credential is not a JSON object.");
+            }
+        }
+
+        lock (_sync)
+        {
+            if (Profiles.Count == 0)
+            {
+                Profiles = _store.LoadAll();
+            }
+
+            var profile = Profiles.FirstOrDefault(candidate => candidate.Id == profileId);
+            if (profile is null || profile.IsActive || !_vault.Exists(profileId))
+            {
+                return false;
+            }
+
+            var currentAuthJson = _vault.LoadBlob(profileId);
+            try
+            {
+                if (!string.Equals(
+                        Fingerprint.Compute(currentAuthJson),
+                        expectedFingerprint,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(currentAuthJson);
+            }
+
+            profile.BlobFingerprint = _vault.SaveBlob(profileId, refreshedAuthJson);
+            profile.LastRefreshedAt = _clock.UtcNow;
+            profile.HealthStatus = HealthStatus.Valid;
+            profile.LastError = null;
+            _store.SaveAll(Profiles);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Perfis salvos antes da feature de reordenação não têm <see cref="ProfileMetadata.SortOrder"/>
     /// definido (todos ficam em 0). Nesse caso, atribui uma ordem inicial replicando o critério
     /// antigo (ativa primeiro, depois trocada/criada mais recentemente), preservando a ordem que o

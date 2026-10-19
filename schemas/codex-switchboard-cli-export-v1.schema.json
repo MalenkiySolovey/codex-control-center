@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-switchboard:cli-export:v1",
+  "title": "Codex Switchboard CLI export v1",
+  "description": "Redacted, read-only local snapshot emitted by `codex-switchboard export`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "target",
+    "accounts",
+    "apiProviders",
+    "launchProfileCount"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "model"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["chatgpt", "external", "api-provider"]
+        },
+        "name": {
+          "type": "string"
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Exact Codex model slug, or null when no model is configured."
+        }
+      }
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "apiProviders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "selectedModel", "enabledModelCount"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["Active", "CredentialMissing", "Archived"]
+          },
+          "selectedModel": {
+            "type": ["string", "null"],
+            "description": "Exact selected model slug, or null when none is selected."
+          },
+          "enabledModelCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "launchProfileCount": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="CodexSwitcher.App.Views.QuickSwitchOverlayWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:conv="using:CodexSwitcher.App.Support"
+    Title="Codex Switchboard - Quick Switch">
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+    <Grid x:Name="Root" KeyDown="Root_KeyDown" IsTabStop="True">
+        <Grid.Resources>
+            <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+        </Grid.Resources>
+        <Border Margin="8" Padding="16"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="12">
+            <Grid RowDefinitions="Auto,*" RowSpacing="12">
+                <StackPanel Spacing="3">
+                    <TextBlock Text="{x:Bind Loc.QuickSwitchOverlayTitle}" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock Text="{x:Bind Loc.QuickSwitchOverlayDescription}"
+                               FontSize="12" Opacity="0.72" TextWrapping="Wrap" />
+                </StackPanel>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="{x:Bind Loc.TrayChatGptAccounts}" FontWeight="SemiBold" />
+                        <TextBlock Text="{x:Bind Loc.TrayNoAccounts}" Opacity="0.65"
+                                   Visibility="{Binding Accounts.ShowEmptyState, Converter={StaticResource BoolToVis}}" />
+                        <ItemsControl x:Name="AccountsList" ItemsSource="{Binding Accounts.AllItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Padding="10,7" Margin="0,0,0,4"
+                                            HorizontalContentAlignment="Stretch"
+                                            IsEnabled="{Binding CanSwitch}" Click="Account_Click">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Subtitle}" FontSize="11" Opacity="0.7"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <FontIcon Grid.Column="1" Glyph="&#xE73E;" VerticalAlignment="Center"
+                                                      Visibility="{Binding IsRoutingActive, Converter={StaticResource BoolToVis}}" />
+                                        </Grid>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Text="{x:Bind Loc.TrayApiProviders}" FontWeight="SemiBold" Margin="0,4,0,0" />
+                        <TextBlock Text="{x:Bind Loc.TrayNoApiProviders}" Opacity="0.65"
+                                   Visibility="{Binding ApiProviders.ShowEmptyState, Converter={StaticResource BoolToVis}}" />
+                        <ItemsControl ItemsSource="{Binding ApiProviders.Items}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Padding="10,7" Margin="0,0,0,4"
+                                            HorizontalContentAlignment="Stretch"
+                                            IsEnabled="{Binding CanSwitch}" Click="ApiProvider_Click">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding SelectedModel}" FontSize="11" Opacity="0.7"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                            <FontIcon Grid.Column="1" Glyph="&#xE73E;" VerticalAlignment="Center"
+                                                      Visibility="{Binding IsTargetActive, Converter={StaticResource BoolToVis}}" />
+                                        </Grid>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

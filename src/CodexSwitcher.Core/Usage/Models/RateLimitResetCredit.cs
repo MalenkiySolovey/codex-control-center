@@ -132,5 +132,5 @@ public sealed record RateLimitResetCredits(
     public int UnreportedCount =>
         Credits is null
             ? AvailableCount
-            : Math.Max(0, AvailableCount - Credits.Count);
+            : Math.Max(0, AvailableCount - ReportedAvailableCount);
 }

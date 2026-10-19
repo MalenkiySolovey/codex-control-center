@@ -12,8 +12,8 @@ namespace CodexSwitcher.Core.Providers.Contracts;
 public sealed record EffectiveModelDescriptor(
     string Slug,
     string DisplayName,
-    long ContextWindow,
-    long MaxContextWindow,
+    long? ContextWindow,
+    long? MaxContextWindow,
     CodexReasoningEffort ReasoningEffort,
     CodexVerbosity Verbosity,
     bool AllowFreeformApplyPatch,

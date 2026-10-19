@@ -87,36 +87,152 @@ public sealed class Strings
     public string SearchPlaceholder => S("Buscar…", "Search…");
     public string RefreshAll => S("Renovar todas", "Refresh all");
     public string RefreshAllTooltip => S("Renovar todas agora", "Refresh all now");
+    public string RefreshButton => S("Atualizar", "Refresh");
+    public string RefreshUsageTooltip => S("Atualizar uso de todas as contas", "Refresh usage for all accounts");
     public string SignInOAuth => S("Entrar com OAuth", "Sign in with OAuth");
+    public string SignInOAuthTooltip => S(
+        "Adicionar uma conta ChatGPT ao Switchboard usando OAuth no navegador.",
+        "Add a ChatGPT account to Switchboard using browser OAuth.");
     public string OpenCodexSignIn => S("Abrir login do Codex", "Open Codex sign-in");
     public string OpenCodexSignInTooltip => S(
-        "Prepara o Codex desconectado sem remover contas salvas no Switchboard.",
-        "Sign out the live Codex session without removing saved Switchboard accounts.");
+        "Abre o Codex no fluxo de login manual, sem adicionar uma conta ao Switchboard via OAuth. A sessão atual do Codex Desktop é encerrada; as contas salvas no Switchboard são preservadas.",
+        "Open Codex in its manual sign-in workflow without adding a Switchboard account through OAuth. The current Codex Desktop session is signed out; saved Switchboard accounts are preserved.");
     public string OpenCodexSignInConfirmTitle => S("Abrir login do Codex?", "Open Codex sign-in?");
     public string OpenCodexSignInConfirmMessage => S(
         "A sessão ativa do Codex será encerrada e a janela será reaberta. As contas salvas, credenciais do cofre e dados 2FA do Switchboard serão preservados. Você fará login manualmente no Codex.",
         "The live Codex session will be signed out and Desktop reopened. Saved Switchboard accounts, vault credentials, and 2FA data will be preserved. You will sign in manually in Codex.");
     public string OpenCodexSignInConfirmButton => S("Preparar login", "Prepare sign-in");
+    public string TrayTooltip => "Codex Switchboard";
+    public string TrayTooltipModeLabel => S("Informações no ícone da bandeja", "Tray icon tooltip");
+    public string TrayTooltipModeDescription => S(
+        "Escolha o que aparece ao passar o cursor. A cota usa apenas dados em cache e não inicia uma atualização.",
+        "Choose what appears when hovering the tray icon. Quota uses cached data only and does not start a refresh.");
+    public string TrayTooltipAppNameOnly => S("Somente o nome do aplicativo", "App name only");
+    public string TrayTooltipWithTarget => S("Nome do aplicativo e destino ativo", "App name and active target");
+    public string TrayTooltipWithTargetAndQuota => S("Destino ativo e cota em cache", "Active target and cached quota");
+    public string TrayOpenSwitchboard => S("Abrir Switchboard", "Open Switchboard");
+    public string TrayRefreshAll => S("Atualizar todas as cotas", "Refresh all usage");
+    public string TrayActiveTarget => S("Destino ativo", "Active target");
+    public string TrayCachedQuota => S("Cota em cache", "Cached quota");
+    public string TrayQuotaNotApplicable => S("A cota do Codex não se aplica a provedores API", "Codex quota does not apply to API providers");
+    public string TrayNoQuotaData => S("Nenhuma cota em cache", "No cached quota data");
+    public string TrayStaleQuota => S("em cache desatualizado", "stale cache");
+    public string TrayActivityLifetime(string value) => S($"Total {value}", $"Lifetime {value}");
+    public string TrayActivityStreak(string value) => S($"Sequência {value}", $"Streak {value}");
+    public string TrayActivityDays(int count) => S($"{count} dias reportados", $"{count} days reported");
+    public string TrayActivityCached => S("atividade em cache", "cached activity");
+    public string TrayActivityPartial => S("atividade parcial", "partial activity");
+    public string TrayActivityFreshnessUnknown => S("atualização desconhecida", "freshness unknown");
+    public string TrayOpenCodex => S("Abrir Codex", "Open Codex");
+    public string TrayChatGptAccounts => S("Contas ChatGPT", "ChatGPT accounts");
+    public string TrayApiProviders => S("Provedores API", "API providers");
+    public string TrayNoAccounts => S("Nenhuma conta salva", "No saved accounts");
+    public string TrayNoApiProviders => S("Nenhum provedor API salvo", "No saved API providers");
+    public string TrayManagedCodexSessions => S("Sessões gerenciadas do Codex", "Managed Codex sessions");
+    public string TrayNoLaunchProfiles => S("Nenhum perfil de execução", "No launch profiles");
+    public string TrayManageLaunchProfiles => S("Gerenciar perfis de execução…", "Manage launch profiles…");
+    public string TrayLaunchProfileStart => S("Iniciar", "Launch");
+    public string TrayLaunchProfileStop => S("Parar", "Stop");
+    public string LaunchStopConfirmTitle => S("Parar sessão gerenciada?", "Stop managed Codex session?");
+    public string LaunchStopConfirmMessage(string profileName) => S(
+        $"A sessão '{profileName}' será encerrada. Salve seu trabalho primeiro. Se ela não fechar normalmente, o Switchboard terminará o processo e alterações não salvas poderão ser perdidas.",
+        $"The managed session '{profileName}' will be stopped. Save your work first. If it does not close normally, Switchboard will terminate its process tree and unsaved work may be lost.");
+    public string LaunchStopConfirmButton => S("Parar sessão", "Stop session");
+    public string LaunchProfileStartFailedTitle => S("Falha ao iniciar o Codex", "Codex launch failed");
+    public string LaunchProfileStopFailedTitle => S("Não foi possível parar o Codex", "Could not stop Codex");
+    public string LaunchProfileSaveFailedTitle => S("Não foi possível salvar o perfil", "Could not save launch profile");
+    public string LaunchProfileDeleteFailedTitle => S("Não foi possível remover o perfil", "Could not remove launch profile");
+    public string LaunchProfileDesktopWarning => S(
+        "Os perfis Desktop são experimentais. Duas janelas vazias já foram observadas, mas o login por conta, o isolamento da sessão e a recuperação ainda não foram verificados. Atualizações do Codex podem alterar esse comportamento.",
+        "Desktop profiles are experimental. Two empty windows have been observed, but per-account sign-in, session isolation, and recovery are not yet verified. Codex updates may change this behavior.");
+    public string LaunchProfileShareChatsLabel => S("Compartilhar conversas com o Codex principal", "Share chats with main Codex");
+    public string LaunchProfileShareChatsDescription => S(
+        "Compartilha conversas ativas e arquivadas e o estado SQLite local do Codex com a pasta principal. Isso também pode compartilhar logs e memórias locais. Credenciais, configuração do provedor/modelo e dados do aplicativo Desktop continuam isolados. Perfis existentes com histórico próprio não são mesclados automaticamente.",
+        "Shares active and archived conversations and Codex's local SQLite state with the main home. This may also share local logs and memories. Credentials, provider/model configuration, and Desktop app data remain isolated. Existing profile-local history is not merged automatically.");
+    public string LaunchProfileShareChatsRequiresWindowsLinks => S(
+        "O Windows não permitiu criar os links de histórico necessários. Ative o Modo de Desenvolvedor ou conceda o direito de criar links simbólicos. Nenhum histórico existente foi substituído.",
+        "Windows did not allow the required history links to be created. Enable Developer Mode or grant symbolic-link creation permission. No existing history was replaced.");
+    public string LaunchProfileShareChatsExistingData => S(
+        "Este perfil de execução já contém histórico local. O Switchboard não o mescla nem o oculta automaticamente. Crie um novo perfil compartilhado ou preserve o histórico antes de habilitar o compartilhamento.",
+        "This launch profile already contains local history. Switchboard will not merge or hide it automatically. Create a new shared profile or preserve the history before enabling sharing.");
+    public string LaunchProfilesHeader => S("Perfis de inicialização", "Launch Profiles");
+    public string LaunchProfilesSubtitle => S(
+        "Inicie sessões isoladas do Codex CLI ou Desktop com uma conta ou modelo de API fixo.",
+        "Run isolated Codex CLI or Desktop sessions with a fixed account or API model.");
+    public string NewLaunchProfile => S("Novo perfil", "New launch profile");
+    public string NoMatchingLaunchProfiles => S("Nenhum perfil corresponde à pesquisa.", "No launch profiles match your search.");
+    public string NoMatchingApiProviders => S("Nenhum provedor corresponde à pesquisa.", "No API providers match your search.");
+    public string LaunchProfileShareChatsStoragePathUnknown => S(
+        "Não foi possível resolver com segurança o local SQLite principal do Codex. Verifique CODEX_SQLITE_HOME e sqlite_home na configuração do Codex.",
+        "Switchboard could not safely resolve the main Codex SQLite location. Check CODEX_SQLITE_HOME and sqlite_home in Codex configuration.");
+    public string LaunchQuitConfirmTitle => S("Sair e parar sessões gerenciadas?", "Quit and stop managed sessions?");
+    public string LaunchQuitConfirmMessage(int count) => S(
+        $"Sair do Switchboard também encerrará {count} sessão(ões) gerenciada(s) do Codex. Salve seu trabalho primeiro; se uma sessão não fechar normalmente, suas alterações não salvas poderão ser perdidas.",
+        $"Quitting Switchboard will also stop {count} managed Codex session(s). Save your work first; if a session does not close normally, unsaved work may be lost.");
+    public string LaunchQuitConfirmButton => S("Sair e parar", "Quit and stop");
+    public string TrayOpenSettings => S("Configurações", "Settings");
+    public string TrayQuit => S("Sair do Switchboard", "Quit Switchboard");
+    public string QuickSwitchTargetUnavailableTitle => S("Destino do atalho indisponível", "Shortcut target unavailable");
+    public string QuickSwitchAccountMissingMessage => S(
+        "A conta atribuída não existe mais. Atualize o atalho em Configurações.",
+        "The assigned account no longer exists. Update its shortcut in Settings.");
+    public string QuickSwitchAccountUnavailableTitle => S("Não é possível trocar para esta conta", "Account cannot be switched");
+    public string QuickSwitchAccountUnavailableMessage => S(
+        "A conta está indisponível ou em uso por uma sessão gerenciada do Codex.",
+        "The account is unavailable or is in use by a managed Codex session.");
+    public string QuickSwitchProviderUnavailableTitle => S("Não é possível trocar para este provedor API", "API provider cannot be switched");
+    public string QuickSwitchProviderMissingMessage => S(
+        "O provedor API atribuído não existe mais. Atualize o atalho em Configurações.",
+        "The assigned API provider no longer exists. Update its shortcut in Settings.");
+    public string QuickSwitchProviderMissingKeyMessage => S(
+        "O provedor atribuído precisa de uma chave API antes de ser ativado.",
+        "The assigned provider needs an API key before it can be activated.");
+    public string QuickSwitchAlreadyActiveTitle => S("Destino já ativo", "Target already active");
+    public string QuickSwitchAccountAlreadyActiveMessage(string name) => S(
+        $"A conta atribuída '{name}' já está ativa no Codex.",
+        $"The assigned account '{name}' is already active in Codex.");
+    public string QuickSwitchProviderAlreadyActiveMessage(string name) => S(
+        $"O provedor API atribuído '{name}' já está ativo.",
+        $"The assigned API provider '{name}' is already active.");
+    public string QuickSwitchOverlayHeader(string shortcut) => S(
+        $"Painel de troca rápida · {shortcut}",
+        $"Quick switch overlay · {shortcut}");
+    public string QuickSwitchOverlayTitle => S("Troca rápida", "Quick switch");
+    public string QuickSwitchOverlayDescription => S(
+        "Sobrepõe o Codex sem modificar o aplicativo. Escolha uma conta ChatGPT ou um provedor API salvo.",
+        "Floats over Codex without modifying it. Choose a saved ChatGPT account or API provider.");
+    public string QuickSwitchOverlaySettingsHeader(string shortcut) => S(
+        $"Painel de troca rápida do Codex: {shortcut}",
+        $"Codex quick-switch overlay: {shortcut}");
+    public string QuickSwitchOverlayEnableLabel => S("Ativar atalho do painel sobre o Codex", "Enable the Codex overlay shortcut");
+    public string QuickSwitchOverlayDisabled(string shortcut) => S(
+        $"Atalho {shortcut} desativado.",
+        $"Shortcut {shortcut} is disabled.");
+    public string QuickSwitchOverlayActive(string shortcut) => S(
+        $"Ativo enquanto o Switchboard estiver aberto. {shortcut} abre a troca rápida sobre uma janela do Codex.",
+        $"Active while Switchboard is running. {shortcut} opens quick switch over a Codex window.");
+    public string QuickSwitchOverlayUnavailable(string shortcut) => S(
+        $"{shortcut} não está registrado no Windows. Escolha outro atalho se estiver em uso.",
+        $"{shortcut} is not registered in Windows. Choose another shortcut if it is already in use.");
+    public string QuickSwitchOverlayBindingSaved(string shortcut) => S(
+        $"O atalho do painel agora é {shortcut}.",
+        $"The overlay shortcut is now {shortcut}.");
+    public string QuickSwitchOverlayEnabledMessage(string shortcut) => S(
+        $"O painel de troca rápida está ativo em {shortcut}.",
+        $"The quick-switch overlay is active at {shortcut}.");
+    public string QuickSwitchOverlayDisabledMessage => S(
+        "O atalho do painel de troca rápida foi desativado.",
+        "The quick-switch overlay shortcut has been disabled.");
+    public string QuickSwitchOverlayRequiresCodexTitle => S("Abra o Codex primeiro", "Open Codex first");
+    public string QuickSwitchOverlayRequiresCodexMessage => S(
+        "Este painel abre sobre uma janela do Codex Desktop em primeiro plano.",
+        "The quick-switch overlay opens over a foreground Codex Desktop window.");
     public string DetectAccount => S("Detectar conta", "Detect account");
     public string DetectAccountTooltip => S(
         "Procurar a conta logada no Codex agora e importar se for nova",
         "Look for the account logged into Codex now and import it if it is new");
     public string TwoFactorButton => S("2FA", "2FA");
     public string TwoFactorTooltip => S("Gerador de código 2FA", "2FA code generator");
-    public string BrowserButton => S("Navegador", "Browser");
-    public string BrowserTooltip => S(
-        "Abrir navegador privado temporário", "Open temporary private browser");
-
-    // Navegador privado (abas isoladas)
-    public string BrowserWindowTitle => S("Navegador privado", "Private browser");
-    public string BrowserNewTabHeader => S("Nova aba", "New tab");
-    public string BrowserBackTooltip => S("Voltar", "Back");
-    public string BrowserForwardTooltip => S("Avançar", "Forward");
-    public string BrowserReloadTooltip => S("Recarregar", "Reload");
-    public string BrowserAddressPlaceholder => S("Digite uma URL ou pesquise…", "Type a URL or search…");
-    public string BrowserWebView2MissingHint => S(
-        "Necessário para o navegador funcionar (o Windows 10 não vem com ele por padrão).",
-        "Required for the browser to work (Windows 10 does not include it by default).");
 
     // Gerador 2FA (TOTP)
     public string TotpTitle => S("Gerador de código 2FA", "2FA code generator");
@@ -527,6 +643,17 @@ public sealed class Strings
     public string DiscoveringModels => S("Descobrindo modelos…", "Discovering models…");
     public string RefreshModels => S("Atualizar modelos", "Refresh models");
     public string RefreshingModels => S("Atualizando modelos…", "Refreshing models…");
+    public string ModelsRefreshed => S("Modelos atualizados", "Models refreshed");
+    public string ModelRefreshInProgressSaveWarning => S(
+        "Aguarde a atualização de modelos terminar antes de salvar a configuração.",
+        "Wait for the model refresh to finish before saving this configuration.");
+    public string ModelsRefreshedMessage(int count) => S(
+        $"{count} modelos reportados por esta API via GET /models. Nenhuma requisição de inferência foi enviada.",
+        $"{count} models reported by this API via GET /models. No inference request was sent.");
+    public string ModelRefreshIncompleteTitle => S("Atualização de modelos incompleta", "Model refresh incomplete");
+    public string ModelRefreshIncompleteMessage => S("A API não retornou um inventário de modelos utilizável.", "The API did not return a usable model inventory.");
+    public string ModelRefreshFailedTitle => S("Falha ao atualizar modelos", "Model refresh failed");
+    public string ModelRefreshFailedMessage => S("Não foi possível atualizar os modelos. Verifique as configurações do provedor e tente novamente.", "Could not refresh models. Check the provider settings and try again.");
     public string CheckCodexCompatibility => S("Verificar compatibilidade com Codex", "Check Codex compatibility");
     public string CheckingCompatibility => S("Verificando compatibilidade…", "Checking compatibility…");
     public string ReadOnlyDiscoveryNote => S("Modelos reportados por esta API via GET /models. Nenhuma requisição de inferência / não consome tokens de inferência.", "Models reported by this API via GET /models. No inference request / does not consume model inference tokens.");

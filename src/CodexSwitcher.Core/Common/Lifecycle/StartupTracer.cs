@@ -67,6 +67,7 @@ public sealed class StartupTracer
         {
             _interactiveReached.TrySetResult();
         }
+
     }
 
     public Task WaitForInteractiveAsync(CancellationToken cancellationToken = default) =>

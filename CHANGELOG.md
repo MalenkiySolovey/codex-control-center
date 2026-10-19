@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-10-19
+
+### Accounts and routing
+- Preserved distinct Switchboard OAuth account-add and Codex sign-in actions while extending account, provider, and launch-profile routing controls.
+- Hardened provider model-catalog identity, exact target verification, and persisted continuation handling.
+
+### Launch profiles and multi-instance foundations
+- Added saved launch profiles for isolated CLI and Desktop sessions, with recoverable session metadata and owned-process lifecycle handling.
+- Desktop multi-instance isolation remains experimental; account/API identity behavior is not claimed as fully qualified.
+
+### Tray and keyboard controls
+- Added system-tray lifecycle and quick controls, configurable startup-to-tray behavior, global reveal/direct-switch hotkeys, and a Codex foreground quick-switch overlay.
+- Physical qualification gaps for the tray popup, overlay rendering, and some hotkey lifecycle paths remain documented as non-blocking.
+
+### Quota and activity correctness
+- Tightened account identity checks, primary-window selection, rate-limit status, reset-credit parsing, invalid-value handling, and stale-cache presentation.
+
+### CLI and integrations
+- Added a read-only CLI with redacted export/fleet schemas and shell completions; the optional VS Code companion remains a read-only preview.
+
+### Reliability and security
+- Improved launch recovery ordering, process ownership checks, profile/catalog persistence, startup responsiveness, and bounded temporary-artifact cleanup.
+
+---
+
 ## [0.2.2] - 2026-09-25
 
 ### Added

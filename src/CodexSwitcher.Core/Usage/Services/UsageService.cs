@@ -253,6 +253,27 @@ public sealed class UsageService : IUsageService, IDisposable
                 fetchResult = await _provider.FetchRateLimitsAsync(profile.Id, authBytes, fetchOpts, _serviceCts.Token).ConfigureAwait(false);
             }
 
+            if (fetchResult.Snapshot is { AccountIdentityMatched: false })
+            {
+                // Never persist or keep showing quota/activity data returned for a different account.
+                // Clear the old cache too: after an identity mismatch, its association is no longer safe to assume.
+                var identityError = ErrorInfo.Create(
+                    ErrorCategory.Unknown,
+                    "The quota response belongs to a different account than the selected profile. Cached usage was cleared until identity can be verified.",
+                    _clock.UtcNow);
+                _cache.Set(profile.Id, null, UsageStatus.Error, identityError);
+                try
+                {
+                    await _cache.SaveAsync(_serviceCts.Token).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Keep the in-memory fail-closed state even if the cache file cannot be updated.
+                }
+
+                return UsageFetchResult.Fail(UsageStatus.Error, identityError);
+            }
+
             // Sync live plan changes into ProfileMetadata if returned from account/read
             var livePlan = fetchResult.Snapshot?.PlanType;
             if (!string.IsNullOrWhiteSpace(livePlan) && !string.Equals(profile.PlanType, livePlan, StringComparison.OrdinalIgnoreCase))

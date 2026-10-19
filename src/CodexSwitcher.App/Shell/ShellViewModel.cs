@@ -50,6 +50,7 @@ using CodexSwitcher.Infra.Security.Totp;
 using CodexSwitcher.Infra.Settings;
 using CodexSwitcher.App.Features.Accounts;
 using CodexSwitcher.App.Features.Providers;
+using CodexSwitcher.App.Features.Launch;
 using CodexSwitcher.App.Shell.Routing;
 using CodexSwitcher.App.Shell.State;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -68,15 +69,22 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
 {
     public AccountsViewModel Accounts { get; }
     public ApiProvidersViewModel ApiProviders { get; }
+    public LaunchProfilesViewModel LaunchProfiles { get; }
     public ActiveTargetPresentationCoordinator Routing { get; }
     public IAppNotificationService Notifications { get; }
     public IAppBusyService Busy { get; }
 
     [ObservableProperty] public partial int SelectedTab { get; set; }
     [ObservableProperty] public partial bool IsApiProvidersTabLoaded { get; set; }
+    public bool ShowAccountsHeader => SelectedTab == 0;
+    public bool ShowApiProvidersHeader => SelectedTab == 1;
+    public bool ShowLaunchProfilesHeader => SelectedTab == 2;
 
     partial void OnSelectedTabChanged(int value)
     {
+        OnPropertyChanged(nameof(ShowAccountsHeader));
+        OnPropertyChanged(nameof(ShowApiProvidersHeader));
+        OnPropertyChanged(nameof(ShowLaunchProfilesHeader));
         if (value == 1)
         {
             IsApiProvidersTabLoaded = true;
@@ -86,24 +94,30 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
     public ShellViewModel(
         AccountsViewModel accounts,
         ApiProvidersViewModel apiProviders,
+        LaunchProfilesViewModel launchProfiles,
         ActiveTargetPresentationCoordinator routing,
         IAppNotificationService notifications,
         IAppBusyService busy)
     {
         Accounts = accounts ?? throw new ArgumentNullException(nameof(accounts));
         ApiProviders = apiProviders ?? throw new ArgumentNullException(nameof(apiProviders));
+        LaunchProfiles = launchProfiles ?? throw new ArgumentNullException(nameof(launchProfiles));
         Routing = routing ?? throw new ArgumentNullException(nameof(routing));
         Notifications = notifications ?? throw new ArgumentNullException(nameof(notifications));
         Busy = busy ?? throw new ArgumentNullException(nameof(busy));
 
         Accounts.TargetStateChanged += (_, _) => RefreshRoutingSummary();
         ApiProviders.TargetStateChanged += (_, _) => RefreshRoutingSummary();
+        Accounts.TargetStateChanged += (_, _) => LaunchProfiles.RefreshTargets();
+        ApiProviders.TargetStateChanged += (_, _) => LaunchProfiles.RefreshTargets();
+        Accounts.OrderChanged += (_, _) => LaunchProfiles.RefreshTargets();
     }
 
     [RelayCommand]
     private async Task LoadAsync()
     {
         await Accounts.LoadCommand.ExecuteAsync(null);
+        LaunchProfiles.Load();
         RefreshRoutingSummary();
     }
 
@@ -120,6 +134,9 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void SelectApiProvidersTab() => SelectedTab = 1;
 
+    [RelayCommand]
+    private void SelectLaunchProfilesTab() => SelectedTab = 2;
+
     public void SetForegroundActive(bool active) => Accounts.SetForegroundActive(active);
 
     public void HideAllRevealedTotp() => Accounts.HideAllRevealedTotp();
@@ -130,5 +147,6 @@ public sealed partial class ShellViewModel : ObservableObject, IDisposable
     {
         Accounts.Dispose();
         ApiProviders.Dispose();
+        LaunchProfiles.Dispose();
     }
 }

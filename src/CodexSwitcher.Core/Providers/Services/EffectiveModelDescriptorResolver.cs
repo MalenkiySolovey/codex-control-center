@@ -14,8 +14,6 @@ namespace CodexSwitcher.Core.Providers.Services;
 /// </summary>
 public sealed class EffectiveModelDescriptorResolver : IEffectiveModelDescriptorResolver
 {
-    public const long FallbackContextCeiling = 272_000;
-
     private readonly ICodexModelMetadataResolver _metadataResolver;
 
     public EffectiveModelDescriptorResolver(ICodexModelMetadataResolver? metadataResolver = null)
@@ -48,18 +46,19 @@ public sealed class EffectiveModelDescriptorResolver : IEffectiveModelDescriptor
             ? modelItem.DisplayName
             : ModelDisplayName.FromSlug(slug);
 
-        // 1. Resolve Context Window & Limits
+        // 1. Resolve context only from explicit provider/user metadata or
+        // documentation-backed facts. Unknown context remains unknown; the
+        // model slug is not a safe source for a token-window estimate.
+        var limitFact = _metadataResolver.ResolveLimitFact(slug);
+        var documentedContext = limitFact.IsKnown ? limitFact.DocumentedMaxContext : null;
         var requestedContext = modelItem.UserOverrides?.ContextWindowTokens
             ?? (isSelectedModel ? profile.ModelOverrides?.ContextWindowTokens : null)
             ?? modelItem.ContextWindow
-            ?? FallbackContextCeiling;
-
-        var limitFact = _metadataResolver.ResolveLimitFact(slug);
-        var maxContext = limitFact.IsKnown && limitFact.DocumentedMaxContext.HasValue
-            ? limitFact.DocumentedMaxContext.Value
-            : Math.Max(requestedContext, FallbackContextCeiling);
-
-        var targetContext = Math.Min(requestedContext, maxContext);
+            ?? documentedContext;
+        var maxContext = documentedContext ?? requestedContext;
+        var targetContext = requestedContext.HasValue && documentedContext.HasValue
+            ? Math.Min(requestedContext.Value, documentedContext.Value)
+            : requestedContext;
 
         // 2. Resolve Reasoning Effort & Verbosity
         var reasoningEffort = modelItem.UserOverrides?.ReasoningEffort
@@ -106,13 +105,11 @@ public sealed class EffectiveModelDescriptorResolver : IEffectiveModelDescriptor
 
         if (isLegacyRuntime)
         {
-            return new Dictionary<string, object?>
+            var legacyEntry = new Dictionary<string, object?>
             {
                 ["slug"] = descriptor.Slug,
                 ["display_name"] = descriptor.DisplayName,
                 ["description"] = "Switchboard-managed model configuration",
-                ["context_window"] = descriptor.ContextWindow,
-                ["max_context_window"] = descriptor.MaxContextWindow,
                 ["supported_reasoning_levels"] = new[] { "none", "low", "medium", "high", "xhigh" },
                 ["default_reasoning_level"] = "none",
                 ["shell_type"] = "generic",
@@ -123,6 +120,8 @@ public sealed class EffectiveModelDescriptorResolver : IEffectiveModelDescriptor
                 ["supports_tools"] = true,
                 ["supports_images"] = descriptor.SupportsImages
             };
+            AddContextFields(legacyEntry, descriptor);
+            return legacyEntry;
         }
 
         var defaultReasoning = descriptor.ReasoningEffort switch
@@ -163,8 +162,6 @@ public sealed class EffectiveModelDescriptorResolver : IEffectiveModelDescriptor
             ["visibility"] = "list",
             ["supported_in_api"] = true,
             ["priority"] = descriptor.Priority,
-            ["context_window"] = descriptor.ContextWindow,
-            ["max_context_window"] = descriptor.MaxContextWindow,
             ["support_verbosity"] = supportVerbosity,
             ["default_verbosity"] = defaultVerbosity,
             ["supports_reasoning_summaries"] = true,
@@ -180,11 +177,28 @@ public sealed class EffectiveModelDescriptorResolver : IEffectiveModelDescriptor
             ["base_instructions"] = "You are a helpful AI assistant."
         };
 
+        AddContextFields(modernEntry, descriptor);
+
         if (descriptor.AllowFreeformApplyPatch)
         {
             modernEntry["apply_patch_tool_type"] = "freeform";
         }
 
         return modernEntry;
+    }
+
+    private static void AddContextFields(
+        Dictionary<string, object?> entry,
+        EffectiveModelDescriptor descriptor)
+    {
+        if (descriptor.ContextWindow.HasValue)
+        {
+            entry["context_window"] = descriptor.ContextWindow.Value;
+        }
+
+        if (descriptor.MaxContextWindow.HasValue)
+        {
+            entry["max_context_window"] = descriptor.MaxContextWindow.Value;
+        }
     }
 }

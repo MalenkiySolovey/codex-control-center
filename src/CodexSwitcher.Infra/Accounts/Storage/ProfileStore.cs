@@ -91,9 +91,31 @@ public sealed class ProfileStore : CodexSwitcher.Core.Accounts.Contracts.IProfil
     }
 
     /// <summary>
-    /// Carrega todos os perfis.
-    /// Arquivo ausente -> lista vazia legítima (primeira execução).
-    /// Arquivo corrompido -> tenta restauração por backup rotativo; falha seguro com exceção se irrecuperável.
+    /// Reads the current profile file without attempting backup recovery or writing any data.
+    /// Intended for read-only inspection surfaces such as the companion CLI.
+    /// </summary>
+    public IReadOnlyList<ProfileMetadata> ReadAllReadOnly()
+    {
+        lock (_sync)
+        {
+            if (!_fs.FileExists(_profilesPath))
+            {
+                return [];
+            }
+
+            var json = _fs.ReadAllText(_profilesPath);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return [];
+            }
+
+            return JsonSerializer.Deserialize<List<ProfileMetadata>>(json, JsonOptions)
+                ?? throw new InvalidDataException("The profile store did not contain a valid profile list.");
+        }
+    }
+
+    /// <summary>
+    /// Loads all profiles, attempting backup recovery if the primary file is corrupt.
     /// </summary>
     public List<ProfileMetadata> LoadAll()
     {

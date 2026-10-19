@@ -103,7 +103,11 @@ public sealed class UsageCache : IUsageCache, IDisposable
         AccountActivitySnapshot? activity = null,
         AccountActivityAvailability activityAvailability = AccountActivityAvailability.Unknown)
     {
-        var observedAt = snapshot?.ObservedAt ?? activity?.ObservedAt ?? DateTimeOffset.UtcNow;
+        // This timestamp is presented beside quota windows, so it must describe the quota
+        // snapshot specifically. Activity has its own ObservedAt on AccountActivitySnapshot.
+        DateTimeOffset? observedAt = snapshot is not null && snapshot.ObservedAt != default
+            ? snapshot.ObservedAt
+            : null;
         var entry = new UsageCacheEntry(
             ProfileId: profileId,
             ObservedAt: observedAt,

@@ -19,7 +19,7 @@ namespace CodexSwitcher.Infra.Codex.Runtime;
 
 /// <summary>
 /// Generates version-compatible, runtime-adaptive Codex model catalogs for external models
-/// requiring context windows larger than the 272k fallback limit (e.g. Grok 500k, 1M).
+/// requiring explicit context windows or capability overrides. Unknown context facts are omitted.
 /// Emits a merged effective catalog (bundled runtime models + Switchboard custom models)
 /// so unrelated runtime models are never hidden.
 /// Keys catalog cache by runtime path + version + SHA256, invalidating upon Codex updates.
@@ -39,7 +39,7 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
 
     private string? _cachedRuntimeKey;
     private List<Dictionary<string, object?>>? _cachedBundledModels;
-    private readonly Dictionary<string, (long Context, string Path, string ContentHash)> _catalogCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (long? Context, string Path, string ContentHash)> _catalogCache = new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -108,15 +108,14 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
 
         lock (_sync)
         {
-            var requestedContext = effectiveContext ?? FallbackContextCeiling;
-
-            // Resolve model limit fact (Blocker B)
+            // Preserve unknown context as unknown. Only cap an explicit
+            // requested value when there is a documented model limit.
             var fact = _metadataResolver.ResolveLimitFact(modelSlug);
-            var maxContext = fact.IsKnown && fact.DocumentedMaxContext.HasValue
-                ? fact.DocumentedMaxContext.Value
-                : Math.Max(requestedContext, FallbackContextCeiling);
-
-            var targetContext = Math.Min(requestedContext, maxContext);
+            var documentedContext = fact.IsKnown ? fact.DocumentedMaxContext : null;
+            var maxContext = documentedContext ?? effectiveContext;
+            var targetContext = effectiveContext.HasValue && documentedContext.HasValue
+                ? Math.Min(effectiveContext.Value, documentedContext.Value)
+                : effectiveContext ?? documentedContext;
 
             // Detect runtime identity, version, and SHA256 (Blocker A / Invalidation Requirement 6)
             var runtimeInfo = _runtimeResolver?.ResolveCurrentRuntime();
@@ -287,7 +286,7 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
                     throw new InvalidOperationException($"Catalog content collision or corruption detected at '{catalogPath}'. Existing content hash does not match computed catalog hash.");
                 }
 
-                _catalogCache[cacheKey] = (effectiveContext ?? FallbackContextCeiling, catalogPath, contentFingerprint);
+                _catalogCache[cacheKey] = (effectiveContext, catalogPath, contentFingerprint);
                 return catalogPath;
             }
 
@@ -308,7 +307,7 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
                 throw;
             }
 
-            _catalogCache[cacheKey] = (effectiveContext ?? FallbackContextCeiling, catalogPath, contentFingerprint);
+            _catalogCache[cacheKey] = (effectiveContext, catalogPath, contentFingerprint);
             return catalogPath;
         }
     }
@@ -337,8 +336,8 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
     private Dictionary<string, object?> CreateLegacyModelEntry(
         string slug,
         string? displayName,
-        long targetContext,
-        long maxContext)
+        long? targetContext,
+        long? maxContext)
     {
         var desc = new EffectiveModelDescriptor(
             Slug: slug,
@@ -359,8 +358,8 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
     private Dictionary<string, object?> CreateModernModelEntry(
         string slug,
         string? displayName,
-        long targetContext,
-        long maxContext,
+        long? targetContext,
+        long? maxContext,
         CodexModelOverrides? modelOverrides,
         EffectiveToolPolicy? toolPolicy)
     {

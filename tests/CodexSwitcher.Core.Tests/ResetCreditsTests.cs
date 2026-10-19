@@ -143,7 +143,7 @@ public sealed class ResetCreditsTests : IDisposable
     }
 
     [Fact]
-    public void Test06_Parser_AvailableCountLessThanCreditsCount()
+    public void Test06_Parser_AvailableCountLessThanCreditsCount_UsesOnlyAvailableRows()
     {
         var json = """
         {
@@ -162,11 +162,11 @@ public sealed class ResetCreditsTests : IDisposable
         Assert.NotNull(parsed);
         Assert.Equal(1, parsed.AvailableCount);
         Assert.Equal(2, parsed.Credits!.Count);
-        Assert.Equal(0, parsed.UnreportedCount);
+        Assert.Equal(1, parsed.UnreportedCount);
     }
 
     [Fact]
-    public void Test07_Parser_AvailableCountGreaterThanCreditsCount()
+    public void Test07_Parser_AvailableCountGreaterThanCreditsCount_UsesOnlyAvailableRows()
     {
         var json = """
         {
@@ -184,7 +184,7 @@ public sealed class ResetCreditsTests : IDisposable
         Assert.NotNull(parsed);
         Assert.Equal(3, parsed.AvailableCount);
         Assert.Single(parsed.Credits!);
-        Assert.Equal(2, parsed.UnreportedCount);
+        Assert.Equal(3, parsed.UnreportedCount);
     }
 
     [Fact]
@@ -214,7 +214,7 @@ public sealed class ResetCreditsTests : IDisposable
     }
 
     [Fact]
-    public void Test09_Parser_ResetType_TolerantParsing()
+    public void Test09_Parser_UnknownResetTypesRemainUnknown()
     {
         var json = """
         {
@@ -231,8 +231,8 @@ public sealed class ResetCreditsTests : IDisposable
         var parsed = CodexUsageResponseParser.ParseResetCreditsDetail(doc.RootElement);
 
         Assert.NotNull(parsed);
-        Assert.Equal("customType", parsed.Credits![0].ResetType);
-        Assert.Equal("codexRateLimits", parsed.Credits[1].ResetType);
+        Assert.Equal("unknown", parsed.Credits![0].ResetType);
+        Assert.Equal("unknown", parsed.Credits[1].ResetType);
     }
 
     [Fact]

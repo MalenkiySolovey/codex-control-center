@@ -38,9 +38,10 @@ namespace CodexSwitcher.Core.Usage.Models;
 /// A normalized, secret-free cached entry for a profile's rate limits and status.
 /// Never contains access tokens, refresh tokens, auth.json, or sensitive RPC payloads.
 /// </summary>
+/// <param name="ObservedAt">Observation time for the quota snapshot; null when no quota snapshot was observed.</param>
 public sealed record UsageCacheEntry(
     Guid ProfileId,
-    DateTimeOffset ObservedAt,
+    DateTimeOffset? ObservedAt,
     RateLimitsSnapshot? Snapshot,
     UsageStatus Status,
     ErrorInfo? LastError,

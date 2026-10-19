@@ -7,6 +7,8 @@
     xmlns:vm="using:CodexSwitcher.App.ViewModels"
     xmlns:accounts="using:CodexSwitcher.App.Features.Accounts"
     xmlns:providers="using:CodexSwitcher.App.Features.Providers"
+    xmlns:launch="using:CodexSwitcher.App.Features.Launch"
+    xmlns:launchModel="using:CodexSwitcher.Core.Settings.Models"
     xmlns:conv="using:CodexSwitcher.App.Support"
     mc:Ignorable="d"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -25,6 +27,7 @@
         <conv:BoolToCopyGlyphConverter x:Key="BoolToCopyGlyph" />
         <conv:IntToVisibilityConverter x:Key="IntToVis" />
         <conv:ApiCardBorderBrushConverter x:Key="ApiCardBorder" />
+        <conv:BoolToApiCardBorderBrushConverter x:Key="BoolToApiCardBorder" />
         <conv:ApiCardBackgroundConverter x:Key="ApiCardBg" />
         <Style x:Key="CompactToolbarButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
             <Setter Property="Height" Value="28" />
@@ -33,7 +36,11 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid>
+    <Viewbox x:Name="ShellZoomViewbox"
+             Stretch="Fill"
+             SizeChanged="OnShellZoomViewboxSizeChanged"
+             PointerWheelChanged="OnShellPointerWheelChanged">
+    <Grid x:Name="ShellRootGrid">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -52,6 +59,7 @@
 
         <!-- Heading and compact controls share a row when there is room; on narrow windows the controls wrap below. -->
         <Grid x:Name="AccountsHeaderGrid" Grid.Row="1" Margin="24,12,24,8"
+              Visibility="{x:Bind ViewModel.ShowAccountsHeader, Mode=OneWay, Converter={StaticResource BoolToVis}}"
               ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="16">
             <StackPanel x:Name="AccountsHeading" Grid.Row="0" Grid.Column="0" VerticalAlignment="Center">
                 <TextBlock Text="{x:Bind Loc.AccountsHeader}" FontSize="26" FontWeight="Bold" />
@@ -66,23 +74,6 @@
                                     Text="{x:Bind ViewModel.Accounts.SearchText, Mode=TwoWay}"
                                     Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}" />
                     <Button Style="{StaticResource CompactToolbarButtonStyle}"
-                            Command="{x:Bind ViewModel.Accounts.DetectAccountCommand}"
-                            ToolTipService.ToolTip="{x:Bind Loc.DetectAccountTooltip}"
-                            Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE721;" FontSize="14" />
-                            <TextBlock Text="{x:Bind Loc.DetectAccount}" />
-                        </StackPanel>
-                    </Button>
-                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
-                            Command="{x:Bind ViewModel.Accounts.AddAccountCommand}"
-                            Background="{ThemeResource BrandAccentBrush}" Foreground="{ThemeResource BrandOnAccentBrush}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE710;" FontSize="14" />
-                            <TextBlock Text="{x:Bind Loc.SignInOAuth}" />
-                        </StackPanel>
-                    </Button>
-                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
                             Command="{x:Bind ViewModel.Accounts.OpenCodexSignInCommand}"
                             ToolTipService.ToolTip="{x:Bind Loc.OpenCodexSignInTooltip}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -90,15 +81,33 @@
                             <TextBlock Text="{x:Bind Loc.OpenCodexSignIn}" />
                         </StackPanel>
                     </Button>
+                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
+                            Command="{x:Bind ViewModel.Accounts.AddAccountCommand}"
+                            ToolTipService.ToolTip="{x:Bind Loc.SignInOAuthTooltip}"
+                            Background="{ThemeResource BrandAccentBrush}" Foreground="{ThemeResource BrandOnAccentBrush}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE710;" FontSize="14" />
+                            <TextBlock Text="{x:Bind Loc.SignInOAuth}" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
                 <StackPanel x:Name="AccountsToolbarSecondaryRow" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
                     <Button Style="{StaticResource CompactToolbarButtonStyle}"
                             Command="{x:Bind ViewModel.Accounts.RefreshAllCommand}"
-                            ToolTipService.ToolTip="{x:Bind Loc.RefreshAllTooltip}"
+                            ToolTipService.ToolTip="{x:Bind Loc.RefreshUsageTooltip}"
                             Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon Glyph="&#xE72C;" FontSize="14" />
-                            <TextBlock Text="{x:Bind Loc.RefreshAll}" />
+                            <TextBlock Text="{x:Bind Loc.RefreshButton}" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
+                            Command="{x:Bind ViewModel.Accounts.DetectAccountCommand}"
+                            ToolTipService.ToolTip="{x:Bind Loc.DetectAccountTooltip}"
+                            Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE721;" FontSize="14" />
+                            <TextBlock Text="{x:Bind Loc.DetectAccount}" />
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource CompactToolbarButtonStyle}"
@@ -116,16 +125,92 @@
                             Visibility="{x:Bind ViewModel.Accounts.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <FontIcon Glyph="&#xE74E;" FontSize="14" />
-                            <TextBlock Text="{x:Bind Loc.ExportAll}" />
+                            <TextBlock Text="{x:Bind Loc.Export}" />
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource CompactToolbarButtonStyle}"
-                            Click="OnOpenBrowserClick" ToolTipService.ToolTip="{x:Bind Loc.BrowserTooltip}">
+                            Click="OnOpen2FaClick" ToolTipService.ToolTip="{x:Bind Loc.TwoFactorTooltip}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE774;" FontSize="14" />
-                            <TextBlock Text="{x:Bind Loc.BrowserButton}" />
+                            <FontIcon Glyph="&#xE72E;" FontSize="14" />
+                            <TextBlock Text="{x:Bind Loc.TwoFactorButton}" />
                         </StackPanel>
                     </Button>
+                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
+                            Click="OnOpenSettingsClick" ToolTipService.ToolTip="{x:Bind Loc.SettingsButtonTooltip}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE713;" FontSize="14" />
+                            <TextBlock Text="{x:Bind Loc.SettingsButton}" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </StackPanel>
+        </Grid>
+
+        <Grid x:Name="ApiProvidersHeaderGrid" Grid.Row="1" Margin="24,12,24,8"
+              Visibility="{x:Bind ViewModel.ShowApiProvidersHeader, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+              ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="16">
+            <StackPanel Grid.Row="0" Grid.Column="0" VerticalAlignment="Center">
+                <TextBlock Text="{x:Bind Loc.ApiProvidersHeader}" FontSize="26" FontWeight="Bold" />
+                <TextBlock Text="{x:Bind Loc.ApiProvidersSubtitle}" Opacity="0.7" />
+            </StackPanel>
+            <StackPanel x:Name="ApiProvidersToolbar" Grid.Row="0" Grid.Column="1"
+                        Orientation="Vertical" Spacing="6" VerticalAlignment="Center" HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                    <AutoSuggestBox x:Name="ApiProvidersSearchBox" Width="260" MinWidth="220" MaxWidth="300" Height="28"
+                                    PlaceholderText="{x:Bind Loc.SearchPlaceholder}" QueryIcon="Find"
+                                    Text="{x:Bind ViewModel.ApiProviders.SearchText, Mode=TwoWay}" />
+                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
+                            Command="{x:Bind ViewModel.ApiProviders.AddApiProviderCommand}"
+                            ToolTipService.ToolTip="{x:Bind Loc.AddApiProviderTooltip}"
+                            Background="{ThemeResource BrandAccentBrush}" Foreground="{ThemeResource BrandOnAccentBrush}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE710;" FontSize="14" />
+                            <TextBlock Text="{x:Bind Loc.AddApiProvider}" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
+                            Click="OnOpen2FaClick" ToolTipService.ToolTip="{x:Bind Loc.TwoFactorTooltip}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE72E;" FontSize="14" />
+                            <TextBlock Text="{x:Bind Loc.TwoFactorButton}" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
+                            Click="OnOpenSettingsClick" ToolTipService.ToolTip="{x:Bind Loc.SettingsButtonTooltip}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE713;" FontSize="14" />
+                            <TextBlock Text="{x:Bind Loc.SettingsButton}" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </StackPanel>
+        </Grid>
+
+        <Grid x:Name="LaunchProfilesHeaderGrid" Grid.Row="1" Margin="24,12,24,8"
+              Visibility="{x:Bind ViewModel.ShowLaunchProfilesHeader, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+              ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="16">
+            <StackPanel Grid.Row="0" Grid.Column="0" VerticalAlignment="Center">
+                <TextBlock Text="{x:Bind Loc.LaunchProfilesHeader}" FontSize="26" FontWeight="Bold" />
+                <TextBlock Text="{x:Bind Loc.LaunchProfilesSubtitle}" Opacity="0.7" />
+            </StackPanel>
+            <StackPanel x:Name="LaunchProfilesToolbar" Grid.Row="0" Grid.Column="1"
+                        Orientation="Vertical" Spacing="6" VerticalAlignment="Center" HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                    <AutoSuggestBox x:Name="LaunchProfilesSearchBox" Width="260" MinWidth="220" MaxWidth="300" Height="28"
+                                    PlaceholderText="{x:Bind Loc.SearchPlaceholder}" QueryIcon="Find"
+                                    Text="{x:Bind ViewModel.LaunchProfiles.SearchText, Mode=TwoWay}" />
+                    <Button Style="{StaticResource CompactToolbarButtonStyle}"
+                            Command="{x:Bind ViewModel.LaunchProfiles.OpenEditorCommand}"
+                            Background="{ThemeResource BrandAccentBrush}" Foreground="{ThemeResource BrandOnAccentBrush}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE710;" FontSize="14" />
+                            <TextBlock Text="{x:Bind Loc.NewLaunchProfile}" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
                     <Button Style="{StaticResource CompactToolbarButtonStyle}"
                             Click="OnOpen2FaClick" ToolTipService.ToolTip="{x:Bind Loc.TwoFactorTooltip}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -207,6 +292,12 @@
                         <TextBlock Text="{x:Bind Loc.ApiProvidersTab}" FontWeight="SemiBold" />
                     </StackPanel>
                 </Button>
+                <Button Click="OnSelectLaunchProfilesTabClick" Padding="14,6" CornerRadius="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE756;" FontSize="14" />
+                        <TextBlock Text="{x:Bind Loc.LaunchProfilesHeader}" FontWeight="SemiBold" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
 
             <!-- Tab Contents Container -->
@@ -233,7 +324,8 @@
                             <TextBlock Text="{x:Bind Loc.ImportCurrent}" />
                         </StackPanel>
                     </Button>
-                    <Button Command="{x:Bind ViewModel.Accounts.AddAccountCommand}">
+                    <Button Command="{x:Bind ViewModel.Accounts.AddAccountCommand}"
+                            ToolTipService.ToolTip="{x:Bind Loc.SignInOAuthTooltip}">
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE710;" FontSize="14" />
                             <TextBlock Text="{x:Bind Loc.SignInOAuth}" />
@@ -254,6 +346,7 @@
                 <TextBlock TextAlignment="Center" Opacity="0.7" TextWrapping="Wrap" Text="{x:Bind Loc.EmptyBody}" />
                 <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
                     <Button Command="{x:Bind ViewModel.Accounts.AddAccountCommand}"
+                            ToolTipService.ToolTip="{x:Bind Loc.SignInOAuthTooltip}"
                             Background="{ThemeResource BrandAccentBrush}" Foreground="{ThemeResource BrandOnAccentBrush}">
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE710;" FontSize="14" />
@@ -281,7 +374,8 @@
                 <ListView Grid.Row="1" ItemsSource="{x:Bind ViewModel.Accounts.Items}"
                           SelectionMode="None" Padding="24,0,24,24"
                           ScrollViewer.HorizontalScrollMode="Disabled"
-                          CanReorderItems="True" CanDragItems="True" AllowDrop="True"
+                          CanReorderItems="{x:Bind ViewModel.Accounts.CanReorderItems, Mode=OneWay}"
+                          CanDragItems="{x:Bind ViewModel.Accounts.CanReorderItems, Mode=OneWay}" AllowDrop="True"
                           DragItemsCompleted="OnAccountsReordered">
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem">
@@ -516,7 +610,14 @@
                                                 BorderThickness="0" ToolTipService.ToolTip="{x:Bind MoreActionsLabel}">
                                             <FontIcon Glyph="&#xE712;" FontSize="16" />
                                             <Button.Flyout>
-                                                <MenuFlyout>
+                                                <MenuFlyout Closed="OnAccountActionFlyoutClosed">
+                                                    <MenuFlyoutItem Text="{x:Bind MoveUpLabel}" Click="OnMoveUpAccountClick">
+                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74A;" /></MenuFlyoutItem.Icon>
+                                                    </MenuFlyoutItem>
+                                                    <MenuFlyoutItem Text="{x:Bind MoveDownLabel}" Click="OnMoveDownAccountClick">
+                                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74B;" /></MenuFlyoutItem.Icon>
+                                                    </MenuFlyoutItem>
+                                                    <MenuFlyoutSeparator />
                                                     <MenuFlyoutItem Text="{x:Bind ExportLabel}" Click="OnExportItemClick">
                                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74E;" /></MenuFlyoutItem.Icon>
                                                     </MenuFlyoutItem>
@@ -599,6 +700,7 @@
                                                         <!-- Progress Bar (Value = RemainingPercent, matching text) -->
                                                         <ProgressBar Value="{x:Bind ProgressValue, Mode=OneWay}" Maximum="100" Minimum="0"
                                                                      Height="5" CornerRadius="2.5"
+                                                                     Visibility="{x:Bind HasKnownQuota, Mode=OneWay, Converter={StaticResource BoolToVis}}"
                                                                      Foreground="{x:Bind Converter={StaticResource QuotaBrush}, Mode=OneWay}" />
 
                                                         <!-- Window Footer: Used % on Left, Relative Reset Countdown on Right -->
@@ -645,6 +747,9 @@
                                                                 <FontIcon Glyph="&#xE9D9;" FontSize="12" Foreground="{ThemeResource BrandAccentBrush}" />
                                                                 <TextBlock Text="{x:Bind Usage.Activity.ActivitySectionTitle, Mode=OneWay}" FontSize="11" FontWeight="SemiBold" Opacity="0.8" />
                                                             </StackPanel>
+                                                            <TextBlock Grid.Column="1" Text="{x:Bind Usage.Activity.ObservedAtText, Mode=OneWay}"
+                                                                       FontSize="10" Opacity="0.58" HorizontalAlignment="Right"
+                                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                                             <FontIcon Grid.Column="2" Glyph="{x:Bind Usage.Activity.IsExpanded, Mode=OneWay, Converter={StaticResource BoolToChevron}}"
                                                                       FontSize="10" Opacity="0.5" />
                                                         </Grid>
@@ -796,25 +901,9 @@
             </StackPanel>
 
             <!-- API Providers List -->
-            <Grid Visibility="{x:Bind ViewModel.ApiProviders.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}"
-                  RowDefinitions="Auto,*">
-                <!-- Toolbar for API tab -->
-                <Grid Grid.Row="0" Margin="24,0,24,12" ColumnDefinitions="*,Auto">
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="{x:Bind Loc.ApiProvidersHeader}" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Text="{x:Bind Loc.ApiProvidersSubtitle}" Opacity="0.7" FontSize="12" />
-                    </StackPanel>
-                    <Button Grid.Column="1" Command="{x:Bind ViewModel.ApiProviders.AddApiProviderCommand}"
-                            Background="{ThemeResource BrandAccentBrush}" Foreground="{ThemeResource BrandOnAccentBrush}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon Glyph="&#xE710;" FontSize="14" />
-                            <TextBlock Text="{x:Bind Loc.AddApiProvider}" />
-                        </StackPanel>
-                    </Button>
-                </Grid>
-
+            <Grid Visibility="{x:Bind ViewModel.ApiProviders.ShowEmptyState, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
                 <!-- API Provider Cards -->
-                <ListView Grid.Row="1" ItemsSource="{x:Bind ViewModel.ApiProviders.Items}"
+                <ListView ItemsSource="{x:Bind ViewModel.ApiProviders.FilteredItems}"
                           SelectionMode="None" Padding="24,0,24,24"
                           ScrollViewer.HorizontalScrollMode="Disabled"
                           CanReorderItems="True" CanDragItems="True" AllowDrop="True"
@@ -929,7 +1018,7 @@
                                             <Button Padding="8,6">
                                                 <FontIcon Glyph="&#xE712;" FontSize="14" />
                                                 <Button.Flyout>
-                                                    <MenuFlyout>
+                                                    <MenuFlyout Closed="OnApiProviderActionFlyoutClosed">
                                                         <MenuFlyoutItem Text="{x:Bind MoveUpLabel}" Click="OnMoveUpApiProviderClick">
                                                             <MenuFlyoutItem.Icon>
                                                                 <FontIcon Glyph="&#xE74A;" />
@@ -1049,8 +1138,183 @@
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
+                <TextBlock Text="{x:Bind Loc.NoMatchingApiProviders}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.7"
+                           Visibility="{x:Bind ViewModel.ApiProviders.ShowNoSearchResults, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
             </Grid>
         </Grid>
+    </Grid>
+
+    <!-- Tab 2: Isolated Codex CLI/Desktop launch profiles -->
+    <Grid x:Name="LaunchProfilesTabGrid" Grid.Row="2"
+          Visibility="{x:Bind ViewModel.SelectedTab, Mode=OneWay, Converter={StaticResource IntToVis}, ConverterParameter=2}"
+          RowDefinitions="*">
+        <Grid Grid.Row="0" Margin="24,0,24,24" ColumnDefinitions="*,380" ColumnSpacing="20">
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="12">
+                    <StackPanel Visibility="{x:Bind ViewModel.LaunchProfiles.HasRunningSessions, Mode=OneWay, Converter={StaticResource BoolToVis}}" Spacing="8">
+                        <TextBlock Text="Running managed sessions" FontSize="17" FontWeight="SemiBold" />
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.LaunchProfiles.RunningSessions}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="launchModel:CodexLaunchSession">
+                                    <Border Margin="0,0,0,8" Padding="14,10" CornerRadius="8"
+                                            BorderThickness="1" BorderBrush="{ThemeResource BrandAccentBrush}"
+                                            Background="{ThemeResource LayerFillColorAltBrush}">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                            <StackPanel Grid.Column="0" Spacing="3">
+                                                <TextBlock Text="{x:Bind ProfileName}" FontWeight="SemiBold" />
+                                                <TextBlock Text="{x:Bind RuntimeLabel}" Opacity="0.7" FontSize="11" />
+                                                <TextBlock Text="{x:Bind CredentialName}" Opacity="0.75" />
+                                                <TextBlock Text="{x:Bind Model}" Opacity="0.7" FontFamily="Consolas"
+                                                           Visibility="{x:Bind Model, Converter={StaticResource StringToVis}}" />
+                                                <TextBlock Text="{x:Bind WorkingDirectory}" Opacity="0.6" FontSize="11" />
+                                            </StackPanel>
+                                            <Button Grid.Column="1" VerticalAlignment="Center"
+                                                    Click="OnStopLaunchSessionClick">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <FontIcon Glyph="&#xE71A;" FontSize="13" />
+                                                    <TextBlock Text="Stop" />
+                                                </StackPanel>
+                                            </Button>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
+                    <TextBlock Text="Saved profiles" FontSize="17" FontWeight="SemiBold" />
+                    <StackPanel Visibility="{x:Bind ViewModel.LaunchProfiles.HasProfiles, Mode=OneWay, Converter={StaticResource InvBoolToVis}}"
+                                HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Padding="24">
+                        <TextBlock Text="No launch profiles yet" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                        <TextBlock Text="Create one to open Codex CLI or Desktop with its own account, API key, model, and conversation home."
+                                   TextWrapping="Wrap" TextAlignment="Center" Opacity="0.7" MaxWidth="420" />
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind Loc.NoMatchingLaunchProfiles}"
+                               HorizontalAlignment="Center" Opacity="0.7"
+                               Visibility="{x:Bind ViewModel.LaunchProfiles.ShowNoSearchResults, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.LaunchProfiles.FilteredProfiles}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="launch:CodexLaunchProfileItemViewModel">
+                                <Border Margin="0,0,0,8" Padding="14,12" CornerRadius="8"
+                                        BorderThickness="1"
+                                        BorderBrush="{x:Bind IsRunning, Mode=OneWay, Converter={StaticResource BoolToApiCardBorder}}"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                        <StackPanel Grid.Column="0" Spacing="4">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="{x:Bind Name}" FontWeight="SemiBold" FontSize="16" />
+                                                <Border Padding="6,2" CornerRadius="4" Background="{ThemeResource LayerFillColorAltBrush}"
+                                                        Visibility="{x:Bind IsRunning, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="Running" FontSize="11" FontWeight="SemiBold" />
+                                                </Border>
+                                            </StackPanel>
+                                            <TextBlock Text="{x:Bind RuntimeLabel}" FontSize="11" Opacity="0.7" />
+                                            <TextBlock Text="{x:Bind TargetLabel}" Opacity="0.8" />
+                                            <TextBlock Text="{x:Bind ModelLabel}" FontFamily="Consolas" Opacity="0.7"
+                                                       Visibility="{x:Bind ModelLabel, Converter={StaticResource StringToVis}}" />
+                                            <TextBlock Text="{x:Bind WorkingDirectoryLabel}" FontSize="11" Opacity="0.6" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                            <Button Click="OnToggleLaunchProfileClick"
+                                                    Visibility="{x:Bind IsRunning, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <FontIcon Glyph="&#xE71A;" FontSize="13" />
+                                                    <TextBlock Text="Stop" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Click="OnToggleLaunchProfileClick"
+                                                    Visibility="{x:Bind IsRunning, Mode=OneWay, Converter={StaticResource InvBoolToVis}}">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <FontIcon Glyph="&#xE768;" FontSize="13" />
+                                                    <TextBlock Text="Launch" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Click="OnEditLaunchProfileClick"
+                                                    ToolTipService.ToolTip="Edit profile">
+                                                <FontIcon Glyph="&#xE70F;" FontSize="13" />
+                                            </Button>
+                                            <Button Click="OnDeleteLaunchProfileClick"
+                                                    ToolTipService.ToolTip="Remove profile">
+                                                <FontIcon Glyph="&#xE74D;" FontSize="13" />
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Column="1" Padding="18" CornerRadius="8" BorderThickness="1"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource LayerFillColorAltBrush}"
+                    Visibility="{x:Bind ViewModel.LaunchProfiles.IsEditorOpen, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+                    <TextBlock Grid.Row="0" Text="{x:Bind ViewModel.LaunchProfiles.EditorTitle, Mode=OneWay}" FontSize="18" FontWeight="SemiBold" />
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" VerticalScrollMode="Enabled">
+                        <StackPanel Spacing="12">
+                        <TextBlock Text="Name" />
+                        <TextBox Text="{x:Bind ViewModel.LaunchProfiles.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 PlaceholderText="e.g. Work account" />
+                        <TextBlock Text="Codex runtime" />
+                        <ComboBox SelectedIndex="{x:Bind ViewModel.LaunchProfiles.SelectedRuntimeKindIndex, Mode=TwoWay}">
+                            <ComboBoxItem Content="Codex CLI" />
+                            <ComboBoxItem Content="Codex Desktop (experimental)" />
+                        </ComboBox>
+                        <CheckBox Content="{x:Bind Loc.LaunchProfileShareChatsLabel}"
+                                  IsChecked="{x:Bind ViewModel.LaunchProfiles.ShareChatsWithMainCodex, Mode=TwoWay}"
+                                  ToolTipService.ToolTip="{x:Bind Loc.LaunchProfileShareChatsDescription}" />
+                        <TextBlock Text="{x:Bind Loc.LaunchProfileShareChatsDescription}"
+                                   TextWrapping="Wrap" FontSize="11" Opacity="0.7" />
+                        <TextBlock Text="{x:Bind Loc.LaunchProfileDesktopWarning}"
+                                   TextWrapping="Wrap" FontSize="11" Opacity="0.7"
+                                   Visibility="{x:Bind ViewModel.LaunchProfiles.ShowDesktopRuntimeWarning, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                        <TextBlock Text="Credential type" />
+                        <ComboBox SelectedIndex="{x:Bind ViewModel.LaunchProfiles.SelectedTargetKindIndex, Mode=TwoWay}">
+                            <ComboBoxItem Content="ChatGPT account" />
+                            <ComboBoxItem Content="API provider" />
+                        </ComboBox>
+                        <TextBlock Text="Account or API provider" />
+                        <ComboBox ItemsSource="{x:Bind ViewModel.LaunchProfiles.TargetChoices, Mode=OneWay}"
+                                  SelectedValuePath="Id"
+                                  SelectedValue="{x:Bind ViewModel.LaunchProfiles.SelectedCredentialProfileId, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="launch:LaunchTargetChoice">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{x:Bind Name}" />
+                                        <TextBlock Text="{x:Bind Detail}" FontSize="11" Opacity="0.65" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <StackPanel Spacing="6" Visibility="{x:Bind ViewModel.LaunchProfiles.ShowApiModel, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="Exact API model slug" />
+                            <TextBox Text="{x:Bind ViewModel.LaunchProfiles.Model, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     PlaceholderText="e.g. deepseek-v4.1-flash:free" />
+                            <TextBlock Text="The exact slug is pinned to this launch profile." FontSize="11" Opacity="0.65" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <TextBlock Text="Working directory" />
+                        <TextBox Text="{x:Bind ViewModel.LaunchProfiles.WorkingDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 PlaceholderText="Leave blank to use your user folder" />
+                        <TextBlock Text="Additional Codex arguments" />
+                        <TextBox Text="{x:Bind ViewModel.LaunchProfiles.Arguments, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 PlaceholderText="Optional CLI flags" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="72" />
+                        <TextBlock Text="Credentials are injected from Switchboard's protected stores. Do not put API keys in arguments."
+                                   TextWrapping="Wrap" FontSize="11" Opacity="0.7" />
+                        </StackPanel>
+                    </ScrollViewer>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.LaunchProfiles.CancelEditorCommand}" Content="Cancel" />
+                        <Button Command="{x:Bind ViewModel.LaunchProfiles.SaveProfileCommand}"
+                                Content="Save profile"
+                                Background="{ThemeResource BrandAccentBrush}" Foreground="{ThemeResource BrandOnAccentBrush}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
     </Grid>
 
     <!-- Busy overlay -->
@@ -1065,6 +1329,6 @@
                     </StackPanel>
                 </Border>
             </Grid>
-        </Grid>
     </Grid>
+    </Viewbox>
 </UserControl>

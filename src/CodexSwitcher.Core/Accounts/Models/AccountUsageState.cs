@@ -37,6 +37,7 @@ namespace CodexSwitcher.Core.Accounts.Models;
 /// <summary>
 /// Normalized immutable presentation state for an account's usage and rate limits.
 /// </summary>
+/// <param name="ObservedAt">Quota snapshot observation time; account activity carries its own timestamp.</param>
 public sealed record AccountUsageState(
     Guid ProfileId,
     UsageStatus Status,
@@ -57,7 +58,7 @@ public sealed record AccountUsageState(
     bool? OrdinaryUsageAllowed = null,
     QuotaDataOrigin Origin = QuotaDataOrigin.Unknown,
     string? RuntimeVersion = null,
-    bool AccountIdentityMatched = true)
+    bool? AccountIdentityMatched = null)
 {
     /// <summary>Returns true if this account has any quota windows defined.</summary>
     public bool HasWindows => Windows.Count > 0;

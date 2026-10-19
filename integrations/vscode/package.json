@@ -1,0 +1,54 @@
+{
+  "name": "codex-switchboard-companion",
+  "displayName": "Codex Switchboard Companion",
+  "description": "Read-only local status and cached quota views from Codex Switchboard.",
+  "version": "0.1.0",
+  "publisher": "malenkiysolovey",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MalenkiySolovey/codex-switchboard.git",
+    "directory": "integrations/vscode"
+  },
+  "files": [
+    "extension.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:codexSwitchboard.showStatus",
+    "onCommand:codexSwitchboard.showFleet"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexSwitchboard.showStatus",
+        "title": "Codex Switchboard: Show Current Status"
+      },
+      {
+        "command": "codexSwitchboard.showFleet",
+        "title": "Codex Switchboard: Show Cached Account Fleet"
+      }
+    ],
+    "configuration": {
+      "title": "Codex Switchboard",
+      "properties": {
+        "codexSwitchboard.cliPath": {
+          "type": "string",
+          "default": "codex-switchboard.exe",
+          "description": "Path to the built Codex Switchboard CLI executable."
+        }
+      }
+    }
+  }
+}

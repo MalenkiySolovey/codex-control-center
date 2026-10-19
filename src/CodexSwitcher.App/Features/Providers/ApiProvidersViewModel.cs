@@ -89,9 +89,17 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
     private readonly CancellationTokenSource _cts = new();
 
     public ObservableCollection<ApiProviderItemViewModel> Items { get; } = [];
+    public ObservableCollection<ApiProviderItemViewModel> FilteredItems { get; } = [];
+    public bool CanReorderItems => string.IsNullOrWhiteSpace(SearchText);
+
+    [ObservableProperty]
+    public partial string SearchText { get; set; } = string.Empty;
 
     [ObservableProperty]
     public partial bool ShowEmptyState { get; set; }
+
+    [ObservableProperty]
+    public partial bool ShowNoSearchResults { get; set; }
 
     [ObservableProperty]
     public partial bool IsBusy { get; set; }
@@ -100,6 +108,12 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
     public partial string? BusyText { get; set; }
 
     public event EventHandler? TargetStateChanged;
+
+    partial void OnSearchTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(CanReorderItems));
+        ApplySearchFilter();
+    }
 
     public ApiProvidersViewModel(
         IApiProviderStore apiProviderStore,
@@ -190,7 +204,28 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
 
         SyncCollection(Items, targetList);
         ShowEmptyState = Items.Count == 0;
+        ApplySearchFilter();
     }
+
+    private void ApplySearchFilter()
+    {
+        var query = SearchText?.Trim();
+        var matches = string.IsNullOrEmpty(query)
+            ? Items.ToList()
+            : Items.Where(item =>
+                    ContainsSearchText(item.DisplayName, query)
+                    || ContainsSearchText(item.CatalogProviderName, query)
+                    || ContainsSearchText(item.SelectedRoute, query)
+                    || ContainsSearchText(item.SelectedModel, query)
+                    || ContainsSearchText(item.BaseUrl, query))
+                .ToList();
+
+        SyncCollection(FilteredItems, matches);
+        ShowNoSearchResults = !ShowEmptyState && FilteredItems.Count == 0;
+    }
+
+    private static bool ContainsSearchText(string? value, string query) =>
+        !string.IsNullOrEmpty(value) && value.Contains(query, StringComparison.CurrentCultureIgnoreCase);
 
     private static void SyncCollection(ObservableCollection<ApiProviderItemViewModel> collection, List<ApiProviderItemViewModel> target)
     {
@@ -256,6 +291,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
                 item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive);
             }
             item.ApplyRefreshResult(result);
+            ApplySearchFilter();
         });
     }
 
@@ -462,6 +498,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
 
         _apiProviderStore.Save(item.Profile);
         item.UpdateProfile(item.Profile, item.Descriptor, item.HasSecret, item.IsTargetActive);
+        ApplySearchFilter();
 
         if (item.IsTargetActive)
         {
@@ -782,9 +819,9 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         item.IsLoadingModels = true;
         item.ModelsStatusMessage = Loc.DiscoveringModels;
 
+        long requestGeneration = 0;
         try
         {
-            long requestGeneration = 0;
             var progress = new Progress<string>(message =>
             {
                 var latest = _modelRefreshService.GetLatestResult(item.Id);
@@ -796,9 +833,11 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
             });
             var refreshTask = _modelRefreshService.RefreshAsync(
                 item.Id,
-                new RefreshModelsOptions(SwitchExecutionOptions.From(_settings), progress),
+                new RefreshModelsOptions(
+                    SwitchExecutionOptions.From(_settings),
+                    progress,
+                    generation => requestGeneration = generation),
                 _cts.Token);
-            requestGeneration = _modelRefreshService.GetLatestResult(item.Id)?.RequestGeneration ?? 0;
             var result = await refreshTask;
             item.ApplyRefreshResult(result);
             if (_apiProviderStore.GetById(item.Id) is { } persisted)
@@ -809,16 +848,45 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         }
         catch (OperationCanceledException) when (_cts.IsCancellationRequested)
         {
-            item.ModelsStatusMessage = "Discovery canceled.";
+            ApplyRefreshFailureIfCurrent(item, requestGeneration, "Discovery canceled.");
         }
-        catch (Exception ex)
+        catch
         {
-            item.ModelsStatusMessage = ex.Message;
+            // The shared service normally returns sanitized failures. If an
+            // unexpected exception escapes, never let this older request
+            // overwrite a newer result or expose a raw provider exception.
+            ApplyRefreshFailureIfCurrent(item, requestGeneration, "Model refresh failed.");
         }
-        finally
+    }
+
+    private void ApplyRefreshFailureIfCurrent(
+        ApiProviderItemViewModel item,
+        long requestGeneration,
+        string fallbackMessage)
+    {
+        var latest = _modelRefreshService.GetLatestResult(item.Id);
+        if (requestGeneration <= 0)
         {
-            item.IsLoadingModels = false;
+            if (latest?.Outcome != ModelInventoryRefreshOutcome.Refreshing)
+            {
+                item.IsLoadingModels = false;
+            }
+            return;
         }
+
+        if (latest is not null && latest.RequestGeneration > requestGeneration)
+        {
+            return;
+        }
+
+        if (latest is not null && latest.RequestGeneration == requestGeneration &&
+            latest.Outcome != ModelInventoryRefreshOutcome.Refreshing)
+        {
+            item.ApplyRefreshResult(latest);
+            return;
+        }
+
+        item.ApplyRefreshFailure(requestGeneration, fallbackMessage);
     }
 
     [RelayCommand]

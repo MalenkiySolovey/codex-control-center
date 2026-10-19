@@ -1,6 +1,5 @@
 using CodexSwitcher.Core.Accounts.Contracts;
 using CodexSwitcher.Core.Accounts.Formatting;
-using CodexSwitcher.Core.Common.Dispatcher;
 using CodexSwitcher.Core.Common.Enums;
 using CodexSwitcher.Core.Common.Environment;
 using CodexSwitcher.Core.Common.Errors;
@@ -46,6 +45,7 @@ using CodexSwitcher.Infra.Settings;
 using CodexSwitcher.Core.Routing.Contracts;
 using CodexSwitcher.Core.Routing.Models;
 using CodexSwitcher.Core.Routing.Services;
+using CodexSwitcher.Core.Common.Dispatcher;
 using CodexSwitcher.Core.Accounts.Models;
 using CodexSwitcher.Core.Accounts.Services;
 using System.Collections.ObjectModel;
@@ -78,14 +78,17 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     private readonly AccountUsageCoordinator _usage;
     private readonly ICodexTargetSwitchService? _targetSwitchService;
     private readonly ICodexSignedOutService? _signedOutService;
+    private readonly ICodexLaunchService? _launchService;
+    private readonly IUiDispatcher _dispatcher;
     private readonly IAppNotificationService _notifications;
     private readonly IAppBusyService _busy;
 
-    private readonly List<AccountItemViewModel> _all = [];
+    private readonly ObservableCollection<AccountItemViewModel> _all = [];
     private ActiveTarget? _lastActiveTarget;
     private bool _lastIsRoutingActiveToApi;
 
     public ObservableCollection<AccountItemViewModel> Items { get; } = [];
+    public ObservableCollection<AccountItemViewModel> AllItems => _all;
 
     [ObservableProperty]
     public partial string SearchText { get; set; }
@@ -108,11 +111,13 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     public bool ShowNormalEmptyState => ShowEmptyState && !HasDetectedActiveAccount;
     public bool ShowDetectedAccountEmptyState => ShowEmptyState && HasDetectedActiveAccount;
     public int AccountCount => _all.Count;
+    public bool CanReorderItems => string.IsNullOrWhiteSpace(SearchText);
 
     public ProfileMetadata? ActiveProfile => _profiles.Profiles.FirstOrDefault(p => p.IsActive);
     public IReadOnlyList<ProfileMetadata> Profiles => _profiles.Profiles;
 
     public event EventHandler? TargetStateChanged;
+    public event EventHandler? OrderChanged;
 
     public AccountsViewModel(
         ProfileService profiles,
@@ -126,6 +131,8 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         IAppNotificationService notifications,
         IAppBusyService busy,
         ICodexTargetSwitchService? targetSwitchService = null,
+        ICodexLaunchService? launchService = null,
+        IUiDispatcher? dispatcher = null,
         ICodexSignedOutService? signedOutService = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
@@ -140,14 +147,24 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         _busy = busy ?? throw new ArgumentNullException(nameof(busy));
         _targetSwitchService = targetSwitchService;
         _signedOutService = signedOutService;
+        _launchService = launchService;
+        _dispatcher = dispatcher ?? ImmediateUiDispatcher.Instance;
 
         _usage.RefreshingStateChanged += r => IsRefreshingUsage = r;
+        if (_launchService is not null)
+        {
+            _launchService.SessionsChanged += OnLaunchSessionsChanged;
+        }
 
         SearchText = string.Empty;
         DetectedActiveAccountDetails = string.Empty;
     }
 
-    partial void OnSearchTextChanged(string value) => ApplyFilter();
+    partial void OnSearchTextChanged(string value)
+    {
+        ApplyFilter();
+        OnPropertyChanged(nameof(CanReorderItems));
+    }
 
     [RelayCommand]
     private async Task LoadAsync()
@@ -213,7 +230,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         var now = _clock.UtcNow;
 
         var existingMap = _all.ToDictionary(a => a.Id);
-        _all.Clear();
+        var targetItems = new List<AccountItemViewModel>();
         var ordered = _profiles.Profiles
             .OrderBy(p => p.SortOrder)
             .ThenByDescending(p => p.CreatedAt);
@@ -225,18 +242,22 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             if (existingMap.TryGetValue(p.Id, out var existing))
             {
                 existing.UpdateState(p, isRoutingActive, now, _settings);
+                existing.IsManagedLaunchInUse = _launchService?.IsChatGptProfileInUse(p.Id) == true;
                 existing.HasTotpConfigured = _totp.HasCredential(p.Id);
                 existing.IsCompact = isCompact;
-                _all.Add(existing);
+                targetItems.Add(existing);
             }
             else
             {
                 var usageVm = _usage.GetOrCreateUsageVm(p.Id);
                 var item = new AccountItemViewModel(p, now, _settings, usageVm, isCompact, isRoutingActive);
+                item.IsManagedLaunchInUse = _launchService?.IsChatGptProfileInUse(p.Id) == true;
                 item.HasTotpConfigured = _totp.HasCredential(p.Id);
-                _all.Add(item);
+                targetItems.Add(item);
             }
         }
+
+        SyncCollection(_all, targetItems);
 
         ShowEmptyState = _all.Count == 0;
         UpdateDetectedAccountState();
@@ -339,7 +360,15 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task SwitchAsync(AccountItemViewModel? item)
     {
-        if (item is null || !item.CanSwitch) return;
+        if (item is null) return;
+        if (_launchService?.IsChatGptProfileInUse(item.Id) == true)
+        {
+            ShowInfo(Loc.ErrorTitle,
+                "Stop the managed Codex session before switching this account. Its refresh token is in use by that isolated session.",
+                InfoBarSeverity.Warning);
+            return;
+        }
+        if (!item.CanSwitch) return;
 
         _profiles.Reconcile();
         var from = _profiles.Profiles.FirstOrDefault(p => p.IsActive);
@@ -680,9 +709,37 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     private void Reorder(IReadOnlyList<Guid>? orderedIds)
     {
         if (orderedIds is null || orderedIds.Count == 0) return;
-        if (!string.IsNullOrEmpty(SearchText)) return;
+        if (!CanReorderItems) return;
         _profiles.Reorder(orderedIds);
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
+        OrderChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    private void MoveUp(AccountItemViewModel? item) => MoveAccount(item, -1);
+
+    [RelayCommand]
+    private void MoveDown(AccountItemViewModel? item) => MoveAccount(item, 1);
+
+    private void MoveAccount(AccountItemViewModel? item, int offset)
+    {
+        if (item is null || !CanReorderItems)
+        {
+            return;
+        }
+
+        var orderedIds = Items.Select(account => account.Id).ToList();
+        var currentIndex = orderedIds.IndexOf(item.Id);
+        var targetIndex = currentIndex + offset;
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex >= orderedIds.Count)
+        {
+            return;
+        }
+
+        (orderedIds[currentIndex], orderedIds[targetIndex]) = (orderedIds[targetIndex], orderedIds[currentIndex]);
+        _profiles.Reorder(orderedIds);
+        Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
+        OrderChanged?.Invoke(this, EventArgs.Empty);
     }
 
     [RelayCommand]
@@ -717,7 +774,16 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        if (_launchService is not null)
+        {
+            _launchService.SessionsChanged -= OnLaunchSessionsChanged;
+        }
         Cleanup();
+    }
+
+    private void OnLaunchSessionsChanged(object? sender, EventArgs e)
+    {
+        _dispatcher.Enqueue(() => Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi));
     }
 
     private void ShowSwitchResult(SwitchResult result, string toName)

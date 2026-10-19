@@ -170,6 +170,10 @@ public sealed partial class AccountItemViewModel : ObservableObject
     public partial AccountBadge Badge { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSwitch))]
+    public partial bool IsManagedLaunchInUse { get; set; }
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasPlanOrSubscription))]
     [NotifyPropertyChangedFor(nameof(ShowSubscriptionSeparator))]
     public partial string? PlanText { get; set; }
@@ -205,7 +209,7 @@ public sealed partial class AccountItemViewModel : ObservableObject
     /// <summary>Fully in use: active in auth.json AND routing in config.toml is set to openai.</summary>
     public bool IsInUse => IsActive && IsRoutingActive;
 
-    public bool CanSwitch => !IsInUse && Badge != AccountBadge.Unavailable;
+    public bool CanSwitch => !IsInUse && !IsManagedLaunchInUse && Badge != AccountBadge.Unavailable;
 
     /// <summary>
     /// Current semantic visual state for the full card border and background.
@@ -264,6 +268,8 @@ public sealed partial class AccountItemViewModel : ObservableObject
     public string MarkReLoginLabel => Loc.MarkNeedsReLogin;
     public string MarkUsedLabel => Loc.MarkUsed;
     public string UnmarkUsedLabel => Loc.UnmarkUsed;
+    public string MoveUpLabel => Loc.MoveUp;
+    public string MoveDownLabel => Loc.MoveDown;
     public string RemoveLabel => Loc.Remove;
     public string MoreActionsLabel => Loc.MoreActions;
 

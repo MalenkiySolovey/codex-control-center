@@ -71,6 +71,30 @@ public sealed class ApiProviderStore : IApiProviderStore
         }
     }
 
+    /// <summary>
+    /// Reads provider metadata without model normalization, credential checks, recovery, or writes.
+    /// Intended for read-only inspection surfaces such as the companion CLI.
+    /// </summary>
+    public IReadOnlyList<ApiProviderProfile> ReadAllReadOnly()
+    {
+        lock (_sync)
+        {
+            if (!_fs.FileExists(_filePath))
+            {
+                return [];
+            }
+
+            var json = _fs.ReadAllText(_filePath);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return [];
+            }
+
+            return JsonSerializer.Deserialize<List<ApiProviderProfile>>(json, JsonOptions)
+                ?? throw new InvalidDataException("The API provider store did not contain a valid provider list.");
+        }
+    }
+
     public ApiProviderProfile? GetById(Guid id)
     {
         lock (_sync)

@@ -8,16 +8,17 @@ public sealed class ProfileServiceTests
     {
         public TempDir Dir { get; } = new();
         public ProfileService Service { get; }
+        public VaultService Vault { get; }
         public FakeClock Clock { get; } = new();
 
         public Env()
         {
             var fs = new PhysicalFileSystem();
-            var vault = new VaultService(new DpapiSecretProtector(), fs, Dir.Combine("vault"));
+            Vault = new VaultService(new DpapiSecretProtector(), fs, Dir.Combine("vault"));
             var store = new ProfileStore(fs, Dir.Combine("profiles.json"));
             var paths = CodexPaths.ForHome(Dir.Combine(".codex"));
             var recon = new ReconciliationService(fs, paths);
-            Service = new ProfileService(vault, store, recon, fs, paths, Clock, new FakeAudit());
+            Service = new ProfileService(Vault, store, recon, fs, paths, Clock, new FakeAudit());
         }
 
         public void Dispose() => Dir.Dispose();
@@ -36,6 +37,29 @@ public sealed class ProfileServiceTests
         Assert.Equal("sub-1", p.AccountSub);
         Assert.Equal("user@x.com", p.AccountEmail);
         Assert.Single(env.Service.Profiles);
+    }
+
+    [Fact]
+    public void AddFromAuthJson_PersistsNewOAuthProfileInProtectedVault_AndPreservesExistingProfiles()
+    {
+        using var env = new Env();
+        var firstAuth = Sample.AuthJson(idToken: Sample.Jwt(sub: "saved-account", email: "saved@example.com"));
+        var first = env.Service.AddFromAuthJson(firstAuth, "Saved account");
+        var firstFingerprint = first.BlobFingerprint;
+
+        var newAuth = Sample.AuthJson(idToken: Sample.Jwt(sub: "oauth-account", email: "oauth@example.com"));
+        var added = env.Service.AddFromAuthJson(newAuth, null);
+
+        Assert.NotEqual(first.Id, added.Id);
+        Assert.Equal(firstFingerprint, first.BlobFingerprint);
+        Assert.Equal("Saved account", first.Nickname);
+        Assert.Equal(2, env.Service.Profiles.Count);
+        Assert.Contains(env.Service.Profiles, profile => profile.Id == first.Id);
+        Assert.Contains(env.Service.Profiles, profile => profile.Id == added.Id);
+        Assert.True(env.Vault.Exists(first.Id));
+        Assert.True(env.Vault.Exists(added.Id));
+        Assert.Equal(newAuth, env.Vault.LoadBlob(added.Id));
+        Assert.False(newAuth.SequenceEqual(File.ReadAllBytes(env.Vault.BlobPath(added.Id))));
     }
 
     [Fact]

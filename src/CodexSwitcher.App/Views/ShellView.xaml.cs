@@ -37,7 +37,6 @@ using CodexSwitcher.Infra.Codex.Runtime;
 using CodexSwitcher.Infra.Codex.Threads;
 using CodexSwitcher.Infra.Codex.Usage;
 using CodexSwitcher.Infra.Common.Logging;
-using CodexSwitcher.Infra.Common.Paths;
 using CodexSwitcher.Infra.Common.Storage;
 using CodexSwitcher.Infra.Common.Time;
 using CodexSwitcher.Infra.Providers.Inspection;
@@ -51,6 +50,7 @@ using CodexSwitcher.Infra.Settings;
 using System.Linq;
 using CodexSwitcher.App.Features.Accounts;
 using CodexSwitcher.App.Features.Providers;
+using CodexSwitcher.App.Features.Launch;
 using CodexSwitcher.App.Localization;
 using CodexSwitcher.App.Services;
 using CodexSwitcher.App.Shell;
@@ -58,18 +58,26 @@ using CodexSwitcher.App.Features.Settings;
 using CodexSwitcher.App.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.System;
 
 namespace CodexSwitcher.App.Views;
 
 public sealed partial class ShellView : UserControl
 {
-    private AppPaths? _paths;
+    private const double MinimumShellZoom = 0.75;
+    private const double MaximumShellZoom = 1.5;
+    private const double ShellZoomPerWheelNotch = 1.1;
     private Func<SettingsViewModel>? _settingsVmFactory;
+    private Action? _pendingApiProviderMenuAction;
+    private Action? _pendingAccountMenuAction;
+    private double _shellZoomFactor = 1;
 
     public ShellViewModel ViewModel { get; private set; } = null!;
     public Strings Loc => Strings.Current;
+    public event Action? TrayTooltipSettingsChanged;
 
     /// <summary>Elemento usado como região de arraste da barra de título (Mica).</summary>
     public UIElement TitleBarElement => AppTitleBar;
@@ -78,9 +86,50 @@ public sealed partial class ShellView : UserControl
     {
         InitializeComponent();
         AccountsHeaderGrid.SizeChanged += OnAccountsHeaderSizeChanged;
+        ApiProvidersHeaderGrid.SizeChanged += OnSecondaryHeaderSizeChanged;
+        LaunchProfilesHeaderGrid.SizeChanged += OnSecondaryHeaderSizeChanged;
         TrySetTitleBarIcon();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+    }
+
+    private void OnShellZoomViewboxSizeChanged(object sender, SizeChangedEventArgs e) =>
+        UpdateShellZoomLayout(e.NewSize.Width, e.NewSize.Height);
+
+    private void OnShellPointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    {
+        if ((e.KeyModifiers & VirtualKeyModifiers.Control) == 0)
+        {
+            return;
+        }
+
+        var wheelDelta = e.GetCurrentPoint(ShellZoomViewbox).Properties.MouseWheelDelta;
+        if (wheelDelta == 0)
+        {
+            return;
+        }
+
+        _shellZoomFactor = Math.Clamp(
+            _shellZoomFactor * Math.Pow(ShellZoomPerWheelNotch, wheelDelta / 120d),
+            MinimumShellZoom,
+            MaximumShellZoom);
+        UpdateShellZoomLayout(ShellZoomViewbox.ActualWidth, ShellZoomViewbox.ActualHeight);
+        e.Handled = true;
+    }
+
+    private void UpdateShellZoomLayout(double viewportWidth, double viewportHeight)
+    {
+        if (viewportWidth <= 0 || viewportHeight <= 0)
+        {
+            return;
+        }
+
+        // Size the logical layout inversely to the Viewbox scale so the full
+        // window remains filled while all controls, text, and spacing zoom as
+        // one coherent surface. The existing inner ScrollViewers keep their
+        // own scrolling behavior at the resulting logical viewport size.
+        ShellRootGrid.Width = viewportWidth / _shellZoomFactor;
+        ShellRootGrid.Height = viewportHeight / _shellZoomFactor;
     }
 
     private bool _isAccountsHeaderCompact;
@@ -102,12 +151,12 @@ public sealed partial class ShellView : UserControl
             if (useSecondarySearchRow)
             {
                 AccountsToolbarPrimaryRow.Children.Remove(SearchBox);
-                AccountsToolbarSecondaryRow.Children.Insert(0, SearchBox);
+                AccountsToolbarSecondaryRow.Children.Add(SearchBox);
             }
             else
             {
                 AccountsToolbarSecondaryRow.Children.Remove(SearchBox);
-                AccountsToolbarPrimaryRow.Children.Insert(1, SearchBox);
+                AccountsToolbarPrimaryRow.Children.Insert(0, SearchBox);
             }
 
             _isSearchInSecondaryToolbarRow = useSecondarySearchRow;
@@ -133,10 +182,32 @@ public sealed partial class ShellView : UserControl
         AccountsToolbarSecondaryRow.HorizontalAlignment = useCompactLayout ? HorizontalAlignment.Left : HorizontalAlignment.Right;
     }
 
-    public void Initialize(ShellViewModel viewModel, AppPaths paths, Func<SettingsViewModel> settingsVmFactory)
+    private void OnSecondaryHeaderSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is not Grid headerGrid)
+        {
+            return;
+        }
+
+        var toolbar = ReferenceEquals(headerGrid, ApiProvidersHeaderGrid)
+            ? ApiProvidersToolbar
+            : LaunchProfilesToolbar;
+        var useCompactLayout = e.NewSize.Width < 1040;
+        headerGrid.ColumnDefinitions[0].Width = useCompactLayout
+            ? new GridLength(1, GridUnitType.Star)
+            : GridLength.Auto;
+        headerGrid.ColumnDefinitions[1].Width = useCompactLayout
+            ? new GridLength(0)
+            : new GridLength(1, GridUnitType.Star);
+        Grid.SetColumn(toolbar, useCompactLayout ? 0 : 1);
+        Grid.SetRow(toolbar, useCompactLayout ? 1 : 0);
+        toolbar.HorizontalAlignment = useCompactLayout ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+        toolbar.Margin = useCompactLayout ? new Thickness(0, 8, 0, 0) : new Thickness(0);
+    }
+
+    public void Initialize(ShellViewModel viewModel, Func<SettingsViewModel> settingsVmFactory)
     {
         ViewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
-        _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _settingsVmFactory = settingsVmFactory ?? throw new ArgumentNullException(nameof(settingsVmFactory));
     }
 
@@ -220,27 +291,15 @@ public sealed partial class ShellView : UserControl
         _totpWindow.Activate();
     }
 
-    private PrivateBrowserWindow? _browserWindow;
-
-    private void OnOpenBrowserClick(object sender, RoutedEventArgs e)
-    {
-        // Reaproveita a janela se já estiver aberta (evita duplicatas).
-        if (_browserWindow is not null)
-        {
-            _browserWindow.Activate();
-            return;
-        }
-
-        var paths = _paths ?? throw new InvalidOperationException("AppPaths não inicializado.");
-        _browserWindow = new PrivateBrowserWindow(paths);
-        _browserWindow.Closed += (_, _) => _browserWindow = null;
-        _browserWindow.Activate();
-    }
-
     private SettingsWindow? _settingsWindow;
     private int _settingsOpenTraceSequence;
 
     private void OnOpenSettingsClick(object sender, RoutedEventArgs e)
+    {
+        OpenSettingsFromTray();
+    }
+
+    public void OpenSettingsFromTray()
     {
         if (_settingsWindow is not null)
         {
@@ -253,6 +312,7 @@ public sealed partial class ShellView : UserControl
 
         var factory = _settingsVmFactory ?? throw new InvalidOperationException("SettingsViewModel factory não inicializada.");
         var vm = factory();
+        vm.TrayTooltipPresentationChanged += OnTrayTooltipPresentationChanged;
         StartupTracer.Instance.RecordMilestone($"{tracePrefix}:ViewModelCreated");
 
         vm.OnMigrationCompleted = () =>
@@ -267,12 +327,42 @@ public sealed partial class ShellView : UserControl
         };
 
         _settingsWindow = new SettingsWindow(vm, tracePrefix);
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Closed += (_, _) =>
+        {
+            vm.TrayTooltipPresentationChanged -= OnTrayTooltipPresentationChanged;
+            _settingsWindow = null;
+        };
         _settingsWindow.Activate();
     }
 
+    private void OnTrayTooltipPresentationChanged() => TrayTooltipSettingsChanged?.Invoke();
+
     private static AccountItemViewModel? ItemOf(object sender) =>
         (sender as FrameworkElement)?.DataContext as AccountItemViewModel;
+
+    private void QueueAccountMenuAction(object sender, Action<AccountItemViewModel> action)
+    {
+        if (ItemOf(sender) is { } item)
+        {
+            _pendingAccountMenuAction = () => action(item);
+        }
+    }
+
+    private void OnAccountActionFlyoutClosed(object sender, object e)
+    {
+        var action = _pendingAccountMenuAction;
+        _pendingAccountMenuAction = null;
+        if (action is not null)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => action());
+        }
+    }
+
+    private void OnMoveUpAccountClick(object sender, RoutedEventArgs e) =>
+        QueueAccountMenuAction(sender, item => ViewModel.Accounts.MoveUpCommand.Execute(item));
+
+    private void OnMoveDownAccountClick(object sender, RoutedEventArgs e) =>
+        QueueAccountMenuAction(sender, item => ViewModel.Accounts.MoveDownCommand.Execute(item));
 
     private void OnSwitchClick(object sender, RoutedEventArgs e)
     {
@@ -365,6 +455,36 @@ public sealed partial class ShellView : UserControl
     private static ApiProviderItemViewModel? ApiItemOf(object sender) =>
         (sender as FrameworkElement)?.DataContext as ApiProviderItemViewModel;
 
+    private static CodexLaunchProfileItemViewModel? LaunchProfileItemOf(object sender) =>
+        (sender as FrameworkElement)?.DataContext as CodexLaunchProfileItemViewModel;
+
+    private static CodexLaunchSession? LaunchSessionOf(object sender) =>
+        (sender as FrameworkElement)?.DataContext as CodexLaunchSession;
+
+    private void OnToggleLaunchProfileClick(object sender, RoutedEventArgs e)
+    {
+        if (LaunchProfileItemOf(sender) is { } item)
+            ViewModel.LaunchProfiles.ToggleProfileCommand.Execute(item);
+    }
+
+    private void OnEditLaunchProfileClick(object sender, RoutedEventArgs e)
+    {
+        if (LaunchProfileItemOf(sender) is { } item)
+            ViewModel.LaunchProfiles.EditCommand.Execute(item);
+    }
+
+    private void OnDeleteLaunchProfileClick(object sender, RoutedEventArgs e)
+    {
+        if (LaunchProfileItemOf(sender) is { } item)
+            ViewModel.LaunchProfiles.DeleteCommand.Execute(item);
+    }
+
+    private void OnStopLaunchSessionClick(object sender, RoutedEventArgs e)
+    {
+        if (LaunchSessionOf(sender) is { } session)
+            ViewModel.LaunchProfiles.StopSessionCommand.Execute(session);
+    }
+
     private void OnSwitchApiClick(object sender, RoutedEventArgs e)
     {
         if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.SwitchToApiProviderCommand.Execute(item);
@@ -385,64 +505,87 @@ public sealed partial class ShellView : UserControl
         if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.DiscoverModelsCommand.Execute(item);
     }
 
+    private void QueueProviderMenuAction(object sender, Action<ApiProviderItemViewModel> action)
+    {
+        if (ApiItemOf(sender) is not { } item)
+        {
+            return;
+        }
+
+        // MenuFlyoutItem.Click runs while its PopupHost is still active. Wait for
+        // the owning flyout's Closed event before opening windows or changing the
+        // collection whose template created that popup.
+        _pendingApiProviderMenuAction = () => action(item);
+    }
+
+    private void OnApiProviderActionFlyoutClosed(object sender, object e)
+    {
+        var action = _pendingApiProviderMenuAction;
+        _pendingApiProviderMenuAction = null;
+        if (action is not null)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => action());
+        }
+    }
+
     private void OnEditApiProviderClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.EditApiProviderCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.EditApiProviderCommand.Execute(item));
     }
 
     private void OnRefreshProviderBillingClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.RefreshBillingCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.RefreshBillingCommand.Execute(item));
     }
 
     private void OnCloneApiProviderClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.CloneProfileCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.CloneProfileCommand.Execute(item));
     }
 
     private void OnCloneWithNewKeyClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.CloneWithNewKeyCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.CloneWithNewKeyCommand.Execute(item));
     }
 
     private void OnAddAnotherModelClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.AddAnotherModelCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.AddAnotherModelCommand.Execute(item));
     }
 
     private void OnRetestCompatibilityClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.RetestCompatibilityCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.RetestCompatibilityCommand.Execute(item));
     }
 
     private void OnExportDiagnosticsClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.ExportDiagnosticsCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.ExportDiagnosticsCommand.Execute(item));
     }
 
     private void OnRotateApiKeyClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.RotateApiKeyCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.RotateApiKeyCommand.Execute(item));
     }
 
     private void OnRemoveApiCredentialClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.RemoveCredentialCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.RemoveCredentialCommand.Execute(item));
     }
 
     private void OnRemoveApiProviderClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.RemoveApiProviderCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.RemoveApiProviderCommand.Execute(item));
     }
 
     private void OnMoveUpApiProviderClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.MoveUpCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.MoveUpCommand.Execute(item));
     }
 
     private void OnMoveDownApiProviderClick(object sender, RoutedEventArgs e)
     {
-        if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.MoveDownCommand.Execute(item);
+        QueueProviderMenuAction(sender, item => ViewModel.ApiProviders.MoveDownCommand.Execute(item));
     }
 
     private void OnApiProvidersReordered(object sender, DragItemsCompletedEventArgs e)
@@ -460,5 +603,10 @@ public sealed partial class ShellView : UserControl
     private void OnSelectApiProvidersTabClick(object sender, RoutedEventArgs e)
     {
         ViewModel.SelectedTab = 1;
+    }
+
+    private void OnSelectLaunchProfilesTabClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel.SelectedTab = 2;
     }
 }

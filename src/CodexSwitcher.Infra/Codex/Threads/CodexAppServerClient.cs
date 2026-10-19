@@ -127,9 +127,36 @@ public sealed class CodexAppServerClient : ICodexAppServerClient
         if (_process is not null)
             throw new InvalidOperationException("Client has already been started.");
 
-        _process = new Process { StartInfo = _startInfo };
-        _process.Start();
-        _registry?.RegisterOwnedProcess(_process.Id);
+        var process = new Process { StartInfo = _startInfo };
+        try
+        {
+            if (_registry is null)
+            {
+                process.Start();
+            }
+            else
+            {
+                using (await _registry.AcquireProcessLifecycleLeaseAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    process.Start();
+                    _registry.RegisterOwnedProcess(process);
+                }
+            }
+        }
+        catch
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch { }
+            process.Dispose();
+            throw;
+        }
+        _process = process;
 
         _stdin = _process.StandardInput;
         _stdout = _process.StandardOutput;

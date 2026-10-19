@@ -54,6 +54,7 @@ using System.Runtime.CompilerServices;
 using CodexSwitcher.App.Localization;
 using CodexSwitcher.App.Services;
 using Microsoft.UI.Xaml.Controls;
+using System.Collections.ObjectModel;
 
 using CodexSwitcher.App.Dialogs;
 
@@ -62,6 +63,14 @@ namespace CodexSwitcher.App.Features.Settings;
 public sealed class SettingsViewModel : INotifyPropertyChanged
 {
     private static readonly int[] NotificationAutoDismissSecondOptions = [3, 5, 10, 15, 30, 60];
+    private static readonly IReadOnlyList<string> GlobalHotkeyKeyOptions =
+        Enumerable.Range('A', 26).Select(value => ((char)value).ToString()).ToArray();
+    private static readonly IReadOnlyList<string> GlobalHotkeyModifierOptions =
+        ["Ctrl+Alt+Shift", "Ctrl+Alt", "Ctrl+Shift", "Alt+Shift"];
+    private static readonly IReadOnlyList<string> QuickSwitchModifierOptions =
+        ["Ctrl+Alt", "Ctrl+Shift", "Alt+Shift", "Ctrl+Alt+Shift"];
+    private static readonly IReadOnlyList<string> QuickSwitchKeyOptions =
+        Enumerable.Range(1, 9).Select(value => value.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray();
     private int _runtimeDiagnosticsGeneration;
     private int _catalogDiagnosticsGeneration;
     private int _verificationStatusGeneration;
@@ -75,18 +84,52 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     private readonly IWindowsUserVerificationService _verificationService;
     private readonly ITotpRevealAuthorizationService _authService;
     private readonly ISettingsDialogService _ui;
+    private readonly IStartupRegistrationService? _startupRegistrationService;
+    private readonly IGlobalHotkeyService? _globalHotkeyService;
+    private readonly IProfileStore? _profileStore;
+    private readonly IApiProviderStore? _apiProviderStore;
     private readonly IProviderCatalogService? _catalogService;
     private readonly IKeyBrokerInstaller? _brokerInstaller;
+
+    private IReadOnlyList<QuickSwitchTargetChoice> _quickSwitchTargetChoices =
+        [new(string.Empty, "Not assigned")];
+    private bool _quickSwitchTargetsInitialized;
+    public ObservableCollection<QuickSwitchHotkeyRowViewModel> QuickSwitchHotkeyRows { get; } = [];
 
     public Strings Loc => Strings.Current;
 
     public Action? OnMigrationCompleted { get; set; }
+    public event Action? TrayTooltipPresentationChanged;
+
+    public IReadOnlyList<TrayTooltipModeOption> TrayTooltipModeOptions { get; } =
+    [
+        new(TrayTooltipMode.ApplicationName, Strings.Current.TrayTooltipAppNameOnly),
+        new(TrayTooltipMode.ActiveTarget, Strings.Current.TrayTooltipWithTarget),
+        new(TrayTooltipMode.ActiveTargetAndCachedQuota, Strings.Current.TrayTooltipWithTargetAndQuota),
+    ];
+
+    public TrayTooltipMode TrayTooltipPresentationMode
+    {
+        get => _settings.TrayTooltipMode;
+        set
+        {
+            if (_settings.TrayTooltipMode == value || !Enum.IsDefined(value))
+            {
+                return;
+            }
+
+            _settings.TrayTooltipMode = value;
+            _settingsStore.Save(_settings);
+            OnPropertyChanged();
+            TrayTooltipPresentationChanged?.Invoke();
+        }
+    }
 
     public string AppName => "Codex Switchboard";
     public string AppVersion =>
         typeof(SettingsViewModel).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
         ?? typeof(SettingsViewModel).Assembly.GetName().Version?.ToString(3)
-        ?? "0.2.2";
+        ?? "0.3.0";
     public string RepositoryUrl => "https://github.com/MalenkiySolovey/codex-switchboard";
     public string LicenseNotice => "MIT License • Copyright (c) 2026";
     public string IndependenceStatement => Loc.IndependenceNotice;
@@ -189,6 +232,574 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
             }
         }
     }
+
+    public bool StartWithWindows
+    {
+        get => _startupRegistrationService?.IsEnabled ?? false;
+        set
+        {
+            if (_startupRegistrationService is null || _startupRegistrationService.IsEnabled == value)
+            {
+                return;
+            }
+
+            try
+            {
+                _startupRegistrationService.SetEnabled(value);
+                StatusMessage = value
+                    ? "Codex Switchboard will start minimized to the system tray when you sign in to Windows."
+                    : "Codex Switchboard will no longer start automatically when you sign in.";
+                StatusSeverity = InfoBarSeverity.Success;
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Could not update the Windows startup shortcut: {ex.Message}";
+                StatusSeverity = InfoBarSeverity.Error;
+            }
+
+            OnPropertyChanged();
+        }
+    }
+
+    public bool GlobalHotkeyEnabled
+    {
+        get => _settings.GlobalHotkeyEnabled;
+        set
+        {
+            if (_globalHotkeyService is null)
+            {
+                StatusMessage = "Global hotkey support is not available in this session.";
+                StatusSeverity = InfoBarSeverity.Warning;
+                return;
+            }
+
+            if (_settings.GlobalHotkeyEnabled == value && _globalHotkeyService.IsEnabled == value)
+            {
+                return;
+            }
+
+            try
+            {
+                if (value && !_globalHotkeyService.IsEnabled)
+                {
+                    _globalHotkeyService.SetEnabled(true);
+                }
+                else if (!value && _globalHotkeyService.IsEnabled)
+                {
+                    _globalHotkeyService.SetEnabled(false);
+                }
+
+                _settings.GlobalHotkeyEnabled = value;
+                _settingsStore.Save(_settings);
+                StatusMessage = value
+                    ? $"{GlobalHotkeyLabel} will bring Codex Switchboard to the foreground."
+                    : "The Switchboard global hotkey has been disabled.";
+                StatusSeverity = InfoBarSeverity.Success;
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = ex.Message;
+                StatusSeverity = InfoBarSeverity.Warning;
+            }
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(GlobalHotkeyAvailabilityText));
+        }
+    }
+
+    public IReadOnlyList<string> GlobalHotkeyKeyChoices => GlobalHotkeyKeyOptions;
+    public IReadOnlyList<string> GlobalHotkeyModifierChoices => GlobalHotkeyModifierOptions;
+
+    public string GlobalHotkeyKey
+    {
+        get => NormalizeGlobalHotkeyKey(_settings.GlobalHotkeyKey);
+        set => ApplyGlobalHotkeyBinding(GlobalHotkeyModifiers, NormalizeGlobalHotkeyKey(value));
+    }
+
+    public string GlobalHotkeyModifiers
+    {
+        get => NormalizeGlobalHotkeyModifiers(_settings.GlobalHotkeyModifiers);
+        set => ApplyGlobalHotkeyBinding(NormalizeGlobalHotkeyModifiers(value), GlobalHotkeyKey);
+    }
+
+    public string GlobalHotkeyLabel => GlobalHotkeyLabelFor(GlobalHotkeyModifiers, GlobalHotkeyKey);
+    public string GlobalHotkeyHeader => $"Global shortcut: {GlobalHotkeyLabel}";
+
+    public string GlobalHotkeyAvailabilityText => !_settings.GlobalHotkeyEnabled
+        ? $"Optional shortcut {GlobalHotkeyLabel}; currently disabled."
+        : _globalHotkeyService?.IsEnabled == true
+            ? $"Active while Switchboard is running. {GlobalHotkeyLabel} brings it to the foreground."
+            : $"Enabled in settings, but {GlobalHotkeyLabel} is not registered in Windows; turn it off or choose another binding if this one is already in use.";
+
+    public bool QuickSwitchHotkeysEnabled
+    {
+        get => _settings.QuickSwitchHotkeysEnabled;
+        set
+        {
+            if (_settings.QuickSwitchHotkeysEnabled == value)
+            {
+                return;
+            }
+
+            var previous = _settings.QuickSwitchHotkeysEnabled;
+            try
+            {
+                _settings.QuickSwitchHotkeysEnabled = value;
+                _settingsStore.Save(_settings);
+                RefreshQuickSwitchHotkeyStatus();
+                StatusMessage = value
+                    ? QuickSwitchStatusText
+                    : "Direct account/provider shortcuts have been disabled.";
+                StatusSeverity = QuickSwitchStatusText.Contains("need attention", StringComparison.Ordinal)
+                    ? InfoBarSeverity.Warning
+                    : InfoBarSeverity.Success;
+            }
+            catch (Exception ex)
+            {
+                _settings.QuickSwitchHotkeysEnabled = previous;
+                RefreshQuickSwitchHotkeyStatus();
+                StatusMessage = $"Could not update direct-switch shortcuts: {ex.Message}";
+                StatusSeverity = InfoBarSeverity.Error;
+            }
+
+            OnPropertyChanged();
+        }
+    }
+
+    public string QuickSwitchStatusText { get; private set; } = "Direct account/provider shortcuts are disabled.";
+
+    public IReadOnlyList<string> QuickSwitchOverlayModifierChoices => GlobalHotkeyModifierOptions;
+    public IReadOnlyList<string> QuickSwitchOverlayKeyChoices => GlobalHotkeyKeyOptions;
+
+    public bool QuickSwitchOverlayEnabled
+    {
+        get => _settings.QuickSwitchOverlayEnabled;
+        set
+        {
+            if (_settings.QuickSwitchOverlayEnabled == value && _globalHotkeyService?.IsQuickSwitchOverlayEnabled == value)
+            {
+                return;
+            }
+
+            if (_globalHotkeyService is null)
+            {
+                StatusMessage = "Quick-switch overlay shortcuts are not available in this session.";
+                StatusSeverity = InfoBarSeverity.Warning;
+                return;
+            }
+
+            var previous = _settings.QuickSwitchOverlayEnabled;
+            try
+            {
+                _globalHotkeyService.SetQuickSwitchOverlayEnabled(value);
+                _settings.QuickSwitchOverlayEnabled = value;
+                _settingsStore.Save(_settings);
+                StatusMessage = value
+                    ? Loc.QuickSwitchOverlayEnabledMessage(QuickSwitchOverlayLabel)
+                    : Loc.QuickSwitchOverlayDisabledMessage;
+                StatusSeverity = InfoBarSeverity.Success;
+            }
+            catch (Exception ex)
+            {
+                _settings.QuickSwitchOverlayEnabled = previous;
+                try
+                {
+                    if (_globalHotkeyService.IsQuickSwitchOverlayEnabled != previous)
+                    {
+                        _globalHotkeyService.SetQuickSwitchOverlayEnabled(previous);
+                    }
+                }
+                catch (Exception restoreException)
+                {
+                    StatusMessage = $"{ex.Message} The previous overlay shortcut state could not be restored: {restoreException.Message}";
+                    StatusSeverity = InfoBarSeverity.Error;
+                    NotifyQuickSwitchOverlayChanged();
+                    return;
+                }
+
+                StatusMessage = ex.Message;
+                StatusSeverity = InfoBarSeverity.Warning;
+            }
+
+            NotifyQuickSwitchOverlayChanged();
+        }
+    }
+
+    public string QuickSwitchOverlayModifiers
+    {
+        get => NormalizeGlobalHotkeyModifiers(_settings.QuickSwitchOverlayModifiers);
+        set => ApplyQuickSwitchOverlayBinding(NormalizeGlobalHotkeyModifiers(value), QuickSwitchOverlayKey);
+    }
+
+    public string QuickSwitchOverlayKey
+    {
+        get => NormalizeGlobalHotkeyKey(_settings.QuickSwitchOverlayKey);
+        set => ApplyQuickSwitchOverlayBinding(QuickSwitchOverlayModifiers, NormalizeGlobalHotkeyKey(value));
+    }
+
+    public string QuickSwitchOverlayLabel => GlobalHotkeyLabelFor(QuickSwitchOverlayModifiers, QuickSwitchOverlayKey);
+
+    public string QuickSwitchOverlayHeader => Loc.QuickSwitchOverlayHeader(QuickSwitchOverlayLabel);
+
+    public string QuickSwitchOverlayAvailabilityText => !_settings.QuickSwitchOverlayEnabled
+        ? Loc.QuickSwitchOverlayDisabled(QuickSwitchOverlayLabel)
+        : _globalHotkeyService?.IsQuickSwitchOverlayEnabled == true
+            ? Loc.QuickSwitchOverlayActive(QuickSwitchOverlayLabel)
+            : Loc.QuickSwitchOverlayUnavailable(QuickSwitchOverlayLabel);
+
+    private void ApplyQuickSwitchOverlayBinding(string nextModifiers, string nextKey)
+    {
+        var previousModifiers = _settings.QuickSwitchOverlayModifiers;
+        var previousKey = _settings.QuickSwitchOverlayKey;
+        var normalizedPreviousModifiers = NormalizeGlobalHotkeyModifiers(previousModifiers);
+        var normalizedPreviousKey = NormalizeGlobalHotkeyKey(previousKey);
+        if (string.Equals(normalizedPreviousModifiers, nextModifiers, StringComparison.Ordinal) &&
+            string.Equals(normalizedPreviousKey, nextKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var serviceBindingChanged = false;
+        try
+        {
+            if (_globalHotkeyService is not null)
+            {
+                _globalHotkeyService.SetQuickSwitchOverlayBinding(nextModifiers, nextKey);
+                serviceBindingChanged = true;
+            }
+
+            _settings.QuickSwitchOverlayModifiers = nextModifiers;
+            _settings.QuickSwitchOverlayKey = nextKey;
+            _settingsStore.Save(_settings);
+            StatusMessage = Loc.QuickSwitchOverlayBindingSaved(QuickSwitchOverlayLabelFor(nextModifiers, nextKey));
+            StatusSeverity = InfoBarSeverity.Success;
+        }
+        catch (Exception ex)
+        {
+            _settings.QuickSwitchOverlayModifiers = previousModifiers;
+            _settings.QuickSwitchOverlayKey = previousKey;
+            if (serviceBindingChanged && _globalHotkeyService is not null)
+            {
+                try
+                {
+                    _globalHotkeyService.SetQuickSwitchOverlayBinding(normalizedPreviousModifiers, normalizedPreviousKey);
+                }
+                catch (Exception restoreException)
+                {
+                    StatusMessage = $"{ex.Message} The previous overlay shortcut could not be restored: {restoreException.Message}";
+                    StatusSeverity = InfoBarSeverity.Error;
+                    NotifyQuickSwitchOverlayChanged();
+                    return;
+                }
+            }
+
+            StatusMessage = ex.Message;
+            StatusSeverity = InfoBarSeverity.Warning;
+        }
+
+        NotifyQuickSwitchOverlayChanged();
+    }
+
+    private void NotifyQuickSwitchOverlayChanged()
+    {
+        OnPropertyChanged(nameof(QuickSwitchOverlayEnabled));
+        OnPropertyChanged(nameof(QuickSwitchOverlayModifiers));
+        OnPropertyChanged(nameof(QuickSwitchOverlayKey));
+        OnPropertyChanged(nameof(QuickSwitchOverlayLabel));
+        OnPropertyChanged(nameof(QuickSwitchOverlayHeader));
+        OnPropertyChanged(nameof(QuickSwitchOverlayAvailabilityText));
+    }
+
+    private static string QuickSwitchOverlayLabelFor(string modifiers, string key) => $"{modifiers}+{key}";
+
+    private List<QuickSwitchTargetChoice> LoadQuickSwitchTargetChoices()
+    {
+        var choices = new List<QuickSwitchTargetChoice> { new(string.Empty, "Not assigned") };
+        try
+        {
+            foreach (var profile in (_profileStore?.LoadAll() ?? [])
+                         .OrderBy(profile => profile.SortOrder)
+                         .ThenBy(profile => profile.DisplayName, StringComparer.OrdinalIgnoreCase))
+            {
+                var label = string.IsNullOrWhiteSpace(profile.DisplayName)
+                    ? profile.AccountEmail ?? "Unnamed account"
+                    : profile.DisplayName;
+                choices.Add(new(QuickSwitchTargetKey(QuickSwitchTargetKind.Account, profile.Id), $"Account — {label}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[QuickSwitch] Account targets could not be loaded: {ex.GetType().Name}");
+        }
+
+        try
+        {
+            foreach (var provider in (_apiProviderStore?.GetAll() ?? [])
+                         .OrderBy(provider => provider.SortOrder)
+                         .ThenBy(provider => provider.Nickname, StringComparer.OrdinalIgnoreCase))
+            {
+                var label = string.IsNullOrWhiteSpace(provider.Nickname) ? provider.BaseUrl : provider.Nickname;
+                choices.Add(new(QuickSwitchTargetKey(QuickSwitchTargetKind.ApiProvider, provider.Id), $"API provider — {label}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[QuickSwitch] API-provider targets could not be loaded: {ex.GetType().Name}");
+        }
+
+        return choices;
+    }
+
+    private void InitializeQuickSwitchHotkeyRows()
+    {
+        var savedAssignments = _settings.QuickSwitchHotkeyAssignments ?? [];
+        var normalizedAssignments = new List<QuickSwitchHotkeyAssignment>(9);
+        for (var slot = 1; slot <= 9; slot++)
+        {
+            var assignment = savedAssignments.FirstOrDefault(candidate => candidate.SlotNumber == slot)
+                ?? new QuickSwitchHotkeyAssignment { SlotNumber = slot, Key = slot.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            assignment.SlotNumber = slot;
+            assignment.Modifiers = NormalizeQuickSwitchModifiers(assignment.Modifiers);
+            assignment.Key = NormalizeQuickSwitchKey(assignment.Key, slot);
+
+            var targetKey = assignment.TargetKind is { } kind && assignment.TargetId is { } id
+                ? QuickSwitchTargetKey(kind, id)
+                : string.Empty;
+            if (!_quickSwitchTargetChoices.Any(choice => choice.Key.Equals(targetKey, StringComparison.Ordinal)))
+            {
+                targetKey = string.Empty;
+                assignment.TargetKind = null;
+                assignment.TargetId = null;
+            }
+
+            normalizedAssignments.Add(assignment);
+            var row = new QuickSwitchHotkeyRowViewModel(
+                slot,
+                targetKey,
+                assignment.Modifiers,
+                assignment.Key,
+                _quickSwitchTargetChoices,
+                QuickSwitchModifierOptions,
+                QuickSwitchKeyOptions);
+            row.BindingChanged += OnQuickSwitchRowBindingChanged;
+            QuickSwitchHotkeyRows.Add(row);
+        }
+
+        _settings.QuickSwitchHotkeyAssignments = normalizedAssignments;
+    }
+
+    private void OnQuickSwitchRowBindingChanged(object? sender, EventArgs e)
+    {
+        if (sender is not QuickSwitchHotkeyRowViewModel row)
+        {
+            return;
+        }
+
+        var assignment = _settings.QuickSwitchHotkeyAssignments.First(item => item.SlotNumber == row.SlotNumber);
+        var previous = new QuickSwitchHotkeyAssignment
+        {
+            SlotNumber = assignment.SlotNumber,
+            Modifiers = assignment.Modifiers,
+            Key = assignment.Key,
+            TargetKind = assignment.TargetKind,
+            TargetId = assignment.TargetId,
+        };
+
+        try
+        {
+            assignment.Modifiers = NormalizeQuickSwitchModifiers(row.Modifiers);
+            assignment.Key = NormalizeQuickSwitchKey(row.Key, row.SlotNumber);
+            if (string.IsNullOrWhiteSpace(row.SelectedTargetKey))
+            {
+                assignment.TargetKind = null;
+                assignment.TargetId = null;
+            }
+            else if (!TryParseQuickSwitchTargetKey(row.SelectedTargetKey, out var kind, out var targetId) ||
+                     !_quickSwitchTargetChoices.Any(choice => choice.Key.Equals(row.SelectedTargetKey, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException("Choose an account or API provider from the target list.");
+            }
+            else
+            {
+                assignment.TargetKind = kind;
+                assignment.TargetId = targetId;
+            }
+
+            _settingsStore.Save(_settings);
+            RefreshQuickSwitchHotkeyStatus();
+            var slotStatus = row.RegistrationStatus;
+            StatusMessage = slotStatus.StartsWith("Conflict:", StringComparison.Ordinal)
+                ? $"The assignment was saved, but {slotStatus}"
+                : $"Shortcut {row.SlotNumber} was saved. {slotStatus}";
+            StatusSeverity = slotStatus.StartsWith("Conflict:", StringComparison.Ordinal)
+                ? InfoBarSeverity.Warning
+                : InfoBarSeverity.Success;
+        }
+        catch (Exception ex)
+        {
+            assignment.Modifiers = previous.Modifiers;
+            assignment.Key = previous.Key;
+            assignment.TargetKind = previous.TargetKind;
+            assignment.TargetId = previous.TargetId;
+            row.RestoreBinding(
+                previous.TargetKind is { } kind && previous.TargetId is { } id
+                    ? QuickSwitchTargetKey(kind, id)
+                    : string.Empty,
+                previous.Modifiers,
+                previous.Key);
+            RefreshQuickSwitchHotkeyStatus();
+            StatusMessage = $"Could not save shortcut {row.SlotNumber}: {ex.Message}";
+            StatusSeverity = InfoBarSeverity.Error;
+        }
+    }
+
+    private void RefreshQuickSwitchHotkeyStatus()
+    {
+        IReadOnlyList<QuickSwitchHotkeyRegistrationStatus> statuses;
+        try
+        {
+            statuses = _globalHotkeyService?.RefreshQuickSwitchHotkeys() ?? [];
+        }
+        catch (Exception ex)
+        {
+            statuses = [];
+            QuickSwitchStatusText = $"Direct shortcuts could not be refreshed: {ex.Message}";
+            OnPropertyChanged(nameof(QuickSwitchStatusText));
+            return;
+        }
+
+        foreach (var row in QuickSwitchHotkeyRows)
+        {
+            row.SetRegistrationStatus(statuses.FirstOrDefault(status => status.SlotNumber == row.SlotNumber)?.Message
+                ?? (!_settings.QuickSwitchHotkeysEnabled ? "Disabled" : "Not registered"));
+        }
+
+        if (!_settings.QuickSwitchHotkeysEnabled)
+        {
+            QuickSwitchStatusText = "Direct account/provider shortcuts are disabled.";
+        }
+        else
+        {
+            var active = statuses.Count(status => status.IsRegistered);
+            var conflicts = statuses.Count(status => status.Message.StartsWith("Conflict:", StringComparison.Ordinal));
+            var needsAttention = statuses.Count(status =>
+                !status.IsRegistered && status.Message is not ("Disabled" or "Not assigned"));
+            QuickSwitchStatusText = active == 0
+                ? conflicts > 0
+                    ? $"No direct shortcuts are active; {conflicts} binding(s) need attention."
+                    : needsAttention > 0
+                        ? "No direct shortcuts are active; review the status shown for each assigned slot."
+                        : "No direct shortcuts are active. Assign a target to a slot."
+                : conflicts > 0
+                    ? $"{active} direct shortcut(s) active; {conflicts} binding(s) need attention."
+                    : needsAttention > 0
+                        ? $"{active} direct shortcut(s) active; review the status shown for other assigned slots."
+                    : $"{active} direct shortcut(s) active while Switchboard is running.";
+        }
+
+        OnPropertyChanged(nameof(QuickSwitchStatusText));
+    }
+
+    private static string QuickSwitchTargetKey(QuickSwitchTargetKind kind, Guid id) => $"{kind}:{id:N}";
+
+    private static bool TryParseQuickSwitchTargetKey(string? key, out QuickSwitchTargetKind kind, out Guid id)
+    {
+        kind = default;
+        id = Guid.Empty;
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        var separator = key.IndexOf(':');
+        if (separator <= 0 || separator >= key.Length - 1 || !Guid.TryParseExact(key[(separator + 1)..], "N", out id))
+        {
+            return false;
+        }
+
+        return Enum.TryParse(key[..separator], ignoreCase: true, out kind);
+    }
+
+    private static string NormalizeQuickSwitchModifiers(string? modifiers) => QuickSwitchModifierOptions.Contains(modifiers ?? string.Empty)
+        ? modifiers!
+        : "Ctrl+Alt";
+
+    private static string NormalizeQuickSwitchKey(string? key, int slot) => QuickSwitchKeyOptions.Contains(key ?? string.Empty)
+        ? key!
+        : slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private void ApplyGlobalHotkeyBinding(string nextModifiers, string nextKey)
+    {
+        var previousModifiers = _settings.GlobalHotkeyModifiers;
+        var previousKey = _settings.GlobalHotkeyKey;
+        var normalizedPreviousModifiers = NormalizeGlobalHotkeyModifiers(previousModifiers);
+        var normalizedPreviousKey = NormalizeGlobalHotkeyKey(previousKey);
+        if (string.Equals(normalizedPreviousModifiers, nextModifiers, StringComparison.Ordinal) &&
+            string.Equals(normalizedPreviousKey, nextKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var serviceBindingChanged = false;
+        try
+        {
+            if (_globalHotkeyService is not null)
+            {
+                _globalHotkeyService.SetHotkeyBinding(nextModifiers, nextKey);
+                serviceBindingChanged = true;
+            }
+
+            _settings.GlobalHotkeyModifiers = nextModifiers;
+            _settings.GlobalHotkeyKey = nextKey;
+            _settingsStore.Save(_settings);
+            StatusMessage = $"The global shortcut is now {GlobalHotkeyLabelFor(nextModifiers, nextKey)}.";
+            StatusSeverity = InfoBarSeverity.Success;
+        }
+        catch (Exception ex)
+        {
+            _settings.GlobalHotkeyModifiers = previousModifiers;
+            _settings.GlobalHotkeyKey = previousKey;
+            if (serviceBindingChanged && _globalHotkeyService is not null)
+            {
+                try
+                {
+                    _globalHotkeyService.SetHotkeyBinding(normalizedPreviousModifiers, normalizedPreviousKey);
+                }
+                catch (Exception restoreException)
+                {
+                    StatusMessage = $"{ex.Message} The previous shortcut could not be restored: {restoreException.Message}";
+                    StatusSeverity = InfoBarSeverity.Error;
+                    NotifyGlobalHotkeyBindingChanged();
+                    return;
+                }
+            }
+
+            StatusMessage = ex.Message;
+            StatusSeverity = InfoBarSeverity.Warning;
+        }
+
+        NotifyGlobalHotkeyBindingChanged();
+    }
+
+    private void NotifyGlobalHotkeyBindingChanged()
+    {
+        OnPropertyChanged(nameof(GlobalHotkeyKey));
+        OnPropertyChanged(nameof(GlobalHotkeyModifiers));
+        OnPropertyChanged(nameof(GlobalHotkeyLabel));
+        OnPropertyChanged(nameof(GlobalHotkeyHeader));
+        OnPropertyChanged(nameof(GlobalHotkeyAvailabilityText));
+    }
+
+    private static string NormalizeGlobalHotkeyKey(string? key) =>
+        key is { Length: 1 } && char.IsAsciiLetter(key[0])
+            ? char.ToUpperInvariant(key[0]).ToString()
+            : "S";
+
+    private static string NormalizeGlobalHotkeyModifiers(string? modifiers) => modifiers switch
+    {
+        "Ctrl+Alt" => "Ctrl+Alt",
+        "Ctrl+Shift" => "Ctrl+Shift",
+        "Alt+Shift" => "Alt+Shift",
+        _ => "Ctrl+Alt+Shift",
+    };
+
+    private static string GlobalHotkeyLabelFor(string modifiers, string key) => $"{modifiers}+{key}";
 
     public bool ShowInformationalNotifications
     {
@@ -430,7 +1041,11 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         ITotpRevealAuthorizationService authService,
         ISettingsDialogService ui,
         IProviderCatalogService? catalogService = null,
-        IKeyBrokerInstaller? brokerInstaller = null)
+        IKeyBrokerInstaller? brokerInstaller = null,
+        IStartupRegistrationService? startupRegistrationService = null,
+        IGlobalHotkeyService? globalHotkeyService = null,
+        IProfileStore? profileStore = null,
+        IApiProviderStore? apiProviderStore = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
@@ -441,6 +1056,10 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         _verificationService = verificationService ?? throw new ArgumentNullException(nameof(verificationService));
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
         _ui = ui ?? throw new ArgumentNullException(nameof(ui));
+        _startupRegistrationService = startupRegistrationService;
+        _globalHotkeyService = globalHotkeyService;
+        _profileStore = profileStore;
+        _apiProviderStore = apiProviderStore;
         _catalogService = catalogService;
         _brokerInstaller = brokerInstaller;
 
@@ -491,6 +1110,14 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
             CatalogVersion = snapshot.CatalogVersion;
             CatalogSource = snapshot.CatalogSource;
             KeyBrokerStatus = snapshot.KeyBrokerStatus;
+        }
+
+        if (!_quickSwitchTargetsInitialized)
+        {
+            _quickSwitchTargetChoices = snapshot.QuickSwitchTargetChoices;
+            InitializeQuickSwitchHotkeyRows();
+            RefreshQuickSwitchHotkeyStatus();
+            _quickSwitchTargetsInitialized = true;
         }
 
         await RefreshVerificationMethodsStatusAsync();
@@ -547,7 +1174,13 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
             // The broker status is informational; its failure does not block Settings.
         }
 
-        return new DeferredDiagnosticsSnapshot(candidate, canMigrate, catalogVersion, catalogSource, keyBrokerStatus);
+        return new DeferredDiagnosticsSnapshot(
+            candidate,
+            canMigrate,
+            catalogVersion,
+            catalogSource,
+            keyBrokerStatus,
+            LoadQuickSwitchTargetChoices());
     }
 
     private sealed record DeferredDiagnosticsSnapshot(
@@ -555,7 +1188,8 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         bool CanMigrateLegacy,
         string CatalogVersion,
         string CatalogSource,
-        string KeyBrokerStatus);
+        string KeyBrokerStatus,
+        IReadOnlyList<QuickSwitchTargetChoice> QuickSwitchTargetChoices);
 
     public void RefreshDiagnostics()
     {
@@ -722,3 +1356,5 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         return true;
     }
 }
+
+public sealed record TrayTooltipModeOption(TrayTooltipMode Value, string Label);

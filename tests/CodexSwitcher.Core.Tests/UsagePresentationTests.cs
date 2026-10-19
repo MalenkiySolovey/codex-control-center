@@ -134,7 +134,7 @@ public sealed class UsagePresentationTests
     }
 
     [Fact]
-    public void MapWindows_ClampsPercentagesBetweenZeroAnd100()
+    public void MapWindows_LeavesInvalidPercentagesUnknown()
     {
         var raw = new List<UsageWindow>
         {
@@ -146,12 +146,12 @@ public sealed class UsagePresentationTests
         var underflow = mapped.Single(w => w.Slot == "underflow");
         var overflow = mapped.Single(w => w.Slot == "overflow");
 
-        Assert.Equal(0.0, underflow.UsedPercent);
-        Assert.Equal(100.0, underflow.RemainingPercent);
+        Assert.Null(underflow.UsedPercent);
+        Assert.Null(underflow.RemainingPercent);
 
-        Assert.Equal(100.0, overflow.UsedPercent);
-        Assert.Equal(0.0, overflow.RemainingPercent);
-        Assert.True(overflow.IsExhausted);
+        Assert.Null(overflow.UsedPercent);
+        Assert.Null(overflow.RemainingPercent);
+        Assert.False(overflow.IsExhausted);
     }
 
     [Fact]

@@ -13,6 +13,13 @@ public interface ICodexRuntimeModelCatalogVerifier
         string expectedSelectedModel,
         IReadOnlyCollection<string> expectedEnabledModels,
         CancellationToken cancellationToken = default);
+
+    Task<CodexRuntimeModelCatalogVerification> VerifyAtHomeAsync(
+        string codexHome,
+        string expectedProvider,
+        string expectedSelectedModel,
+        IReadOnlyCollection<string> expectedEnabledModels,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record CodexRuntimeModelCatalogVerification(

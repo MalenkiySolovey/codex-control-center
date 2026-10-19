@@ -10,7 +10,7 @@
 ![UI](https://img.shields.io/badge/UI-WinUI%203%20Fluent-2E9BFF)
 ![Tests](https://img.shields.io/badge/tests-966%20passing-3DDC84)
 ![Architecture](https://img.shields.io/badge/architecture-x64-blue)
-![Release](https://img.shields.io/badge/release-v0.2.2-brightgreen)
+![Release](https://img.shields.io/badge/release-v0.3.0-brightgreen)
 
 ---
 
@@ -211,9 +211,30 @@ All configuration, credentials, and cache files reside strictly on your local co
 
 Pre-built Windows x64 binaries are available under [GitHub Releases](../../releases).
 
-1. Download **`CodexSwitchboard-0.2.2-win-x64.zip`** from the latest release.
+1. Download **`CodexSwitchboard-0.3.0-win-x64.zip`** from the latest release.
 2. Extract the archive to any folder.
 3. Run **`CodexSwitchboard.exe`**.
+
+---
+
+## Read-only CLI (preview)
+
+The repository includes a small Windows command-line client for inspecting local Switchboard state. From a source checkout, run:
+
+```powershell
+dotnet run --project src/CodexSwitcher.Cli -- list
+dotnet run --project src/CodexSwitcher.Cli -- current --json
+dotnet run --project src/CodexSwitcher.Cli -- status --json
+dotnet run --project src/CodexSwitcher.Cli -- export
+dotnet run --project src/CodexSwitcher.Cli -- fleet --json
+dotnet run --project src/CodexSwitcher.Cli -- schema
+dotnet run --project src/CodexSwitcher.Cli -- schema fleet
+dotnet run --project src/CodexSwitcher.Cli -- completion powershell
+```
+
+`export` writes a redacted JSON snapshot to standard output; it does not create a file. Its versioned contract is [CLI export JSON Schema v1](schemas/codex-switchboard-cli-export-v1.schema.json), also available from the packaged CLI via `codex-switchboard schema`. `fleet` reports saved ChatGPT accounts' cached quota/status only; it never refreshes the cache or makes network requests. Its contract is [CLI fleet JSON Schema v1](schemas/codex-switchboard-cli-fleet-v1.schema.json), emitted by `codex-switchboard schema fleet`. Both commands omit emails, internal identifiers, and secrets. The CLI reads local profile metadata and the non-sensitive usage cache, never credential storage, and does not change routing. Shell completion scripts are available with `codex-switchboard completion powershell`, `codex-switchboard completion bash`, or `codex-switchboard completion zsh`; they are included in release archives. In PowerShell, load the current-session completion with `Invoke-Expression (codex-switchboard completion powershell | Out-String)`. The archive also includes `codex-switchboard.exe` and both schemas.
+
+An optional read-only VS Code companion preview is in [`integrations/vscode`](integrations/vscode). It invokes the same CLI contract to show the active target or cached account fleet; it does not switch accounts or access credentials.
 
 ---
 
@@ -247,9 +268,9 @@ dotnet test CodexSwitcher.slnx -c Release --no-build --no-restore
 ### 3. Package Local Release Candidate
 Execute the packaging script to build, test, sanitize, and produce a deterministic release archive:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.2.2"
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.3.0"
 ```
-Output artifacts: `dist/v0.2.2/CodexSwitchboard-0.2.2-win-x64.zip`, `dist/v0.2.2/SHA256SUMS.txt`, and payload manifest `dist/v0.2.2/manifest-sha256.txt`. Versioned output directories preserve artifacts from other builds.
+Output artifacts: `dist/v0.3.0/CodexSwitchboard-0.3.0-win-x64.zip`, `dist/v0.3.0/SHA256SUMS.txt`, and payload manifest `dist/v0.3.0/manifest-sha256.txt`. Versioned output directories preserve artifacts from other builds.
 
 ---
 

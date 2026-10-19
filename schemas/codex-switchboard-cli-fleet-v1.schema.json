@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-switchboard:cli-fleet:v1",
+  "title": "Codex Switchboard CLI fleet status v1",
+  "description": "Redacted, read-only local-cache view of saved ChatGPT account quota state emitted by `codex-switchboard fleet --json`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "source", "summary", "accounts"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "source": {
+      "const": "local-cache"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["savedAccountCount", "cachedSnapshotCount", "rateLimitedCachedSnapshotCount"],
+      "properties": {
+        "savedAccountCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cachedSnapshotCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rateLimitedCachedSnapshotCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "isStale", "observedAt", "rateLimited", "windows"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["Unknown", "Healthy", "AuthRequired", "RateLimited", "ProcessDown", "BackingOff", "Error", "UnsupportedAccountType"]
+          },
+          "isStale": {
+            "type": ["boolean", "null"]
+          },
+          "observedAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "rateLimited": {
+            "type": ["boolean", "null"],
+            "description": "Null when no quota snapshot is cached; otherwise reflects only authoritative status/flags in that snapshot."
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["label", "durationMinutes", "remainingPercent", "resetsAt"],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "durationMinutes": {
+                  "type": ["integer", "null"]
+                },
+                "remainingPercent": {
+                  "type": ["number", "null"],
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "resetsAt": {
+                  "type": ["string", "null"],
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

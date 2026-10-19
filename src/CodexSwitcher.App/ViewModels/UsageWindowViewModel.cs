@@ -72,6 +72,7 @@ public sealed partial class UsageWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RemainingText))]
     [NotifyPropertyChangedFor(nameof(ProgressValue))]
+    [NotifyPropertyChangedFor(nameof(HasKnownQuota))]
     public partial double? RemainingPercent { get; set; }
 
     [ObservableProperty]
@@ -90,6 +91,7 @@ public sealed partial class UsageWindowViewModel : ObservableObject
     public partial bool IsLowQuota { get; set; }
 
     public double ProgressValue => RemainingPercent is { } r ? Math.Clamp(r, 0.0, 100.0) : 0.0;
+    public bool HasKnownQuota => RemainingPercent.HasValue;
 
     public string RemainingText => RemainingPercent is { } rem
         ? $"{Math.Round(rem)}% {(Loc.Pt ? "disponível" : "remaining")}"

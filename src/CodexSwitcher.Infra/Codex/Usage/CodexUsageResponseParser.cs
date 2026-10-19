@@ -148,11 +148,6 @@ public static class CodexUsageResponseParser
             }
         }
 
-        if (primaryLimitId is null && buckets.Count > 0)
-        {
-            primaryLimitId = buckets.Keys.First();
-        }
-
         // 3. Reset credits detail and available count
         var resetCreditsDetail = ParseResetCreditsDetail(root);
         int? resetCreditsAvailable = resetCreditsDetail?.AvailableCount;
@@ -176,9 +171,9 @@ public static class CodexUsageResponseParser
             {
                 if (credEl.Value.TryGetProperty("balance", out var balEl))
                 {
-                    if (balEl.ValueKind == JsonValueKind.Number && balEl.TryGetInt32(out var balInt))
+                    if (balEl.ValueKind == JsonValueKind.Number && balEl.TryGetInt32(out var balInt) && balInt >= 0)
                         resetCreditsAvailable = balInt;
-                    else if (balEl.ValueKind == JsonValueKind.String && int.TryParse(balEl.GetString(), out var balParsed))
+                    else if (balEl.ValueKind == JsonValueKind.String && int.TryParse(balEl.GetString(), out var balParsed) && balParsed >= 0)
                         resetCreditsAvailable = balParsed;
                 }
             }
@@ -249,13 +244,25 @@ public static class CodexUsageResponseParser
                 if (item.ValueKind != JsonValueKind.Object)
                     continue;
 
-                string resetType = item.TryGetProperty("resetType", out var rt) && rt.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(rt.GetString())
-                    ? rt.GetString()!
-                    : "codexRateLimits";
+                var resetTypeValue = item.TryGetProperty("resetType", out var rt) && rt.ValueKind == JsonValueKind.String
+                    ? rt.GetString()?.Trim()
+                    : null;
+                string resetType = resetTypeValue?.ToLowerInvariant() switch
+                {
+                    "codexratelimits" or "codex_rate_limits" => "codexRateLimits",
+                    _ => "unknown"
+                };
 
-                string status = item.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(st.GetString())
-                    ? st.GetString()!
-                    : "available";
+                var statusValue = item.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String
+                    ? st.GetString()?.Trim().ToLowerInvariant()
+                    : null;
+                string status = statusValue switch
+                {
+                    "available" => "available",
+                    "redeeming" => "redeeming",
+                    "redeemed" => "redeemed",
+                    _ => "unknown"
+                };
 
                 DateTimeOffset? grantedAt = ParseTimestamp(item, "grantedAt");
                 DateTimeOffset? expiresAt = ParseTimestamp(item, "expiresAt");

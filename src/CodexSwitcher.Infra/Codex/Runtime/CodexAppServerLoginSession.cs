@@ -99,8 +99,34 @@ internal sealed class CodexAppServerLoginSession : ICodexLoginSession
         var process = new Process { StartInfo = psi };
         var session = new CodexAppServerLoginSession(process, registry);
 
-        process.Start();
-        registry?.RegisterOwnedProcess(process.Id);
+        try
+        {
+            if (registry is null)
+            {
+                process.Start();
+            }
+            else
+            {
+                using (await registry.AcquireProcessLifecycleLeaseAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    process.Start();
+                    registry.RegisterOwnedProcess(process);
+                }
+            }
+        }
+        catch
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch { }
+            process.Dispose();
+            throw;
+        }
         session._stdin = process.StandardInput;
         session._stdout = process.StandardOutput;
         session._stderr = process.StandardError;

@@ -55,34 +55,43 @@ using System.Security.Principal;
 namespace CodexSwitcher.Infra.Security.Hardening;
 
 /// <summary>
-/// ACL restritiva na pasta do cofre: só o usuário atual, sem herança. Defesa em profundidade além
-/// do DPAPI. Nunca exige admin. Ver BUSINESS_RULES.md §7. Best-effort: falha não é fatal.
+/// Applies a protected current-user-only ACL. Credential-bearing callers must use the strict
+/// method and abort before writing credentials if it fails. Non-credential callers may use the
+/// best-effort Try method. Defense in depth beyond DPAPI; does not require elevation.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class DirectoryHardening
 {
+    public static void RestrictToCurrentUser(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        Directory.CreateDirectory(path);
+        using var identity = WindowsIdentity.GetCurrent();
+        var user = identity.User;
+        if (user is null)
+        {
+            throw new UnauthorizedAccessException("The current Windows user SID could not be resolved.");
+        }
+
+        var dirInfo = new DirectoryInfo(path);
+        var security = new DirectorySecurity();
+        security.SetOwner(user);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(
+            user,
+            FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+
+        dirInfo.SetAccessControl(security);
+    }
+
     public static bool TryRestrictToCurrentUser(string path)
     {
         try
         {
-            Directory.CreateDirectory(path);
-            using var identity = WindowsIdentity.GetCurrent();
-            var user = identity.User;
-            if (user is null)
-                return false;
-
-            var dirInfo = new DirectoryInfo(path);
-            var security = new DirectorySecurity();
-            security.SetOwner(user);
-            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            security.AddAccessRule(new FileSystemAccessRule(
-                user,
-                FileSystemRights.FullControl,
-                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                PropagationFlags.None,
-                AccessControlType.Allow));
-
-            dirInfo.SetAccessControl(security);
+            RestrictToCurrentUser(path);
             return true;
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IdentityNotMappedException or IOException)

@@ -59,7 +59,9 @@ public static class UsagePresentationMapper
             conflictReason: entry.EffectiveConflictReason,
             activity: entry.Activity,
             activityAvailability: entry.ActivityAvailability,
-            observedAt: entry.ObservedAt,
+            observedAt: entry.Snapshot is not null
+                ? GetObservedAt(entry.Snapshot.ObservedAt, entry.ObservedAt)
+                : null,
             pt: pt);
     }
 
@@ -81,7 +83,7 @@ public static class UsagePresentationMapper
                 conflictReason: CredentialConflictReason.None,
                 activity: null,
                 activityAvailability: result.ActivityAvailability,
-                observedAt: now,
+                observedAt: null,
                 pt: pt);
         }
 
@@ -99,8 +101,22 @@ public static class UsagePresentationMapper
             conflictReason: CredentialConflictReason.None,
             activity: result.Activity,
             activityAvailability: result.ActivityAvailability,
-            observedAt: result.Snapshot?.ObservedAt ?? result.Activity?.ObservedAt ?? now,
+            observedAt: GetObservedAt(result.Snapshot?.ObservedAt),
             pt: pt);
+    }
+
+    private static DateTimeOffset? GetObservedAt(
+        DateTimeOffset? snapshotObservedAt,
+        DateTimeOffset? cachedObservedAt = null)
+    {
+        if (snapshotObservedAt is { } snapshotAt && snapshotAt != default)
+        {
+            return snapshotAt;
+        }
+
+        return cachedObservedAt is { } cachedAt && cachedAt != default
+            ? cachedAt
+            : null;
     }
 
     private static AccountUsageState MapInternal(
@@ -116,7 +132,8 @@ public static class UsagePresentationMapper
         DateTimeOffset? observedAt,
         bool pt)
     {
-        var rawWindows = ExtractWindows(snapshot);
+        var identityMismatch = snapshot?.AccountIdentityMatched == false;
+        var rawWindows = identityMismatch ? Array.Empty<UsageWindow>() : ExtractWindows(snapshot);
         var windows = MapWindows(rawWindows);
 
         var (visualState, noticeMessage) = ResolveVisualStateAndNotice(
@@ -135,35 +152,26 @@ public static class UsagePresentationMapper
             VisualState: visualState,
             IsStale: isStale,
             IsRefreshing: false,
-            PlanType: snapshot?.PlanType,
-            ResetCreditsAvailable: snapshot?.ResetCreditsAvailable,
-            ObservedAt: observedAt,
+            PlanType: identityMismatch ? null : snapshot?.PlanType,
+            ResetCreditsAvailable: identityMismatch ? null : snapshot?.ResetCreditsAvailable,
+            ObservedAt: identityMismatch ? null : observedAt,
             Windows: windows,
             NoticeMessage: noticeMessage,
             LastError: lastError,
             CredentialConflict: credentialConflict,
             ConflictReason: conflictReason,
-            Activity: activity,
-            ActivityAvailability: activityAvailability,
-            ResetCreditsDetail: snapshot?.ResetCreditsDetail,
-            OrdinaryUsageAllowed: snapshot?.OrdinaryUsageAllowed,
-            Origin: snapshot?.Origin ?? (isStale ? QuotaDataOrigin.Cached : QuotaDataOrigin.Unknown),
-            RuntimeVersion: snapshot?.RuntimeVersion,
-            AccountIdentityMatched: snapshot?.AccountIdentityMatched ?? true);
+            Activity: identityMismatch ? null : activity,
+            ActivityAvailability: identityMismatch ? AccountActivityAvailability.Unknown : activityAvailability,
+            ResetCreditsDetail: identityMismatch ? null : snapshot?.ResetCreditsDetail,
+            OrdinaryUsageAllowed: identityMismatch ? null : snapshot?.OrdinaryUsageAllowed,
+            Origin: identityMismatch ? QuotaDataOrigin.Unknown : isStale ? QuotaDataOrigin.Cached : snapshot?.Origin ?? QuotaDataOrigin.Unknown,
+            RuntimeVersion: identityMismatch ? null : snapshot?.RuntimeVersion,
+            AccountIdentityMatched: snapshot?.AccountIdentityMatched);
     }
 
     private static IReadOnlyList<UsageWindow> ExtractWindows(RateLimitsSnapshot? snapshot)
     {
-        if (snapshot is null || snapshot.Limits.Count == 0)
-            return Array.Empty<UsageWindow>();
-
-        var primary = snapshot.Limits.FirstOrDefault(b => b.LimitId == (snapshot.PrimaryLimitId ?? "codex"))
-                      ?? (snapshot.Limits.Count > 0 ? snapshot.Limits[0] : null);
-
-        if (primary is not null && primary.Windows.Count > 0)
-            return primary.Windows;
-
-        return snapshot.Limits.SelectMany(b => b.Windows).ToList();
+        return snapshot?.PrimaryWindows ?? Array.Empty<UsageWindow>();
     }
 
     public static IReadOnlyList<UsageWindowModel> MapWindows(IReadOnlyList<UsageWindow> rawWindows)
@@ -179,8 +187,8 @@ public static class UsagePresentationMapper
         var result = new List<UsageWindowModel>();
         foreach (var w in sorted)
         {
-            double? used = w.UsedPercent is { } u ? Math.Clamp(u, 0.0, 100.0) : null;
-            double? remaining = w.RemainingPercent is { } r ? Math.Clamp(r, 0.0, 100.0) : null;
+            double? used = NormalizePercent(w.UsedPercent);
+            double? remaining = NormalizePercent(w.RemainingPercent);
 
             bool isExhausted = (remaining is { } rem && rem <= 0.0) || (used is { } us && us >= 100.0);
             bool isLowQuota = !isExhausted && remaining is { } rVal && rVal < 20.0;
@@ -202,6 +210,11 @@ public static class UsagePresentationMapper
 
         return result;
     }
+
+    private static double? NormalizePercent(double? value) =>
+        value is { } percent && double.IsFinite(percent) && percent is >= 0.0 and <= 100.0
+            ? percent
+            : null;
 
     /// <summary>
     /// Selects up to two representative windows for compact card presentation using the Phase 8 deterministic priority:
@@ -252,6 +265,15 @@ public static class UsagePresentationMapper
         ErrorInfo? lastError,
         bool pt)
     {
+        if (snapshot?.AccountIdentityMatched == false)
+        {
+            return (
+                UsageVisualState.ProcessDown,
+                pt
+                    ? "A resposta de cota pertence a outra conta. Os dados foram ocultados até que a identidade possa ser verificada."
+                    : "The quota response belongs to another account. Usage data is hidden until identity can be verified.");
+        }
+
         if (credentialConflict || conflictReason != CredentialConflictReason.None)
         {
             string notice = conflictReason switch
@@ -333,10 +355,11 @@ public static class UsagePresentationMapper
             return (UsageVisualState.RateLimited, notice);
         }
 
-        // Authoritative backend rate limit check (do NOT infer solely from window.UsedPercent >= 100)
-        bool hasBucketRateLimit = snapshot?.Limits.Any(b => !string.IsNullOrWhiteSpace(b.RateLimitReachedType)) == true;
+        // Authoritative rate-limit status or backend bucket type. Do not infer account-level
+        // rate limiting solely from window.UsedPercent >= 100.
+        bool hasPrimaryBucketRateLimit = !string.IsNullOrWhiteSpace(snapshot?.PrimaryBucket?.RateLimitReachedType);
 
-        if (status == UsageStatus.RateLimited || hasBucketRateLimit)
+        if (status == UsageStatus.RateLimited || hasPrimaryBucketRateLimit)
         {
             return (UsageVisualState.RateLimited, null);
         }

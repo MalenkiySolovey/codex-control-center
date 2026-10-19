@@ -92,6 +92,7 @@ public sealed class ApiModelInventoryRefreshService : IApiModelInventoryRefreshS
                 ObservedAt = _clock.UtcNow,
             };
         }
+        options?.RequestStarted?.Invoke(generation);
         PublishIfLatest(profileId, generation, gate, started);
         if (generation == Volatile.Read(ref gate.LatestStarted))
         {
@@ -238,9 +239,17 @@ public sealed class ApiModelInventoryRefreshService : IApiModelInventoryRefreshS
                 var progress = CreateProgressReporter(profileId, generation, gate, options);
                 switchOptions = switchOptions with { Progress = progress };
                 ReportProgress(profileId, generation, gate, options, "Updating catalog...");
-                if (generation != Volatile.Read(ref gate.LatestStarted))
+                lock (gate.GenerationLock)
                 {
-                    return Superseded(profileId, generation);
+                    if (generation != Volatile.Read(ref gate.LatestStarted))
+                    {
+                        // The newer request is queued on Serial. Restore the
+                        // persisted snapshot before releasing the transaction
+                        // gate so it cannot inherit this superseded inventory.
+                        _profiles.Save(original);
+                        _modelCache.SetModels(original.Id, routeKey, 1, original.DiscoveredModels ?? []);
+                        return Superseded(profileId, generation);
+                    }
                 }
                 var switchResult = await _switches.SwitchToApiProviderAsync(profileId, switchOptions, cancellationToken).ConfigureAwait(false);
                 if (switchResult.Outcome is not (TargetSwitchOutcome.Success or TargetSwitchOutcome.SuccessWithReopenWarning or TargetSwitchOutcome.NoOp))

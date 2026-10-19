@@ -205,20 +205,24 @@ public sealed class CodexUsageProvider : ICodexUsageProvider
 
                 var (primaryLimitId, buckets, resetCredits, resetCreditsDetail, ordinaryUsageAllowed, accountId) = CodexUsageResponseParser.ParseRateLimitsDetail(rateLimitsElement);
 
-                // Authoritative backend rate limit check (do NOT infer solely from UsedPercent >= 100)
-                var isRateLimited = buckets.Any(b => !string.IsNullOrWhiteSpace(b.RateLimitReachedType));
+                // Only the selected primary bucket controls the account's main quota state.
+                // Other map entries may describe separate metered limits.
+                var primaryBucket = RateLimitsSnapshot.ResolvePrimaryBucket(buckets, primaryLimitId);
+                var isRateLimited = !string.IsNullOrWhiteSpace(primaryBucket?.RateLimitReachedType);
                 var status = isRateLimited ? UsageStatus.RateLimited : UsageStatus.Healthy;
-                var effectivePlan = planType ?? buckets.FirstOrDefault(b => b.LimitId == (primaryLimitId ?? "codex"))?.PlanType;
+                var effectivePlan = planType ?? primaryBucket?.PlanType;
 
-                var accountIdentityMatched = true;
+                bool? accountIdentityMatched = null;
                 if (!string.IsNullOrWhiteSpace(accountId))
                 {
                     try
                     {
-                        var (_, claims) = AuthJsonReader.Identify(authJsonBytes);
-                        if (!string.IsNullOrWhiteSpace(claims.Sub))
+                        // The server's accountId is the Codex account/workspace ID, not JWT `sub`.
+                        // Match the auth.json token account_id field used by Codex's get_account_id().
+                        var (authFile, _) = AuthJsonReader.Identify(authJsonBytes);
+                        if (!string.IsNullOrWhiteSpace(authFile?.AccountId))
                         {
-                            accountIdentityMatched = string.Equals(accountId, claims.Sub, StringComparison.OrdinalIgnoreCase);
+                            accountIdentityMatched = string.Equals(accountId, authFile.AccountId, StringComparison.OrdinalIgnoreCase);
                         }
                     }
                     catch { }
@@ -253,7 +257,12 @@ public sealed class CodexUsageProvider : ICodexUsageProvider
             ErrorInfo? activityError = null;
             AccountActivityAvailability activityAvailability = AccountActivityAvailability.Unknown;
 
-            if (options?.IncludeActivity == false)
+            if (snapshot?.AccountIdentityMatched == false)
+            {
+                // Do not query or surface activity for a response that belongs to another account.
+                activityAvailability = AccountActivityAvailability.NotReported;
+            }
+            else if (options?.IncludeActivity == false)
             {
                 // Activity read explicitly bypassed by caller
                 activityAvailability = AccountActivityAvailability.Unknown;
@@ -393,7 +402,10 @@ public sealed class CodexUsageProvider : ICodexUsageProvider
                 catch { }
             }
 
-            sandbox?.Dispose();
+            if (sandbox is not null)
+            {
+                await sandbox.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 

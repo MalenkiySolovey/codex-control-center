@@ -459,7 +459,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         modelCombo.TextSubmitted += (_, _) => advanced.UpdateModelContextHint(GetSelectedModelString());
         advanced.UpdateModelContextHint(GetSelectedModelString());
 
-        var editor = new ProviderEditorWindow(
+        var editor = new ProviderEditorDialog(
             Host.OwnerWindow,
             _loc.ProviderDialogTitle,
             panel,
@@ -795,6 +795,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         {
             workingInventory.MergeDiscoveredModels(profile.DiscoveredModels);
         }
+        var inventoryBaseline = CloneInventory(workingInventory);
 
         var errorBar = new InfoBar
         {
@@ -1145,9 +1146,9 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             refreshButtonText.Text = _loc.RefreshingModels;
             compatibilityInfoBar.IsOpen = false;
 
+            long requestGeneration = 0;
             try
             {
-                long requestGeneration = 0;
                 var progress = new Progress<string>(message =>
                 {
                     var latest = _modelRefreshService.GetLatestResult(profile.Id);
@@ -1158,40 +1159,54 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
                     }
                 });
                 var options = _settings is null
-                    ? new RefreshModelsOptions(Progress: progress)
-                    : new RefreshModelsOptions(SwitchExecutionOptions.From(_settings), progress);
+                    ? new RefreshModelsOptions(
+                        Progress: progress,
+                        RequestStarted: generation => requestGeneration = generation)
+                    : new RefreshModelsOptions(
+                        SwitchExecutionOptions.From(_settings),
+                        progress,
+                        generation => requestGeneration = generation);
                 var refreshTask = _modelRefreshService.RefreshAsync(profile.Id, options);
-                requestGeneration = _modelRefreshService.GetLatestResult(profile.Id)?.RequestGeneration ?? 0;
                 var result = await refreshTask;
+                var latestResult = _modelRefreshService.GetLatestResult(profile.Id);
+                if (requestGeneration > 0 &&
+                    (result.RequestGeneration != requestGeneration ||
+                     latestResult is null ||
+                     latestResult.RequestGeneration != requestGeneration ||
+                     latestResult.Outcome == ModelInventoryRefreshOutcome.Refreshing))
+                {
+                    return;
+                }
+
                 if (result.Succeeded && _providerStore.GetById(profile.Id) is { } persisted)
                 {
-                    // The dialog keeps an isolated working copy. The card
-                    // receives this same result event; Save later commits any
-                    // further enablement/manual edits atomically.
                     persisted.NormalizeSelectedModel();
-                    workingInventory = CloneInventory(persisted.ModelInventory);
-                    discoveredModelsList = persisted.DiscoveredModels;
-                    RenderInventory();
+                    ApplyPersistedInventory(persisted);
 
                     compatibilityInfoBar.Severity = InfoBarSeverity.Success;
-                    compatibilityInfoBar.Title = "Models Refreshed";
-                    compatibilityInfoBar.Message = $"{result.ModelsReportedCount} models reported by this API via GET /models. No inference request / does not consume model inference tokens.";
+                    compatibilityInfoBar.Title = _loc.ModelsRefreshed;
+                    compatibilityInfoBar.Message = _loc.ModelsRefreshedMessage(result.ModelsReportedCount);
                     compatibilityInfoBar.IsOpen = true;
+                    errorBar.IsOpen = false;
                 }
                 else
                 {
                     compatibilityInfoBar.Severity = InfoBarSeverity.Warning;
-                    compatibilityInfoBar.Title = "Model refresh did not complete";
-                    compatibilityInfoBar.Message = result.ErrorMessageSanitized ?? "Provider returned no usable model inventory.";
+                    compatibilityInfoBar.Title = _loc.ModelRefreshIncompleteTitle;
+                    compatibilityInfoBar.Message = result.ErrorMessageSanitized ?? _loc.ModelRefreshIncompleteMessage;
                     compatibilityInfoBar.IsOpen = true;
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                compatibilityInfoBar.Severity = InfoBarSeverity.Error;
-                compatibilityInfoBar.Title = "Refresh Failed";
-                compatibilityInfoBar.Message = ex.Message;
-                compatibilityInfoBar.IsOpen = true;
+                var latestResult = _modelRefreshService.GetLatestResult(profile.Id);
+                if (requestGeneration <= 0 || latestResult is null || latestResult.RequestGeneration <= requestGeneration)
+                {
+                    compatibilityInfoBar.Severity = InfoBarSeverity.Error;
+                    compatibilityInfoBar.Title = _loc.ModelRefreshFailedTitle;
+                    compatibilityInfoBar.Message = _loc.ModelRefreshFailedMessage;
+                    compatibilityInfoBar.IsOpen = true;
+                }
             }
             finally
             {
@@ -1350,7 +1365,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         advancedSettings.AttachTo(panel);
         advancedSettings.UpdateModelContextHint(GetSelectedModelString());
 
-        var editor = new ProviderEditorWindow(
+        var editor = new ProviderEditorDialog(
             Host.OwnerWindow,
             _loc.EditProviderDialogTitle,
             panel,
@@ -1359,7 +1374,7 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
 
         void ConstrainEditorContentWidth()
         {
-            // ProviderEditorWindow already constrains the body to the inner
+            // ProviderEditorDialog already constrains the body to the inner
             // viewport width. Reusing the viewport calculation here would
             // subtract its padding twice and make nested controls overflow.
             var availableWidth = panel.Width;
@@ -1388,8 +1403,54 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         ApiProviderTransportOverrides? extractedTransport = null;
         var isSaved = false;
 
+        bool ApplyPersistedInventory(ApiProviderProfile persisted)
+        {
+            if (persisted.ModelInventory is null ||
+                InventoriesEquivalent(inventoryBaseline, persisted.ModelInventory))
+            {
+                return false;
+            }
+
+            var latestInventory = CloneInventory(persisted.ModelInventory);
+            workingInventory = RebaseInventoryEdits(inventoryBaseline, workingInventory, latestInventory);
+            inventoryBaseline = latestInventory;
+            discoveredModelsList = persisted.DiscoveredModels is null
+                ? null
+                : new List<string>(persisted.DiscoveredModels);
+            RenderInventory();
+            advancedSettings?.UpdateModelContextHint(GetSelectedModelString());
+            return true;
+        }
+
+        bool SynchronizeLatestInventoryBeforeSave()
+        {
+            var latestRefresh = _modelRefreshService?.GetLatestResult(profile.Id);
+            if (latestRefresh?.Outcome == ModelInventoryRefreshOutcome.Refreshing)
+            {
+                ShowGeneralValidation(_loc.ModelRefreshInProgressSaveWarning);
+                return false;
+            }
+
+            if (_providerStore?.GetById(profile.Id) is { } persisted && ApplyPersistedInventory(persisted))
+            {
+                compatibilityInfoBar.Severity = InfoBarSeverity.Success;
+                compatibilityInfoBar.Title = _loc.ModelsRefreshed;
+                var reportedCount = persisted.DiscoveredModels?.Count ?? 0;
+                compatibilityInfoBar.Message = _loc.ModelsRefreshedMessage(reportedCount);
+                compatibilityInfoBar.IsOpen = true;
+                errorBar.IsOpen = false;
+            }
+
+            return true;
+        }
+
         bool ValidateAndSave(ProviderEditorAction action)
         {
+            if (!SynchronizeLatestInventoryBeforeSave())
+            {
+                return false;
+            }
+
             if (string.IsNullOrWhiteSpace(nicknameBox.Text))
             {
                 ShowGeneralValidation("Name is required.");
@@ -1447,7 +1508,56 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             return true;
         }
 
-        var result = await editor.ShowAsync(ValidateAndSave);
+        var refreshService = _modelRefreshService;
+        var providerStore = _providerStore;
+        var isEditorOpen = true;
+        EventHandler<ModelInventoryRefreshResult>? refreshStateChanged = null;
+        if (refreshService is not null && providerStore is not null)
+        {
+            refreshStateChanged = (_, refreshResult) =>
+            {
+                if (refreshResult.ProfileId != profile.Id ||
+                    refreshResult.Outcome != ModelInventoryRefreshOutcome.Succeeded)
+                {
+                    return;
+                }
+
+                _ = refreshButton.DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (!isEditorOpen)
+                    {
+                        return;
+                    }
+
+                    if (providerStore.GetById(profile.Id) is not { } persisted ||
+                        !ApplyPersistedInventory(persisted))
+                    {
+                        return;
+                    }
+
+                    compatibilityInfoBar.Severity = InfoBarSeverity.Success;
+                    compatibilityInfoBar.Title = _loc.ModelsRefreshed;
+                    compatibilityInfoBar.Message = _loc.ModelsRefreshedMessage(persisted.DiscoveredModels?.Count ?? 0);
+                    compatibilityInfoBar.IsOpen = true;
+                    errorBar.IsOpen = false;
+                });
+            };
+            refreshService.RefreshStateChanged += refreshStateChanged;
+        }
+
+        ProviderEditorAction result;
+        try
+        {
+            result = await editor.ShowAsync(ValidateAndSave);
+        }
+        finally
+        {
+            isEditorOpen = false;
+            if (refreshStateChanged is not null && refreshService is not null)
+            {
+                refreshService.RefreshStateChanged -= refreshStateChanged;
+            }
+        }
 
         if (result == ProviderEditorAction.Primary && isSaved)
         {
@@ -1769,6 +1879,125 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 
+    private static bool InventoriesEquivalent(ApiProviderModelInventory? first, ApiProviderModelInventory? second)
+    {
+        var left = first ?? new ApiProviderModelInventory();
+        var right = second ?? new ApiProviderModelInventory();
+        if (!string.Equals(left.SelectedModel, right.SelectedModel, StringComparison.Ordinal) ||
+            left.DiscoveryStatus != right.DiscoveryStatus ||
+            left.LastDiscoveryAt != right.LastDiscoveryAt ||
+            left.Models.Count != right.Models.Count)
+        {
+            return false;
+        }
+
+        var rightBySlug = right.Models
+            .Where(model => !string.IsNullOrWhiteSpace(model.Slug))
+            .GroupBy(model => model.Slug, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        foreach (var model in left.Models)
+        {
+            if (!rightBySlug.TryGetValue(model.Slug, out var matching) ||
+                !string.Equals(model.DisplayName, matching.DisplayName, StringComparison.Ordinal) ||
+                model.Enabled != matching.Enabled ||
+                model.DiscoverySource != matching.DiscoverySource ||
+                model.Availability != matching.Availability ||
+                model.LastSeenAt != matching.LastSeenAt ||
+                model.ContextWindow != matching.ContextWindow ||
+                !string.Equals(model.ContextEvidence, matching.ContextEvidence, StringComparison.Ordinal) ||
+                model.Capabilities != matching.Capabilities ||
+                !ModelOverridesEquivalent(model.UserOverrides, matching.UserOverrides))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ModelOverridesEquivalent(CodexModelOverrides? first, CodexModelOverrides? second) =>
+        first is null
+            ? second is null
+            : second is not null &&
+              first.ContextWindowTokens == second.ContextWindowTokens &&
+              first.AutoCompactTokenLimit == second.AutoCompactTokenLimit &&
+              first.AutoCompactTokenLimitScope == second.AutoCompactTokenLimitScope &&
+              first.ReasoningEffort == second.ReasoningEffort &&
+              first.ReasoningSummary == second.ReasoningSummary &&
+              first.Verbosity == second.Verbosity &&
+              first.ToolOutputTokenLimit == second.ToolOutputTokenLimit;
+
+    private static ApiProviderModelInventory RebaseInventoryEdits(
+        ApiProviderModelInventory baseline,
+        ApiProviderModelInventory local,
+        ApiProviderModelInventory latest)
+    {
+        var rebased = CloneInventory(latest);
+        var baselineBySlug = baseline.Models
+            .Where(model => !string.IsNullOrWhiteSpace(model.Slug))
+            .GroupBy(model => model.Slug, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var rebasedBySlug = rebased.Models
+            .Where(model => !string.IsNullOrWhiteSpace(model.Slug))
+            .GroupBy(model => model.Slug, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+
+        foreach (var localModel in local.Models.Where(model => !string.IsNullOrWhiteSpace(model.Slug)))
+        {
+            baselineBySlug.TryGetValue(localModel.Slug, out var baselineModel);
+            rebasedBySlug.TryGetValue(localModel.Slug, out var latestModel);
+
+            if (baselineModel is null)
+            {
+                if (latestModel is null)
+                {
+                    latestModel = CloneInventoryModel(localModel);
+                    rebased.Models.Add(latestModel);
+                    rebasedBySlug[localModel.Slug] = latestModel;
+                }
+                else
+                {
+                    // A manually-added model may have appeared in the provider
+                    // response while the dialog was open. Keep the user's
+                    // explicit enablement and retain the mixed provenance.
+                    latestModel.Enabled = localModel.Enabled;
+                    if ((localModel.DiscoverySource is ModelDiscoverySource.Manual or ModelDiscoverySource.Mixed) &&
+                        latestModel.DiscoverySource != ModelDiscoverySource.Manual)
+                    {
+                        latestModel.DiscoverySource = ModelDiscoverySource.Mixed;
+                    }
+                }
+
+                continue;
+            }
+
+            if (latestModel is null)
+            {
+                latestModel = CloneInventoryModel(localModel);
+                rebased.Models.Add(latestModel);
+                rebasedBySlug[localModel.Slug] = latestModel;
+                continue;
+            }
+
+            if (localModel.Enabled != baselineModel.Enabled)
+            {
+                latestModel.Enabled = localModel.Enabled;
+            }
+
+            if (localModel.DiscoverySource != baselineModel.DiscoverySource)
+            {
+                latestModel.DiscoverySource = localModel.DiscoverySource;
+            }
+        }
+
+        if (!string.Equals(local.SelectedModel, baseline.SelectedModel, StringComparison.Ordinal))
+        {
+            rebased.SelectedModel = local.SelectedModel;
+        }
+
+        return rebased;
+    }
+
     private static ApiProviderModelInventory CloneInventory(ApiProviderModelInventory? source)
     {
         if (source is null)
@@ -1781,32 +2010,34 @@ public sealed class ProviderDialogService : CommonDialogService, IProviderDialog
             SelectedModel = source.SelectedModel,
             DiscoveryStatus = source.DiscoveryStatus,
             LastDiscoveryAt = source.LastDiscoveryAt,
-            Models = source.Models.Select(entry => new ApiProviderModelItem
-            {
-                Slug = entry.Slug,
-                DisplayName = entry.DisplayName,
-                Enabled = entry.Enabled,
-                DiscoverySource = entry.DiscoverySource,
-                Availability = entry.Availability,
-                LastSeenAt = entry.LastSeenAt,
-                ContextWindow = entry.ContextWindow,
-                ContextEvidence = entry.ContextEvidence,
-                Capabilities = entry.Capabilities,
-                UserOverrides = entry.UserOverrides is null
-                    ? null
-                    : new CodexModelOverrides
-                    {
-                        ContextWindowTokens = entry.UserOverrides.ContextWindowTokens,
-                        AutoCompactTokenLimit = entry.UserOverrides.AutoCompactTokenLimit,
-                        AutoCompactTokenLimitScope = entry.UserOverrides.AutoCompactTokenLimitScope,
-                        ReasoningEffort = entry.UserOverrides.ReasoningEffort,
-                        ReasoningSummary = entry.UserOverrides.ReasoningSummary,
-                        Verbosity = entry.UserOverrides.Verbosity,
-                        ToolOutputTokenLimit = entry.UserOverrides.ToolOutputTokenLimit,
-                    },
-            }).ToList(),
+            Models = source.Models.Select(CloneInventoryModel).ToList(),
         };
     }
+
+    private static ApiProviderModelItem CloneInventoryModel(ApiProviderModelItem entry) => new()
+    {
+        Slug = entry.Slug,
+        DisplayName = entry.DisplayName,
+        Enabled = entry.Enabled,
+        DiscoverySource = entry.DiscoverySource,
+        Availability = entry.Availability,
+        LastSeenAt = entry.LastSeenAt,
+        ContextWindow = entry.ContextWindow,
+        ContextEvidence = entry.ContextEvidence,
+        Capabilities = entry.Capabilities,
+        UserOverrides = entry.UserOverrides is null
+            ? null
+            : new CodexModelOverrides
+            {
+                ContextWindowTokens = entry.UserOverrides.ContextWindowTokens,
+                AutoCompactTokenLimit = entry.UserOverrides.AutoCompactTokenLimit,
+                AutoCompactTokenLimitScope = entry.UserOverrides.AutoCompactTokenLimitScope,
+                ReasoningEffort = entry.UserOverrides.ReasoningEffort,
+                ReasoningSummary = entry.UserOverrides.ReasoningSummary,
+                Verbosity = entry.UserOverrides.Verbosity,
+                ToolOutputTokenLimit = entry.UserOverrides.ToolOutputTokenLimit,
+            },
+    };
 
     private sealed class ApiProviderAdvancedSettingsControlGroup
     {

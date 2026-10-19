@@ -42,6 +42,25 @@ public sealed class AppSettings
     /// <summary>Sempre exibir o popup de confirmação do switch (padrão). "Não perguntar" é só por sessão.</summary>
     public bool AlwaysConfirmSwitch { get; set; } = true;
 
+    /// <summary>Register an optional configurable shortcut to bring Switchboard to the foreground.</summary>
+    public bool GlobalHotkeyEnabled { get; set; }
+    public string GlobalHotkeyModifiers { get; set; } = "Ctrl+Alt+Shift";
+    public string GlobalHotkeyKey { get; set; } = "S";
+
+    /// <summary>Whether assigned account/provider switch shortcuts are registered system-wide.</summary>
+    public bool QuickSwitchHotkeysEnabled { get; set; }
+
+    /// <summary>Whether the floating account/provider quick-switch overlay shortcut is registered.</summary>
+    public bool QuickSwitchOverlayEnabled { get; set; }
+    public string QuickSwitchOverlayModifiers { get; set; } = "Ctrl+Alt";
+    public string QuickSwitchOverlayKey { get; set; } = "Q";
+
+    /// <summary>How much routing and cached quota information is shown when hovering the tray icon.</summary>
+    public TrayTooltipMode TrayTooltipMode { get; set; } = TrayTooltipMode.ApplicationName;
+
+    /// <summary>Up to nine user-configured direct account/provider switch shortcuts.</summary>
+    public List<QuickSwitchHotkeyAssignment> QuickSwitchHotkeyAssignments { get; set; } = [];
+
     /// <summary>Timeout de fechamento gracioso antes do kill (segundos).</summary>
     public int GracefulCloseTimeoutSeconds { get; set; } = 5;
 
@@ -61,6 +80,9 @@ public sealed class AppSettings
     /// Perfis não listados aqui são exibidos no modo expandido padrão.
     /// </summary>
     public HashSet<Guid> CollapsedProfileIds { get; set; } = [];
+
+    /// <summary>Saved isolated Codex CLI launch recipes. Contains no credentials.</summary>
+    public List<CodexLaunchProfile> CodexLaunchProfiles { get; set; } = [];
 
     /// <summary>Exigir verificação do usuário do Windows antes de revelar códigos 2FA/TOTP.</summary>
     public bool RequireWindowsVerificationForTotpReveal { get; set; } = true;

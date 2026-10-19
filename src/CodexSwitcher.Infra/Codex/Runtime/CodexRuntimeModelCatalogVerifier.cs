@@ -40,7 +40,21 @@ public sealed class CodexRuntimeModelCatalogVerifier : ICodexRuntimeModelCatalog
         string expectedSelectedModel,
         IReadOnlyCollection<string> expectedEnabledModels,
         CancellationToken cancellationToken = default)
+        => await VerifyAtHomeAsync(
+            _paths.Codex.CodexHome,
+            expectedProvider,
+            expectedSelectedModel,
+            expectedEnabledModels,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<CodexRuntimeModelCatalogVerification> VerifyAtHomeAsync(
+        string codexHome,
+        string expectedProvider,
+        string expectedSelectedModel,
+        IReadOnlyCollection<string> expectedEnabledModels,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(codexHome);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedProvider);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSelectedModel);
         ArgumentNullException.ThrowIfNull(expectedEnabledModels);
@@ -51,14 +65,15 @@ public sealed class CodexRuntimeModelCatalogVerifier : ICodexRuntimeModelCatalog
             return new CodexRuntimeModelCatalogVerification(false, [], "Current production Codex runtime could not be resolved.");
         }
 
-        var activeRouting = _routing.ReadRoutingState(_paths.Codex.ConfigTomlPath);
+        var configPath = Path.Combine(codexHome, "config.toml");
+        var activeRouting = _routing.ReadRoutingState(configPath);
         if (!string.Equals(activeRouting.ModelProvider, expectedProvider, StringComparison.Ordinal) ||
             !string.Equals(activeRouting.Model, expectedSelectedModel, StringComparison.Ordinal))
         {
             return new CodexRuntimeModelCatalogVerification(
                 false,
                 [],
-                "config.toml does not contain the expected provider and selected model for runtime verification.");
+                $"The isolated config at '{configPath}' does not contain the expected provider and selected model for runtime verification.");
         }
 
         if (string.IsNullOrWhiteSpace(activeRouting.ModelCatalogJson) || !File.Exists(activeRouting.ModelCatalogJson))
@@ -66,7 +81,7 @@ public sealed class CodexRuntimeModelCatalogVerifier : ICodexRuntimeModelCatalog
             return new CodexRuntimeModelCatalogVerification(false, [], "The active profile catalog is missing from config.toml or disk.");
         }
 
-        await using var client = new CodexAppServerClient(runtime.ExecutablePath, _paths.Codex.CodexHome, _registry);
+        await using var client = new CodexAppServerClient(runtime.ExecutablePath, codexHome, _registry);
         try
         {
             await client.StartAsync(cancellationToken).ConfigureAwait(false);

@@ -201,6 +201,17 @@ public sealed class ApiCardBorderBrushConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
 }
 
+public sealed class BoolToApiCardBorderBrushConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) =>
+        value is true
+            ? Brushes.Resource("BrandAccentBrush")
+            : Brushes.Resource("CardStrokeColorDefaultBrush");
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) =>
+        throw new NotSupportedException();
+}
+
 public sealed class ApiCardBackgroundConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, string language) =>

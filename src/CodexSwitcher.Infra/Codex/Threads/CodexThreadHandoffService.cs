@@ -387,9 +387,24 @@ public sealed class CodexThreadHandoffService : ICodexThreadHandoffService
                 (string.IsNullOrWhiteSpace(renamedReadback.ThreadId) ||
                  string.Equals(renamedReadback.ThreadId, forkedThreadId, StringComparison.Ordinal)))
             {
-                // A name update must not mask a provider/model regression.
-                ValidateMetadataWhenAvailable("thread/read after thread/name/set", renamedReadback, targetModelProvider, targetModel);
-                nameUpdateSucceeded = string.Equals(renamedReadback.Name, newName, StringComparison.Ordinal);
+                try
+                {
+                    // The fork already passed persistence and exact target
+                    // validation before this cosmetic operation. If the rename
+                    // read-back is inconsistent, retain the verified fork and
+                    // report the name update as failed instead of turning a valid
+                    // continuation into an operation failure.
+                    ValidateMetadataWhenAvailable("thread/read after thread/name/set", renamedReadback, targetModelProvider, targetModel);
+                    nameUpdateSucceeded = string.Equals(renamedReadback.Name, newName, StringComparison.Ordinal);
+                }
+                catch
+                {
+                    renamedReadback = null;
+                }
+            }
+            else
+            {
+                renamedReadback = null;
             }
         }
 

@@ -3,6 +3,7 @@
     <Project Path="src/CodexSwitcher.App/CodexSwitcher.App.csproj">
       <Platform Project="x64" />
     </Project>
+    <Project Path="src/CodexSwitcher.Cli/CodexSwitcher.Cli.csproj" />
     <Project Path="src/CodexSwitcher.Core/CodexSwitcher.Core.csproj" />
     <Project Path="src/CodexSwitcher.Infra/CodexSwitcher.Infra.csproj" />
     <Project Path="src/CodexSwitchboard.KeyBroker/CodexSwitchboard.KeyBroker.csproj" />

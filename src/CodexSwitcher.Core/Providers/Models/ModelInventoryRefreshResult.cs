@@ -58,4 +58,5 @@ public enum ModelCatalogVerificationStatus
 /// </summary>
 public sealed record RefreshModelsOptions(
     SwitchExecutionOptions? ActiveTargetSwitchOptions = null,
-    IProgress<string>? Progress = null);
+    IProgress<string>? Progress = null,
+    Action<long>? RequestStarted = null);

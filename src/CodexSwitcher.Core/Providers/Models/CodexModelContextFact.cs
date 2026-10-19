@@ -25,22 +25,26 @@ public sealed record CodexModelContextFact(
     /// Computes the safe effective usable context window:
     /// bounded by the model documented ceiling, route verified ceiling, and requested context.
     /// </summary>
-    public long EffectiveUsableContext
+    public long? EffectiveUsableContext
     {
         get
         {
-            var ceiling = Math.Min(
-                DocumentedModelMax ?? long.MaxValue,
-                RouteAdvertisedMax ?? long.MaxValue);
-
-            if (ceiling == long.MaxValue)
+            var ceiling = (DocumentedModelMax, RouteAdvertisedMax) switch
             {
-                return RequestedContext ?? CodexClientContext ?? 272_000;
+                (long documented, long advertised) => Math.Min(documented, advertised),
+                (long documented, null) => documented,
+                (null, long advertised) => advertised,
+                _ => (long?)null,
+            };
+
+            if (!ceiling.HasValue)
+            {
+                return RequestedContext ?? CodexClientContext;
             }
 
             if (RequestedContext.HasValue)
             {
-                return Math.Min(RequestedContext.Value, ceiling);
+                return Math.Min(RequestedContext.Value, ceiling.Value);
             }
 
             return ceiling;

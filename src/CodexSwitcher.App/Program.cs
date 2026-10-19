@@ -103,6 +103,14 @@ public static class Program
 
         if (!keyInstance.IsCurrent)
         {
+            // An automatic sign-in launch should not steal focus from an already-running
+            // Switchboard window. It has no new UI work to deliver to the current instance.
+            if (CommandLineArgs.Any(argument =>
+                    argument.Equals("--start-in-tray", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
             // Execute on thread pool (MTA) with timeout to prevent STA apartment COM deadlocks
             try
             {

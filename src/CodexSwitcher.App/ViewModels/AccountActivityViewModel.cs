@@ -91,6 +91,10 @@ public sealed partial class AccountActivityViewModel : ObservableObject
     public string LongestStreak { get; }
 
     public string? LatestActivityDate { get; }
+    public string ObservedAtText { get; private set; } = string.Empty;
+    public string TraySummaryText { get; }
+    public string TraySummaryTooltip { get; }
+    public bool ShowTraySummary => !string.IsNullOrWhiteSpace(TraySummaryText);
 
     public IReadOnlyList<ActivityBarItemViewModel> Bars { get; }
 
@@ -110,6 +114,7 @@ public sealed partial class AccountActivityViewModel : ObservableObject
         if (snapshot is null || (snapshot.Summary is null && snapshot.DailyBuckets.Count == 0))
         {
             HasActivity = false;
+            ObservedAtText = string.Empty;
             LifetimeTokens = "—";
             LifetimeTokensTooltip = string.Empty;
             PeakDailyTokens = "—";
@@ -136,10 +141,16 @@ public sealed partial class AccountActivityViewModel : ObservableObject
             {
                 StatusNotice = null;
             }
+
+            TraySummaryText = StatusNotice ?? string.Empty;
+            TraySummaryTooltip = StatusNotice ?? string.Empty;
             return;
         }
 
         HasActivity = true;
+        ObservedAtText = snapshot.ObservedAt != default
+            ? $"{(Loc.Pt ? "Atividade atualizada" : "Activity updated")} {snapshot.ObservedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}"
+            : string.Empty;
         if (availability == AccountActivityAvailability.UnsupportedRuntime)
         {
             StatusNotice = Loc.Pt
@@ -229,6 +240,41 @@ public sealed partial class AccountActivityViewModel : ObservableObject
         {
             Bars = Array.Empty<ActivityBarItemViewModel>();
         }
+
+        var traySummaryParts = new List<string>();
+        if (summary?.LifetimeTokens is not null)
+        {
+            traySummaryParts.Add(Loc.TrayActivityLifetime(LifetimeTokens));
+        }
+
+        if (summary?.CurrentStreakDays is not null)
+        {
+            traySummaryParts.Add(Loc.TrayActivityStreak(CurrentStreak));
+        }
+
+        if (traySummaryParts.Count == 0 && Bars.Count > 0)
+        {
+            traySummaryParts.Add(Loc.TrayActivityDays(Bars.Count));
+        }
+
+        if (availability is AccountActivityAvailability.CachedStale
+            or AccountActivityAvailability.UnsupportedRuntime
+            or AccountActivityAvailability.TemporarilyUnavailable)
+        {
+            traySummaryParts.Add(Loc.TrayActivityCached);
+        }
+        else if (availability == AccountActivityAvailability.AvailablePartial)
+        {
+            traySummaryParts.Add(Loc.TrayActivityPartial);
+        }
+        else if (availability != AccountActivityAvailability.Available)
+        {
+            traySummaryParts.Add(Loc.TrayActivityFreshnessUnknown);
+        }
+
+        TraySummaryText = string.Join(" · ", traySummaryParts);
+        TraySummaryTooltip = string.Join(" • ", new[] { DisclaimerText, ObservedAtText, StatusNotice }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
     }
 
     [RelayCommand]

@@ -60,6 +60,7 @@ namespace CodexSwitcher.App.ViewModels;
 public sealed partial class AccountUsageViewModel : ObservableObject
 {
     private static Strings Loc => Strings.Current;
+    private DateTimeOffset _now = DateTimeOffset.UtcNow;
 
     public Guid ProfileId { get; }
 
@@ -68,10 +69,12 @@ public sealed partial class AccountUsageViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ShowRateLimitedBadge))]
     [NotifyPropertyChangedFor(nameof(ShowRefreshingBadge))]
     [NotifyPropertyChangedFor(nameof(ShowNeverLoadedText))]
+    [NotifyPropertyChangedFor(nameof(ShowCompactStatus))]
     public partial UsageVisualState VisualState { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowStaleBadge))]
+    [NotifyPropertyChangedFor(nameof(ShowCompactStatus))]
     public partial bool IsStale { get; set; }
 
     [ObservableProperty]
@@ -91,6 +94,7 @@ public sealed partial class AccountUsageViewModel : ObservableObject
     public partial string? NoticeMessage { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CompactObservedAtText))]
     public partial DateTimeOffset? ObservedAt { get; set; }
 
     public ObservableCollection<UsageWindowViewModel> Windows { get; } = [];
@@ -133,11 +137,15 @@ public sealed partial class AccountUsageViewModel : ObservableObject
             : Loc.ResetCreditsNone;
 
     public bool ShowStaleBadge => IsStale || VisualState == UsageVisualState.StaleCache;
+    public bool ShowCompactStatus => !HasWindows && !ShowStaleBadge;
     public bool ShowRateLimitedBadge => VisualState == UsageVisualState.RateLimited;
     public bool ShowRefreshingBadge => IsRefreshing || VisualState == UsageVisualState.Refreshing;
     public bool ShowNeverLoadedText => VisualState == UsageVisualState.NeverLoaded;
 
     public string StaleBadgeLabel => Loc.Pt ? "DADOS EM CACHE" : "STALE DATA";
+    public string CompactObservedAtText => ObservedAt is { } observedAt
+        ? $"{(Loc.Pt ? "Atualizado" : "Updated")} {RelativeTime.Humanize(observedAt, _now, Loc.Pt)}"
+        : string.Empty;
     public string RateLimitedBadgeLabel => Loc.Pt ? "LIMITE ATINGIDO" : "RATE LIMITED";
     public string RefreshingBadgeLabel => Loc.Pt ? "Atualizando…" : "Refreshing…";
     public string NeverLoadedLabel => Loc.Pt ? "Cota ainda não consultada" : "No usage data yet";
@@ -173,6 +181,7 @@ public sealed partial class AccountUsageViewModel : ObservableObject
 
     public void ApplyState(AccountUsageState state, DateTimeOffset now)
     {
+        _now = now;
         VisualState = state.VisualState;
         IsStale = state.IsStale;
         IsRefreshing = state.IsRefreshing;
@@ -203,6 +212,7 @@ public sealed partial class AccountUsageViewModel : ObservableObject
         Activity = new AccountActivityViewModel(state.Activity, state.ActivityAvailability) { IsExpanded = wasExpanded };
 
         OnPropertyChanged(nameof(HasWindows));
+        OnPropertyChanged(nameof(ShowCompactStatus));
         OnPropertyChanged(nameof(HasActivity));
         OnPropertyChanged(nameof(ShowActivitySection));
         OnPropertyChanged(nameof(HasDetailedCredits));
@@ -210,17 +220,20 @@ public sealed partial class AccountUsageViewModel : ObservableObject
         OnPropertyChanged(nameof(UnreportedCount));
         OnPropertyChanged(nameof(UnreportedCreditsText));
         OnPropertyChanged(nameof(CompactResetCreditsText));
+        OnPropertyChanged(nameof(CompactObservedAtText));
         OnPropertyChanged(nameof(CompactStatusText));
     }
 
     public void UpdateCountdowns(DateTimeOffset now)
     {
+        _now = now;
         foreach (var win in Windows)
         {
             win.UpdateCountdown(now);
         }
 
         UpdateCompactWindows(now);
+        OnPropertyChanged(nameof(CompactObservedAtText));
     }
 
     private void UpdateCompactWindows(DateTimeOffset now)

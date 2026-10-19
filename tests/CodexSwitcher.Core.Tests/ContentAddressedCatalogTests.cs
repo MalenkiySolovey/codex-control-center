@@ -69,6 +69,31 @@ public sealed class ContentAddressedCatalogTests
     }
 
     [Fact]
+    public void CatalogSerialization_UnknownContextRemainsOmitted()
+    {
+        using var temp = new TempDir();
+        var paths = new AppPaths(temp.Root);
+        var service = new CodexModelCatalogService(_fs, paths);
+        var profile = new ApiProviderProfile
+        {
+            Id = Guid.NewGuid(),
+            Nickname = "Unknown Context Provider",
+            BaseUrl = "https://api.testprovider.com/v1",
+            SelectedModel = "deepseek-v4.1-flash",
+            ModelInventory = new ApiProviderModelInventory()
+        };
+        profile.ModelInventory.EnsureSelectedModelMigrated("deepseek-v4.1-flash", "DeepSeek v4.1 Flash");
+
+        var catalogPath = service.EnsureProfileModelCatalog(profile);
+
+        Assert.NotNull(catalogPath);
+        using var doc = JsonDocument.Parse(File.ReadAllText(catalogPath));
+        var model = doc.RootElement.GetProperty("models")[0];
+        Assert.False(model.TryGetProperty("context_window", out _));
+        Assert.False(model.TryGetProperty("max_context_window", out _));
+    }
+
+    [Fact]
     public void ContextWindowChange_ProducesNewContentHashAndNewDirectory()
     {
         using var temp = new TempDir();

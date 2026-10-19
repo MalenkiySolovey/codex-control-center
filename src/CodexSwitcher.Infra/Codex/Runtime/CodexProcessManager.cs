@@ -75,7 +75,9 @@ public sealed class CodexProcessManager : IProcessManager
 
     public IReadOnlyList<CodexProcessInfo> FindRunningCodexProcesses()
     {
+        using var lifecycleLease = _registry?.AcquireProcessLifecycleLease();
         var currentSession = SafeSessionId(SysProcess.GetCurrentProcess());
+        var ownedProcessIds = new HashSet<int>(_registry?.GetOwnedProcessTreeIds() ?? Array.Empty<int>());
         var found = new List<CodexProcessInfo>();
 
         // O pacote OpenAI.Codex atual usa ChatGPT.exe para o desktop app; a CLI é codex.exe.
@@ -88,8 +90,8 @@ public sealed class CodexProcessManager : IProcessManager
                     if (SafeSessionId(proc) != currentSession)
                         continue; // só a sessão atual (ponto 26)
 
-                    if (_registry?.IsOwnedProcess(proc.Id) == true)
-                        continue; // Processo filho interno do Switchboard (monitor app-server/login); ignorar para detecção de CLI do usuário
+                    if (ownedProcessIds.Contains(proc.Id))
+                        continue; // Root/descendant launched by Switchboard; don't include it in route-switch targets.
 
                     var path = SafeExecutablePath(proc);
                     if (path is null)
@@ -116,7 +118,13 @@ public sealed class CodexProcessManager : IProcessManager
         IReadOnlyList<CodexProcessInfo> targets, TimeSpan gracefulTimeout,
         CancellationToken cancellationToken = default)
     {
-        var closable = targets.Where(t => t.IsClosable).ToList();
+        using var lifecycleLease = _registry is null
+            ? null
+            : await _registry.AcquireProcessLifecycleLeaseAsync(cancellationToken).ConfigureAwait(false);
+        var ownedProcessIds = new HashSet<int>(_registry?.GetOwnedProcessTreeIds() ?? Array.Empty<int>());
+        var closable = targets
+            .Where(target => target.IsClosable && !ownedProcessIds.Contains(target.Pid))
+            .ToList();
         var live = new List<(CodexProcessInfo Info, SysProcess Proc)>();
 
         // (1) Fechamento gracioso: pedir para a janela fechar (dá chance de salvar).
@@ -173,9 +181,19 @@ public sealed class CodexProcessManager : IProcessManager
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(gracefulTimeout, TimeSpan.Zero);
 
-        var targets = FindRunningCodexProcesses()
+        var candidates = FindRunningCodexProcesses()
             .Where(process => process.Kind == CodexProcessKind.DesktopApp)
             .ToArray();
+        if (candidates.Length == 0)
+        {
+            return true;
+        }
+
+        using var lifecycleLease = _registry is null
+            ? null
+            : await _registry.AcquireProcessLifecycleLeaseAsync(cancellationToken).ConfigureAwait(false);
+        var ownedProcessIds = new HashSet<int>(_registry?.GetOwnedProcessTreeIds() ?? Array.Empty<int>());
+        var targets = candidates.Where(target => !ownedProcessIds.Contains(target.Pid)).ToArray();
         if (targets.Length == 0)
         {
             return true;

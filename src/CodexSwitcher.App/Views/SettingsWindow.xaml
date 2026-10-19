@@ -6,6 +6,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:conv="using:CodexSwitcher.App.Support"
+    xmlns:settings="using:CodexSwitcher.App.Features.Settings"
     mc:Ignorable="d"
     Title="Settings &amp; About">
     <Window.SystemBackdrop>
@@ -111,6 +112,100 @@
                         <TextBlock Text="Preferences" FontSize="16" FontWeight="SemiBold" />
                         <ToggleSwitch Header="Always confirm before switching accounts"
                                       IsOn="{x:Bind ViewModel.AlwaysConfirmSwitch, Mode=TwoWay}" />
+                        <ComboBox Header="{x:Bind ViewModel.Loc.TrayTooltipModeLabel}"
+                                  ItemsSource="{x:Bind ViewModel.TrayTooltipModeOptions}"
+                                  DisplayMemberPath="Label"
+                                  SelectedValuePath="Value"
+                                  SelectedValue="{x:Bind ViewModel.TrayTooltipPresentationMode, Mode=TwoWay}"
+                                  HorizontalAlignment="Left" Width="340" />
+                        <TextBlock Text="{x:Bind ViewModel.Loc.TrayTooltipModeDescription}"
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
+                        <ToggleSwitch Header="Start Codex Switchboard with Windows"
+                                      IsOn="{x:Bind ViewModel.StartWithWindows, Mode=TwoWay}" />
+                        <TextBlock Text="Starts minimized to the system tray. Disable this option to remove only the Switchboard shortcut from your Startup folder."
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
+                        <ToggleSwitch Header="{x:Bind ViewModel.GlobalHotkeyHeader, Mode=OneWay}"
+                                      IsOn="{x:Bind ViewModel.GlobalHotkeyEnabled, Mode=TwoWay}" />
+                        <ComboBox Header="Modifier keys"
+                                  ItemsSource="{x:Bind ViewModel.GlobalHotkeyModifierChoices}"
+                                  SelectedItem="{x:Bind ViewModel.GlobalHotkeyModifiers, Mode=TwoWay}"
+                                  HorizontalAlignment="Left" Width="220" />
+                        <ComboBox Header="Shortcut key"
+                                  ItemsSource="{x:Bind ViewModel.GlobalHotkeyKeyChoices}"
+                                  SelectedItem="{x:Bind ViewModel.GlobalHotkeyKey, Mode=TwoWay}"
+                                  HorizontalAlignment="Left" Width="180" />
+                        <TextBlock Text="Brings Switchboard to the foreground from any app. Choose a modifier combination and letter; if another app already owns that combination, choose another binding or turn the shortcut off."
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
+                        <TextBlock Text="{x:Bind ViewModel.GlobalHotkeyAvailabilityText, Mode=OneWay}"
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Floating quick-switch overlay for a foreground Codex Desktop window -->
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="{x:Bind ViewModel.QuickSwitchOverlayHeader, Mode=OneWay}"
+                                   FontSize="16" FontWeight="SemiBold" />
+                        <ToggleSwitch Header="{x:Bind ViewModel.Loc.QuickSwitchOverlayEnableLabel}"
+                                      IsOn="{x:Bind ViewModel.QuickSwitchOverlayEnabled, Mode=TwoWay}" />
+                        <Grid ColumnDefinitions="Auto,Auto" ColumnSpacing="12">
+                            <ComboBox Header="Modifier keys"
+                                      ItemsSource="{x:Bind ViewModel.QuickSwitchOverlayModifierChoices}"
+                                      SelectedItem="{x:Bind ViewModel.QuickSwitchOverlayModifiers, Mode=TwoWay}"
+                                      Width="220" />
+                            <ComboBox Grid.Column="1" Header="Shortcut key"
+                                      ItemsSource="{x:Bind ViewModel.QuickSwitchOverlayKeyChoices}"
+                                      SelectedItem="{x:Bind ViewModel.QuickSwitchOverlayKey, Mode=TwoWay}"
+                                      Width="110" />
+                        </Grid>
+                        <TextBlock Text="{x:Bind ViewModel.Loc.QuickSwitchOverlayDescription}"
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
+                        <TextBlock Text="{x:Bind ViewModel.QuickSwitchOverlayAvailabilityText, Mode=OneWay}"
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Direct account/provider quick-switch shortcuts -->
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Direct switch shortcuts" FontSize="16" FontWeight="SemiBold" />
+                        <ToggleSwitch Header="Enable assigned account/provider shortcuts"
+                                      IsOn="{x:Bind ViewModel.QuickSwitchHotkeysEnabled, Mode=TwoWay}" />
+                        <TextBlock Text="Assign a saved account or API provider to a slot, then choose its global shortcut. Each action uses the normal switch confirmation and safety checks."
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.QuickSwitchHotkeyRows}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="settings:QuickSwitchHotkeyRowViewModel">
+                                    <StackPanel Spacing="2" Margin="0,0,0,8">
+                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+                                            <TextBlock Grid.Column="0" Text="{Binding SlotLabel}" VerticalAlignment="Center" MinWidth="72" />
+                                            <ComboBox Grid.Column="1" Header="Target"
+                                                      ItemsSource="{Binding TargetChoices}"
+                                                      DisplayMemberPath="Label"
+                                                      SelectedValuePath="Key"
+                                                      SelectedValue="{Binding SelectedTargetKey, Mode=TwoWay}"
+                                                      MinWidth="160" />
+                                            <ComboBox Grid.Column="2" Header="Modifiers"
+                                                      ItemsSource="{Binding ModifierChoices}"
+                                                      SelectedItem="{Binding Modifiers, Mode=TwoWay}"
+                                                      Width="132" />
+                                            <ComboBox Grid.Column="3" Header="Key"
+                                                      ItemsSource="{Binding KeyChoices}"
+                                                      SelectedItem="{Binding Key, Mode=TwoWay}"
+                                                      Width="72" />
+                                        </Grid>
+                                        <TextBlock Text="{Binding RegistrationStatus}" TextWrapping="Wrap"
+                                                   FontSize="12" Opacity="0.75" Margin="80,0,0,0" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="{x:Bind ViewModel.QuickSwitchStatusText, Mode=OneWay}"
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
                     </StackPanel>
                 </Border>
 

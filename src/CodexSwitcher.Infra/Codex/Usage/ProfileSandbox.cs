@@ -85,20 +85,39 @@ public sealed class ProfileSandbox : IAsyncDisposable, IDisposable
         ArgumentNullException.ThrowIfNull(fs);
 
         fs.CreateDirectory(workRoot);
-        DirectoryHardening.TryRestrictToCurrentUser(workRoot);
+        DirectoryHardening.RestrictToCurrentUser(workRoot);
 
         var sandboxDir = Path.Combine(workRoot, $"usage-{profileId:N}-{Guid.NewGuid():N}");
-        fs.CreateDirectory(sandboxDir);
-        DirectoryHardening.TryRestrictToCurrentUser(sandboxDir);
+        try
+        {
+            fs.CreateDirectory(sandboxDir);
+            DirectoryHardening.RestrictToCurrentUser(sandboxDir);
 
-        var authPath = Path.Combine(sandboxDir, "auth.json");
-        var configPath = Path.Combine(sandboxDir, "config.toml");
+            var authPath = Path.Combine(sandboxDir, "auth.json");
+            var configPath = Path.Combine(sandboxDir, "config.toml");
 
-        fs.WriteAllBytesAtomic(authPath, authJsonBytes);
-        fs.WriteAllTextAtomic(configPath, "cli_auth_credentials_store = \"file\"\n");
+            fs.WriteAllBytesAtomic(authPath, authJsonBytes);
+            fs.WriteAllTextAtomic(configPath, "cli_auth_credentials_store = \"file\"\n");
 
-        var initialFingerprint = Fingerprint.Compute(authJsonBytes);
-        return new ProfileSandbox(workRoot, sandboxDir, initialFingerprint, fs);
+            var initialFingerprint = Fingerprint.Compute(authJsonBytes);
+            return new ProfileSandbox(workRoot, sandboxDir, initialFingerprint, fs);
+        }
+        catch
+        {
+            // Construction failed before an owner could be returned to dispose the sandbox.
+            // Remove partial credential/config files now; crash recovery remains the fallback
+            // if Windows still holds a filesystem handle.
+            try
+            {
+                TempCleanup.TryForceDelete(sandboxDir);
+            }
+            catch
+            {
+                // Preserve the creation failure; the next startup sweep retries stale sandboxes.
+            }
+
+            throw;
+        }
     }
 
     /// <summary>
@@ -131,8 +150,9 @@ public sealed class ProfileSandbox : IAsyncDisposable, IDisposable
 
     public ValueTask DisposeAsync()
     {
-        Dispose();
-        return ValueTask.CompletedTask;
+        if (_disposed) return ValueTask.CompletedTask;
+        _disposed = true;
+        return new ValueTask(CleanupAsync());
     }
 
     private void Cleanup()
@@ -150,5 +170,32 @@ public sealed class ProfileSandbox : IAsyncDisposable, IDisposable
 
         // Perform bounded, non-blocking cleanup without stalling application exit
         TempCleanup.TryForceDelete(DirectoryPath);
+    }
+
+    private async Task CleanupAsync()
+    {
+        if (!Directory.Exists(DirectoryPath))
+            return;
+
+        var fullDir = Path.GetFullPath(DirectoryPath);
+        var fullRoot = Path.GetFullPath(_workRoot);
+        if (!fullDir.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) || fullDir.Equals(fullRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        // The app-server can release SQLite/WAL handles just after its process exits.
+        // Retry a couple of times off the UI thread rather than leaving a multi-megabyte
+        // sandbox behind until a future launch performs crash recovery.
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            if (TempCleanup.TryForceDelete(DirectoryPath))
+                return;
+
+            if (attempt < 2)
+                await Task.Delay(TimeSpan.FromMilliseconds(150 * (attempt + 1))).ConfigureAwait(false);
+        }
+
+        System.Diagnostics.Debug.WriteLine("[ProfileSandbox] cleanup deferred to startup recovery.");
     }
 }

@@ -177,9 +177,19 @@ public sealed class CodexCliRunner : ICodexCli
         int processId = 0;
         try
         {
-            process.Start();
+            if (_registry is null)
+            {
+                process.Start();
+            }
+            else
+            {
+                using (await _registry.AcquireProcessLifecycleLeaseAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    process.Start();
+                    _registry.RegisterOwnedProcess(process);
+                }
+            }
             processId = process.Id;
-            _registry?.RegisterOwnedProcess(processId);
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 

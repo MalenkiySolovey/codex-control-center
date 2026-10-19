@@ -7,6 +7,7 @@ using CodexSwitcher.App.Dialogs.Shared;
 using CodexSwitcher.App.Dialogs.Totp;
 using CodexSwitcher.App.Features.Accounts;
 using CodexSwitcher.App.Features.Providers;
+using CodexSwitcher.App.Features.Launch;
 using CodexSwitcher.App.Features.Settings;
 using CodexSwitcher.App.Services;
 using CodexSwitcher.App.Shell;
@@ -119,6 +120,20 @@ public static class ServiceCollectionExtensions
             new CodexCliRunner(
                 sp.GetRequiredService<AppSettings>().CodexExecutablePathOverride,
                 sp.GetRequiredService<ISwitchboardCodexProcessRegistry>()));
+        services.AddSingleton<ICodexLaunchService>(sp => new CodexLaunchService(
+            paths,
+            sp.GetRequiredService<AppSettings>(),
+            sp.GetRequiredService<IProfileStore>(),
+            sp.GetRequiredService<IApiProviderStore>(),
+            sp.GetRequiredService<IVaultService>(),
+            sp.GetRequiredService<IProfileOperationCoordinator>(),
+            sp.GetRequiredService<IApiKeySecretStore>(),
+            sp.GetRequiredService<ICodexRuntimeResolver>(),
+            sp.GetRequiredService<ICodexRuntimeModelCatalogVerifier>(),
+            sp.GetRequiredService<ICodexModelCatalogService>(),
+            sp.GetRequiredService<ProfileService>(),
+            sp.GetRequiredService<IFileSystem>(),
+            sp.GetRequiredService<ISwitchboardCodexProcessRegistry>()));
         services.AddSingleton<IProcessManager>(sp =>
             new CodexProcessManager(sp.GetRequiredService<ISwitchboardCodexProcessRegistry>()));
         services.AddSingleton<ICodexCapabilityCache, CodexCapabilityCache>();
@@ -271,7 +286,7 @@ public static class ServiceCollectionExtensions
             paths.CatalogSigPath,
             paths.CatalogPreviousPath,
             paths.LocalCatalogPath,
-            "0.2.2"));
+            "0.3.0"));
 
         services.AddSingleton<ProviderCatalogService>();
         services.AddSingleton<IProviderCatalogService>(sp => sp.GetRequiredService<ProviderCatalogService>());
@@ -376,6 +391,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAppNotificationService, AppNotificationService>();
         services.AddSingleton<IAppBusyService, AppBusyService>();
         services.AddSingleton<IThemeService, WinUiThemeService>();
+        services.AddSingleton<IStartupRegistrationService, StartupRegistrationService>();
+        services.AddSingleton<IGlobalHotkeyService, GlobalHotkeyService>();
         services.AddSingleton<WindowChromeService>();
         services.AddSingleton<WindowLifecycleCoordinator>();
 
@@ -384,6 +401,7 @@ public static class ServiceCollectionExtensions
         services.AddTransient<AccountUsageCoordinator>();
         services.AddTransient<AccountsViewModel>();
         services.AddTransient<ApiProvidersViewModel>();
+        services.AddTransient<LaunchProfilesViewModel>();
         services.AddTransient<ShellViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<MainWindow>();

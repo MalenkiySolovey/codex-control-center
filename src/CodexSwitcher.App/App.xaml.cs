@@ -54,6 +54,13 @@ public partial class App : Application
         _window.Closed += OnMainWindowClosed;
         StartupTracer.Instance.RecordMilestone("T9:WindowActivateCalled");
         _window.Activate();
+        if (Program.CommandLineArgs.Any(argument =>
+                argument.Equals("--start-in-tray", StringComparison.OrdinalIgnoreCase)))
+        {
+            // Keep the hide on the launch stack instead of waiting for another
+            // dispatcher turn. Startup still uses the normal Window activation path.
+            _window.HideToTray();
+        }
         _deferredMaintenanceTask = RunDeferredMaintenanceAfterInteractiveAsync(_host);
         Services.BenchmarkScenarioRunner.CheckAndRun(_window, Program.CommandLineArgs);
     }
@@ -194,6 +201,20 @@ public partial class App : Application
                 await tracer.MeasurePhaseAsync("TerminateOwnedProcesses", async () =>
                 {
                     tracer.RecordMilestone("S9:TerminateOwnedProcessesRequested");
+                    var launchService = _host.Services.GetService<ICodexLaunchService>();
+                    if (launchService is not null)
+                    {
+                        try
+                        {
+                            using var launchStopCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                            await launchService.StopAllAsync(launchStopCts.Token).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[Shutdown] Managed Codex session stop warning: {ex.GetType().Name}");
+                        }
+                    }
+
                     var processRegistry = _host.Services.GetService<ISwitchboardCodexProcessRegistry>();
                     if (processRegistry is not null)
                     {

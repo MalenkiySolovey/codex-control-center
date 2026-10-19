@@ -85,6 +85,7 @@ public sealed class AppPaths
     public string LegacyApiKeysDir => Path.Combine(Root, "keys");
     public string CatalogsDir => Path.Combine(Root, "catalogs");
     public string RoutingStatePath => Path.Combine(Root, "routing-state.json");
+    public string LaunchHomesDir => Path.Combine(Root, "launch-homes");
 
     /// <summary>Caminho do arquivo de credencial TOTP cifrado de um perfil.</summary>
     public string GetTotpPath(Guid profileId) => Path.Combine(TotpDir, $"{profileId:N}.bin");
@@ -192,6 +193,7 @@ public sealed class AppPaths
         Directory.CreateDirectory(CatalogDir);
         Directory.CreateDirectory(BrokerDir);
         Directory.CreateDirectory(ApiKeysDir);
+        Directory.CreateDirectory(LaunchHomesDir);
     }
 }
 

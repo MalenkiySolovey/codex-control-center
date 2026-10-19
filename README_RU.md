@@ -10,7 +10,7 @@
 ![Интерфейс](https://img.shields.io/badge/интерфейс-WinUI%203%20Fluent-2E9BFF)
 ![Тесты](https://img.shields.io/badge/тесты-966%20пройдены-3DDC84)
 ![Архитектура](https://img.shields.io/badge/архитектура-x64-blue)
-![Релиз](https://img.shields.io/badge/релиз-v0.2.2-brightgreen)
+![Релиз](https://img.shields.io/badge/релиз-v0.3.0-brightgreen)
 
 ---
 
@@ -212,9 +212,30 @@ Codex Switchboard построен по модульной многослойн�
 
 Готовые исполняемые сборки для Windows x64 доступны в разделе [GitHub Releases](../../releases).
 
-1. Скачайте архив **`CodexSwitchboard-0.2.2-win-x64.zip`** из последнего релиза.
+1. Скачайте архив **`CodexSwitchboard-0.3.0-win-x64.zip`** из последнего релиза.
 2. Распакуйте архив в любую удобную папку.
 3. Запустите **`CodexSwitchboard.exe`**.
+
+---
+
+## CLI только для чтения (предварительная версия)
+
+В репозитории есть небольшая консольная утилита для просмотра локального состояния Switchboard. Запуск из исходного каталога:
+
+```powershell
+dotnet run --project src/CodexSwitcher.Cli -- list
+dotnet run --project src/CodexSwitcher.Cli -- current --json
+dotnet run --project src/CodexSwitcher.Cli -- status --json
+dotnet run --project src/CodexSwitcher.Cli -- export
+dotnet run --project src/CodexSwitcher.Cli -- fleet --json
+dotnet run --project src/CodexSwitcher.Cli -- schema
+dotnet run --project src/CodexSwitcher.Cli -- schema fleet
+dotnet run --project src/CodexSwitcher.Cli -- completion powershell
+```
+
+Команда `export` выводит в стандартный поток очищенный JSON-снимок и не создаёт файл. Версионированный контракт описан в [JSON Schema экспорта CLI v1](schemas/codex-switchboard-cli-export-v1.schema.json); упакованный CLI выводит его командой `codex-switchboard schema`. Команда `fleet` показывает только кэшированный статус и квоты сохранённых ChatGPT-аккаунтов: кэш не обновляется, сетевые запросы не выполняются. Её контракт описан в [JSON Schema fleet CLI v1](schemas/codex-switchboard-cli-fleet-v1.schema.json) и выводится командой `codex-switchboard schema fleet`. Обе команды исключают адреса электронной почты, внутренние идентификаторы и секреты. CLI читает метаданные профилей и несекретный кэш квот, но не хранилище учётных данных и не меняет маршрутизацию. Скрипты автодополнения можно получить командами `codex-switchboard completion powershell`, `codex-switchboard completion bash` или `codex-switchboard completion zsh`; они также включены в архив. Чтобы подключить их для текущего сеанса PowerShell, выполните `Invoke-Expression (codex-switchboard completion powershell | Out-String)`. Архив также содержит `codex-switchboard.exe` и обе схемы.
+
+Необязательная предварительная версия приложения-компаньона для VS Code находится в [`integrations/vscode`](integrations/vscode). Она использует тот же CLI-контракт для показа активной цели и кэшированных квот, не переключая аккаунты и не обращаясь к учётным данным.
 
 ---
 
@@ -248,9 +269,9 @@ dotnet test CodexSwitcher.slnx -c Release --no-build --no-restore
 ### 3. Создание детерминированного установочного архива
 Запустите скрипт сборки, тестирования, санитарной очистки и упаковки:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.2.2"
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.3.0"
 ```
-Файлы сборки: `dist/v0.2.2/CodexSwitchboard-0.2.2-win-x64.zip`, контрольная сумма `dist/v0.2.2/SHA256SUMS.txt` и манифест содержимого `dist/v0.2.2/manifest-sha256.txt`. Версионные каталоги сохраняют артефакты других сборок.
+Файлы сборки: `dist/v0.3.0/CodexSwitchboard-0.3.0-win-x64.zip`, контрольная сумма `dist/v0.3.0/SHA256SUMS.txt` и манифест содержимого `dist/v0.3.0/manifest-sha256.txt`. Версионные каталоги сохраняют артефакты других сборок.
 
 ---
 

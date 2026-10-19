@@ -61,20 +61,31 @@ public sealed record RateLimitsSnapshot(
     bool? OrdinaryUsageAllowed = null,
     QuotaDataOrigin Origin = QuotaDataOrigin.Unknown,
     string? RuntimeVersion = null,
-    bool AccountIdentityMatched = true,
+    bool? AccountIdentityMatched = null,
     bool RequestSucceeded = true)
 {
-    private LimitBucket? PrimaryBucket =>
-        Limits.FirstOrDefault(b => b.LimitId == (PrimaryLimitId ?? "codex"))
-        ?? (Limits.Count > 0 ? Limits[0] : null);
+    /// <summary>
+    /// The explicitly selected primary bucket. A missing primary ID only falls back to the
+    /// legacy Codex bucket name; unrelated multi-bucket entries are never promoted by order.
+    /// </summary>
+    public LimitBucket? PrimaryBucket => ResolvePrimaryBucket(Limits, PrimaryLimitId);
+
+    /// <summary>Resolves a primary bucket using the same case-insensitive identity as the parser.</summary>
+    public static LimitBucket? ResolvePrimaryBucket(IReadOnlyList<LimitBucket> limits, string? primaryLimitId)
+    {
+        var expectedLimitId = string.IsNullOrWhiteSpace(primaryLimitId) ? "codex" : primaryLimitId;
+        return limits.FirstOrDefault(bucket =>
+            string.Equals(bucket.LimitId, expectedLimitId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>The windows for the selected primary bucket, or none when it is unknown/absent.</summary>
+    public IReadOnlyList<UsageWindow> PrimaryWindows => PrimaryBucket?.Windows ?? Array.Empty<UsageWindow>();
 
     /// <summary>The first window in the primary bucket (or null if none).</summary>
-    public UsageWindow? PrimaryWindow =>
-        PrimaryBucket?.Windows is { Count: > 0 } windows ? windows[0] : null;
+    public UsageWindow? PrimaryWindow => PrimaryWindows.Count > 0 ? PrimaryWindows[0] : null;
 
     /// <summary>The secondary window in the primary bucket (or null if none).</summary>
-    public UsageWindow? SecondaryWindow =>
-        PrimaryBucket?.Windows is { Count: > 1 } sWindows ? sWindows[1] : null;
+    public UsageWindow? SecondaryWindow => PrimaryWindows.Count > 1 ? PrimaryWindows[1] : null;
 
     /// <summary>Finds a window by exact duration in minutes (e.g. 300 for 5h, 10080 for 7d).</summary>
     public UsageWindow? FindWindowByDuration(int durationMinutes) =>

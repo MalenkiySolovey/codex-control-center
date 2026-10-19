@@ -71,6 +71,7 @@ public enum ApiProviderCardVisualState
 public sealed partial class ApiProviderItemViewModel : ObservableObject
 {
     private long _latestRefreshGeneration;
+    private bool _latestRefreshIsTerminal;
 
     private static Strings Loc => Strings.Current;
 
@@ -331,7 +332,18 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
             return;
         }
 
-        _latestRefreshGeneration = result.RequestGeneration;
+        if (result.RequestGeneration > _latestRefreshGeneration)
+        {
+            _latestRefreshGeneration = result.RequestGeneration;
+            _latestRefreshIsTerminal = false;
+        }
+
+        // A delayed progress notification from this same request must not put
+        // the card back into its loading state after a terminal result.
+        if (_latestRefreshIsTerminal && result.Outcome == ModelInventoryRefreshOutcome.Refreshing)
+        {
+            return;
+        }
 
         switch (result.Outcome)
         {
@@ -340,6 +352,7 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
                 ModelsStatusMessage = result.ProgressMessage ?? "Refreshing models...";
                 break;
             case ModelInventoryRefreshOutcome.Succeeded:
+                _latestRefreshIsTerminal = true;
                 IsLoadingModels = false;
                 ModelsReportedCount = result.ModelsReportedCount;
                 ModelsEnabledCount = Profile.ModelInventory?.GetEnabledModels().Count() ?? 0;
@@ -351,11 +364,26 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
                 // replace a newer success with a stale terminal observation.
                 break;
             default:
+                _latestRefreshIsTerminal = true;
                 IsLoadingModels = false;
                 ModelsStatusMessage = result.ErrorMessageSanitized
                     ?? "Model refresh did not return a usable inventory.";
                 break;
         }
+    }
+
+    public void ApplyRefreshFailure(long requestGeneration, string message)
+    {
+        ApplyRefreshResult(new ModelInventoryRefreshResult
+        {
+            ProfileId = Id,
+            RequestGeneration = requestGeneration,
+            Outcome = ModelInventoryRefreshOutcome.Failed,
+            ErrorKind = "RefreshFailed",
+            ErrorMessageSanitized = message,
+            VerificationStatus = ModelCatalogVerificationStatus.Failed,
+            ObservedAt = DateTimeOffset.UtcNow,
+        });
     }
 
     private void RefreshInventoryPresentation(ApiProviderProfile profile)
