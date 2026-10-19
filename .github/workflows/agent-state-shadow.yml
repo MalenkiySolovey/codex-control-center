@@ -1,0 +1,48 @@
+name: Agent State Shadow Compatibility
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - ".github/workflows/agent-state-shadow.yml"
+      - "eng/shadow/**"
+      - "src/CodexSwitcher.Core/Accounts/Services/AccountRegistry.cs"
+      - "src/CodexSwitcher.Infra/AgentState/Shadow/**"
+      - "tests/CodexSwitcher.AgentStateShadow.CrossRepoTests/**"
+  pull_request:
+    branches: [ "main", "master" ]
+    paths:
+      - ".github/workflows/agent-state-shadow.yml"
+      - "eng/shadow/**"
+      - "src/CodexSwitcher.Core/Accounts/Services/AccountRegistry.cs"
+      - "src/CodexSwitcher.Infra/AgentState/Shadow/**"
+      - "tests/CodexSwitcher.AgentStateShadow.CrossRepoTests/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-state-shadow-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Pinned daemon real-process compatibility (windows-2025)
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Control Center
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET SDK from global.json
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Verify pinned daemon and real-process shadow projection
+        shell: pwsh
+        run: ./eng/shadow/verify-cross-repo.ps1

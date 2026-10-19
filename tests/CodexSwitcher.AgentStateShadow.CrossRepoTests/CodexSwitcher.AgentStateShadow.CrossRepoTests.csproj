@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>CodexSwitcher.AgentStateShadow.CrossRepoTests</AssemblyName>
+    <RootNamespace>CodexSwitcher.AgentStateShadow.CrossRepoTests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CodexSwitcher.Core\CodexSwitcher.Core.csproj" />
+    <ProjectReference Include="..\..\src\CodexSwitcher.Infra\CodexSwitcher.Infra.csproj" />
+  </ItemGroup>
+</Project>

@@ -15,6 +15,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CodexSwitcher.Core.Tests" />
+    <InternalsVisibleTo Include="CodexSwitchboard" />
+    <InternalsVisibleTo Include="CodexSwitcher.AgentStateShadow.CrossRepoTests" />
   </ItemGroup>
 
 </Project>

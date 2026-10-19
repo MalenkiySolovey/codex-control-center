@@ -18,8 +18,25 @@ public sealed class AccountRegistry
     private readonly IClock _clock;
     private readonly IAuditLog _audit;
     private List<ProfileMetadata> _profiles = [];
+    private bool _isLoaded;
+    private bool _isLoading;
 
     internal object SyncRoot { get; } = new();
+
+    /// <summary>
+    /// Raised after the registry has loaded or successfully persisted a new snapshot.
+    /// Subscribers should signal background work and avoid blocking the registry operation.
+    /// </summary>
+    public event Action? SnapshotChanged;
+
+    public bool IsLoaded
+    {
+        get
+        {
+            lock (SyncRoot)
+                return _isLoaded;
+        }
+    }
 
     /// <summary>Returns a defensive snapshot; mutating its profiles cannot alter registry state.</summary>
     public IReadOnlyList<ProfileMetadata> Profiles => Snapshot();
@@ -346,12 +363,46 @@ public sealed class AccountRegistry
 
     internal void LoadUnderLock()
     {
-        _profiles = _store.LoadAll().Select(profile => profile.CreateSnapshot()).ToList();
-        EnsureSortOrderInitializedUnderLock();
+        _isLoading = true;
+        try
+        {
+            _profiles = _store.LoadAll().Select(profile => profile.CreateSnapshot()).ToList();
+            EnsureSortOrderInitializedUnderLock();
+            _isLoaded = true;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+
+        NotifySnapshotChanged();
     }
 
-    private void SaveUnderLock(ProfileSaveIntent intent = ProfileSaveIntent.NormalUpdate) =>
+    private void SaveUnderLock(ProfileSaveIntent intent = ProfileSaveIntent.NormalUpdate)
+    {
         _store.SaveAll(_profiles, intent);
+        if (!_isLoading)
+            NotifySnapshotChanged();
+    }
+
+    private void NotifySnapshotChanged()
+    {
+        var handlers = SnapshotChanged;
+        if (handlers is null)
+            return;
+
+        foreach (Action handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler();
+            }
+            catch
+            {
+                // A background observer must never turn a successful profile commit into a failure.
+            }
+        }
+    }
 
     private void EnsureSortOrderInitializedUnderLock()
     {

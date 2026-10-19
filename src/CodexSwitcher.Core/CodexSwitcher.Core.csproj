@@ -9,4 +9,8 @@
     <EmbeddedResource Include="..\..\catalog\providers.catalog.json" Link="Catalog\providers.catalog.json" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodexSwitcher.AgentStateShadow.CrossRepoTests" />
+  </ItemGroup>
+
 </Project>
