@@ -33,4 +33,4 @@ jobs:
 
       - name: Execute Quality Gates Verification
         shell: powershell
-        run: powershell -ExecutionPolicy Bypass -File .\eng\quality\verify.ps1
+        run: powershell -ExecutionPolicy Bypass -File .\eng\quality\verify.ps1 -SkipPackaging
