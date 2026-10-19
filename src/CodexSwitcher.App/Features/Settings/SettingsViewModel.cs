@@ -125,12 +125,12 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         }
     }
 
-    public string AppName => "Codex Switchboard";
+    public string AppName => Loc.AppName;
     public string AppVersion =>
         typeof(SettingsViewModel).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
         ?? typeof(SettingsViewModel).Assembly.GetName().Version?.ToString(3)
         ?? "0.3.0";
-    public string RepositoryUrl => "https://github.com/MalenkiySolovey/codex-switchboard";
+    public string RepositoryUrl => "https://github.com/MalenkiySolovey/codex-control-center";
     public string LicenseNotice => "MIT License • Copyright (c) 2026";
     public string IndependenceStatement => Loc.IndependenceNotice;
     public string DataRootPath => _paths.Root;
@@ -247,8 +247,8 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
             {
                 _startupRegistrationService.SetEnabled(value);
                 StatusMessage = value
-                    ? "Codex Switchboard will start minimized to the system tray when you sign in to Windows."
-                    : "Codex Switchboard will no longer start automatically when you sign in.";
+                    ? "Codex Control Center will start minimized to the system tray when you sign in to Windows."
+                    : "Codex Control Center will no longer start automatically when you sign in.";
                 StatusSeverity = InfoBarSeverity.Success;
             }
             catch (Exception ex)
@@ -292,8 +292,8 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
                 _settings.GlobalHotkeyEnabled = value;
                 _settingsStore.Save(_settings);
                 StatusMessage = value
-                    ? $"{GlobalHotkeyLabel} will bring Codex Switchboard to the foreground."
-                    : "The Switchboard global hotkey has been disabled.";
+                    ? $"{GlobalHotkeyLabel} will bring Codex Control Center to the foreground."
+                    : "The Control Center global hotkey has been disabled.";
                 StatusSeverity = InfoBarSeverity.Success;
             }
             catch (Exception ex)
@@ -328,7 +328,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     public string GlobalHotkeyAvailabilityText => !_settings.GlobalHotkeyEnabled
         ? $"Optional shortcut {GlobalHotkeyLabel}; currently disabled."
         : _globalHotkeyService?.IsEnabled == true
-            ? $"Active while Switchboard is running. {GlobalHotkeyLabel} brings it to the foreground."
+            ? $"Active while Control Center is running. {GlobalHotkeyLabel} brings it to the foreground."
             : $"Enabled in settings, but {GlobalHotkeyLabel} is not registered in Windows; turn it off or choose another binding if this one is already in use.";
 
     public bool QuickSwitchHotkeysEnabled
@@ -694,7 +694,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
                     ? $"{active} direct shortcut(s) active; {conflicts} binding(s) need attention."
                     : needsAttention > 0
                         ? $"{active} direct shortcut(s) active; review the status shown for other assigned slots."
-                    : $"{active} direct shortcut(s) active while Switchboard is running.";
+                    : $"{active} direct shortcut(s) active while Control Center is running.";
         }
 
         OnPropertyChanged(nameof(QuickSwitchStatusText));

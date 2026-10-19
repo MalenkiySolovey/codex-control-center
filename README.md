@@ -1,26 +1,28 @@
-# Codex Switchboard
+# Codex Control Center
 
 **English** | [Русский](./README_RU.md)
 
 > Fast, native Windows desktop manager and real-time rate-limit quota dashboard for OpenAI Codex.  
 > Switch accounts with one click and monitor usage quotas without re-authenticating.
 
+> This repository is the next development line migrated from [Codex Switchboard](https://github.com/MalenkiySolovey/codex-switchboard), with Git history preserved. The inherited `v0.3.0` tag is provenance, not a Codex Control Center release. No Control Center binaries have been published yet. The app currently retains Switchboard's executable and local data-root names for compatibility.
+
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20x64-0078D6?logo=windows)
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet)
 ![UI](https://img.shields.io/badge/UI-WinUI%203%20Fluent-2E9BFF)
-![Tests](https://img.shields.io/badge/tests-966%20passing-3DDC84)
+![Tests](https://img.shields.io/badge/tests-984%20passing-3DDC84)
 ![Architecture](https://img.shields.io/badge/architecture-x64-blue)
-![Release](https://img.shields.io/badge/release-v0.3.0-brightgreen)
+![Release](https://img.shields.io/badge/release-not%20published-lightgrey)
 
 ---
 
 ## Overview
 
-**Codex Switchboard** is a native Windows desktop application built with WinUI 3 and .NET 10 that unifies multi-account credential management, real-time rate-limit quota monitoring, and secure profile-bound 2FA management into a single, high-performance dashboard.
+**Codex Control Center** is a native Windows desktop application built with WinUI 3 and .NET 10 that unifies multi-account credential management, real-time rate-limit quota monitoring, and secure profile-bound 2FA management into a single, high-performance dashboard.
 
 By default, the OpenAI Codex CLI stores authentication credentials in a single local file (`%USERPROFILE%\.codex\auth.json`). Developers maintaining separate personal, work, client, or team accounts are forced to repeatedly log in through the browser, interrupting active coding workflows. Furthermore, keeping track of remaining requests, dynamic quota reset countdowns, and reset credits across multiple accounts historically required manual CLI probes or ad-hoc scripts.
 
-Codex Switchboard solves both challenges:
+Codex Control Center solves both challenges:
 1. **Instant Atomic Account Switching:** Safely swaps credentials in `%USERPROFILE%\.codex\auth.json` in milliseconds with automatic session token write-back, pre-flight decryption checks, and transactional rollback.
 2. **Real-Time Quota Telemetry:** Continuously tracks rate-limit windows (e.g. 5-hour and 7-day windows), usage percentages, remaining reset credits, and Account Activity across all saved accounts via isolated background sandboxes.
 3. **Profile-Bound 2FA / TOTP Security:** Generates time-based one-time passcodes locally with DPAPI encryption at rest, automatic 10-second re-masking, and an optional native Windows verification gate.
@@ -73,7 +75,7 @@ Codex Switchboard solves both challenges:
 ### Account Activity Telemetry (Compatible Runtimes)
 - **Activity & Streak Metrics:** Displays server-reported lifetime token consumption, peak daily usage, longest turn duration, current streak, and longest streak days.
 - **Daily Usage Breakdown:** Visual representation of token usage distributions over recent days.
-- **Runtime Capability Detection:** Probes the installed Codex app-server for RPC method support (`account/rateLimits/read`, `account/usage/read`). If running on an older runtime lacking activity methods, Switchboard displays clean diagnostic badges while keeping quota monitoring fully functional.
+- **Runtime Capability Detection:** Probes the installed Codex app-server for RPC method support (`account/rateLimits/read`, `account/usage/read`). If running on an older runtime lacking activity methods, Control Center displays clean diagnostic badges while keeping quota monitoring fully functional.
 
 ### Isolated Multi-Account Sandboxes
 - **Zero-Write Invariant:** Background quota polling and telemetry queries never modify or lock `%USERPROFILE%\.codex\auth.json`.
@@ -113,20 +115,20 @@ Codex Switchboard solves both challenges:
 
 ## Runtime Compatibility Matrix
 
-Codex Switchboard interfaces with the official OpenAI Codex CLI/App-Server via JSON-RPC 2.0 over `stdio`. Dynamic capability detection tests installed runtimes automatically.
+Codex Control Center interfaces with the official OpenAI Codex CLI/App-Server via JSON-RPC 2.0 over `stdio`. Dynamic capability detection tests installed runtimes automatically.
 
 | Codex CLI Version | Rate Limits (`account/rateLimits/read`) | Account Activity (`account/usage/read`) | Empirical Verification Status |
 | :--- | :---: | :---: | :--- |
 | **`0.130.0-alpha.5`** | ✅ Supported | ❌ Unsupported | Verified legacy runtime (Rate limits and switching fully operational; activity shows unsupported badge) |
 | **`0.153.4`** | ✅ Supported | ✅ Supported | Verified modern runtime (Full feature set verified with live empirical rate limits and token telemetry) |
 
-*Note: For any other installed version, Switchboard dynamically queries method availability at runtime.*
+*Note: For any other installed version, Control Center dynamically queries method availability at runtime.*
 
 ---
 
 ## Architecture Overview
 
-Codex Switchboard follows a clean layered architecture with clear separation of concerns:
+Codex Control Center follows a clean layered architecture with clear separation of concerns:
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -168,7 +170,7 @@ All configuration, credentials, and cache files reside strictly on your local co
 
 | Storage Path | Purpose | Environment Variable |
 | :--- | :--- | :--- |
-| `%LOCALAPPDATA%\CodexSwitchboard\` | Primary application data root (vault, profiles, cache, logs) | `CODEXSWITCHBOARD_HOME` |
+| `%LOCALAPPDATA%\CodexSwitchboard\` | Compatibility-preserved application data root (vault, profiles, cache, logs) | `CODEXSWITCHBOARD_HOME` |
 | `%LOCALAPPDATA%\CodexSwitcher\` | Legacy switcher root (read-only migration source only) | `CODEXSWITCHER_HOME` |
 | `%USERPROFILE%\.codex\` | Active Codex CLI directory (`auth.json`, `config.toml`) | `CODEX_HOME` |
 
@@ -188,7 +190,7 @@ All configuration, credentials, and cache files reside strictly on your local co
 ## Security & Privacy Model
 
 - **Local DPAPI Vault:** Credentials (`auth.json`) are encrypted at rest using the Windows Data Protection API (`DPAPI`) with `DataProtectionScope.CurrentUser`. Keys are derived from the logged-in Windows session; no master passwords are ever stored or transmitted.
-- **Zero Developer Telemetry:** Codex Switchboard contains **no telemetry libraries, no analytics trackers, no advertising SDKs, and no cloud server dependencies**.
+- **Zero Developer Telemetry:** Codex Control Center contains **no telemetry libraries, no analytics trackers, no advertising SDKs, and no cloud server dependencies**.
 - **Network Boundaries:**
   - **OAuth Additions:** The embedded WebView2 browser connects directly to OpenAI's official authentication servers (`auth.openai.com`). Session cookies are stored in a disposable sandbox folder.
   - **Quota Inquiries:** The locally spawned official `codex.exe` executable connects directly to OpenAI API endpoints to retrieve quota and telemetry data according to OpenAI's privacy policy.
@@ -202,24 +204,20 @@ All configuration, credentials, and cache files reside strictly on your local co
 
 - **Operating System:** Windows 10 (version 2004 / Build 19041 or newer) or Windows 11 (x64).
 - **Codex CLI:** OpenAI Codex installed and available on `PATH` (or configured via Custom Executable Path in Settings).
-- **WebView2 Evergreen Runtime:** Required only for browser-based OAuth account additions (pre-installed on Windows 11; if missing on Windows 10/Server, Switchboard displays a direct Microsoft download link while manual account imports remain available).
+- **WebView2 Evergreen Runtime:** Required only for browser-based OAuth account additions (pre-installed on Windows 11; if missing on Windows 10/Server, Control Center displays a direct Microsoft download link while manual account imports remain available).
 - **.NET 10 SDK:** Required only for building from source.
 
 ---
 
 ## Download
 
-Pre-built Windows x64 binaries are available under [GitHub Releases](../../releases).
-
-1. Download **`CodexSwitchboard-0.3.0-win-x64.zip`** from the latest release.
-2. Extract the archive to any folder.
-3. Run **`CodexSwitchboard.exe`**.
+Codex Control Center has not published release binaries yet. The inherited `v0.3.0` source release belongs to [Codex Switchboard](https://github.com/MalenkiySolovey/codex-switchboard/releases), not this repository. Build this development line from source using the steps below.
 
 ---
 
 ## Read-only CLI (preview)
 
-The repository includes a small Windows command-line client for inspecting local Switchboard state. From a source checkout, run:
+The repository includes a small Windows command-line client for inspecting local Control Center state. From a source checkout, run:
 
 ```powershell
 dotnet run --project src/CodexSwitcher.Cli -- list
@@ -244,16 +242,16 @@ An optional read-only VS Code companion preview is in [`integrations/vscode`](in
 - [.NET 10 SDK (x64)](https://dotnet.microsoft.com/download/dotnet/10.0) pinned via `global.json` (`10.0.102` with `latestPatch`).
 
 ### 1. Developer Verification (Single Command)
-Run all repository quality gates (locked restore, format check, dependency vulnerability audit, release build with warnings as errors, and full 966-test suite):
+Run all repository quality gates (locked restore, format check, dependency vulnerability audit, release build with warnings as errors, and full 984-test suite):
 ```powershell
 powershell -ExecutionPolicy Bypass -File eng/quality/verify.ps1
 ```
 
 ### 2. Manual Clone, Locked Restore & Build
 ```powershell
-# Clone the repository
-git clone https://github.com/MalenkiySolovey/codex-switchboard.git
-cd codex-switchboard
+# Clone the Control Center repository
+git clone https://github.com/MalenkiySolovey/codex-control-center.git
+cd codex-control-center
 
 # Restore NuGet dependencies with locked mode
 dotnet restore CodexSwitcher.slnx --locked-mode
@@ -261,22 +259,18 @@ dotnet restore CodexSwitcher.slnx --locked-mode
 # Build solution in Release configuration
 dotnet build CodexSwitcher.slnx -c Release --no-restore
 
-# Run the complete offline test suite (966 tests)
+# Run the complete offline test suite (984 tests)
 dotnet test CodexSwitcher.slnx -c Release --no-build --no-restore
 ```
 
-### 3. Package Local Release Candidate
-Execute the packaging script to build, test, sanitize, and produce a deterministic release archive:
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Version "0.3.0"
-```
-Output artifacts: `dist/v0.3.0/CodexSwitchboard-0.3.0-win-x64.zip`, `dist/v0.3.0/SHA256SUMS.txt`, and payload manifest `dist/v0.3.0/manifest-sha256.txt`. Versioned output directories preserve artifacts from other builds.
+### 3. Inherited Packaging Script
+The packaging script is retained from the source repository for migration verification. It still emits `CodexSwitchboard.exe` and a `CodexSwitchboard-<version>-win-x64.zip` archive, and its default version is the inherited `0.3.0`. Treat its output as a compatibility build, not as a Codex Control Center release. Update and verify the release identity/version before publishing Control Center binaries.
 
 ---
 
 ## Upstream Attribution & Acknowledgments
 
-Codex Switchboard is built upon foundations established by open-source and community projects:
+Codex Control Center is built upon foundations established by open-source and community projects:
 
 - **[codex-switcher](https://github.com/unkdevv/codex-switcher)** by [unkdevv](https://github.com/unkdevv) (MIT License):
   - Provided the foundational WinUI 3 application architecture, DPAPI vault storage model, 10-step atomic switching transaction, and OAuth session concepts.
@@ -289,4 +283,4 @@ Codex Switchboard is built upon foundations established by open-source and commu
 
 - **License:** Distributed under the terms of the [MIT License](./LICENSE).
 - **Trademarks:** "OpenAI", "ChatGPT", and "Codex" are registered trademarks of OpenAI, Inc. "Windows", "WinUI", and "Microsoft" are registered trademarks of Microsoft Corporation.
-- **Disclaimer:** Codex Switchboard is an independent open-source project and is not affiliated with, endorsed by, or sponsored by OpenAI or Microsoft.
+- **Disclaimer:** Codex Control Center is an independent open-source project and is not affiliated with, endorsed by, or sponsored by OpenAI or Microsoft.

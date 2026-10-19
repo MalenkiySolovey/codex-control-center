@@ -120,9 +120,9 @@
                                   HorizontalAlignment="Left" Width="340" />
                         <TextBlock Text="{x:Bind ViewModel.Loc.TrayTooltipModeDescription}"
                                    TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
-                        <ToggleSwitch Header="Start Codex Switchboard with Windows"
+                        <ToggleSwitch Header="Start Codex Control Center with Windows"
                                       IsOn="{x:Bind ViewModel.StartWithWindows, Mode=TwoWay}" />
-                        <TextBlock Text="Starts minimized to the system tray. Disable this option to remove only the Switchboard shortcut from your Startup folder."
+                        <TextBlock Text="Starts minimized to the system tray. Disable this option to remove only the Control Center shortcut from your Startup folder."
                                    TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
                         <ToggleSwitch Header="{x:Bind ViewModel.GlobalHotkeyHeader, Mode=OneWay}"
                                       IsOn="{x:Bind ViewModel.GlobalHotkeyEnabled, Mode=TwoWay}" />
@@ -134,7 +134,7 @@
                                   ItemsSource="{x:Bind ViewModel.GlobalHotkeyKeyChoices}"
                                   SelectedItem="{x:Bind ViewModel.GlobalHotkeyKey, Mode=TwoWay}"
                                   HorizontalAlignment="Left" Width="180" />
-                        <TextBlock Text="Brings Switchboard to the foreground from any app. Choose a modifier combination and letter; if another app already owns that combination, choose another binding or turn the shortcut off."
+                        <TextBlock Text="Brings Control Center to the foreground from any app. Choose a modifier combination and letter; if another app already owns that combination, choose another binding or turn the shortcut off."
                                    TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
                         <TextBlock Text="{x:Bind ViewModel.GlobalHotkeyAvailabilityText, Mode=OneWay}"
                                    TextWrapping="Wrap" FontSize="12" Opacity="0.75" />

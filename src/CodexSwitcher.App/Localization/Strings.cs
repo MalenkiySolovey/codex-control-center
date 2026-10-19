@@ -80,6 +80,7 @@ public sealed class Strings
     private string S(string pt, string en) => Pt ? pt : en;
 
     // Cabeçalho / barra de ferramentas
+    public string AppName => "Codex Control Center";
     public string AccountsHeader => S("Suas contas", "Your accounts");
     public string AccountsSubtitle => S(
         "Troque de conta do Codex com um clique, sem refazer o login.",
@@ -91,18 +92,18 @@ public sealed class Strings
     public string RefreshUsageTooltip => S("Atualizar uso de todas as contas", "Refresh usage for all accounts");
     public string SignInOAuth => S("Entrar com OAuth", "Sign in with OAuth");
     public string SignInOAuthTooltip => S(
-        "Adicionar uma conta ChatGPT ao Switchboard usando OAuth no navegador.",
-        "Add a ChatGPT account to Switchboard using browser OAuth.");
+        "Adicionar uma conta ChatGPT ao Control Center usando OAuth no navegador.",
+        "Add a ChatGPT account to Control Center using browser OAuth.");
     public string OpenCodexSignIn => S("Abrir login do Codex", "Open Codex sign-in");
     public string OpenCodexSignInTooltip => S(
-        "Abre o Codex no fluxo de login manual, sem adicionar uma conta ao Switchboard via OAuth. A sessão atual do Codex Desktop é encerrada; as contas salvas no Switchboard são preservadas.",
-        "Open Codex in its manual sign-in workflow without adding a Switchboard account through OAuth. The current Codex Desktop session is signed out; saved Switchboard accounts are preserved.");
+        "Abre o Codex no fluxo de login manual, sem adicionar uma conta ao Control Center via OAuth. A sessão atual do Codex Desktop é encerrada; as contas salvas no Control Center são preservadas.",
+        "Open Codex in its manual sign-in workflow without adding a Control Center account through OAuth. The current Codex Desktop session is signed out; saved Control Center accounts are preserved.");
     public string OpenCodexSignInConfirmTitle => S("Abrir login do Codex?", "Open Codex sign-in?");
     public string OpenCodexSignInConfirmMessage => S(
-        "A sessão ativa do Codex será encerrada e a janela será reaberta. As contas salvas, credenciais do cofre e dados 2FA do Switchboard serão preservados. Você fará login manualmente no Codex.",
-        "The live Codex session will be signed out and Desktop reopened. Saved Switchboard accounts, vault credentials, and 2FA data will be preserved. You will sign in manually in Codex.");
+        "A sessão ativa do Codex será encerrada e a janela será reaberta. As contas salvas, credenciais do cofre e dados 2FA do Control Center serão preservados. Você fará login manualmente no Codex.",
+        "The live Codex session will be signed out and Desktop reopened. Saved Control Center accounts, vault credentials, and 2FA data will be preserved. You will sign in manually in Codex.");
     public string OpenCodexSignInConfirmButton => S("Preparar login", "Prepare sign-in");
-    public string TrayTooltip => "Codex Switchboard";
+    public string TrayTooltip => AppName;
     public string TrayTooltipModeLabel => S("Informações no ícone da bandeja", "Tray icon tooltip");
     public string TrayTooltipModeDescription => S(
         "Escolha o que aparece ao passar o cursor. A cota usa apenas dados em cache e não inicia uma atualização.",
@@ -110,7 +111,7 @@ public sealed class Strings
     public string TrayTooltipAppNameOnly => S("Somente o nome do aplicativo", "App name only");
     public string TrayTooltipWithTarget => S("Nome do aplicativo e destino ativo", "App name and active target");
     public string TrayTooltipWithTargetAndQuota => S("Destino ativo e cota em cache", "Active target and cached quota");
-    public string TrayOpenSwitchboard => S("Abrir Switchboard", "Open Switchboard");
+    public string TrayOpenSwitchboard => S("Abrir Control Center", "Open Control Center");
     public string TrayRefreshAll => S("Atualizar todas as cotas", "Refresh all usage");
     public string TrayActiveTarget => S("Destino ativo", "Active target");
     public string TrayCachedQuota => S("Cota em cache", "Cached quota");
@@ -135,8 +136,8 @@ public sealed class Strings
     public string TrayLaunchProfileStop => S("Parar", "Stop");
     public string LaunchStopConfirmTitle => S("Parar sessão gerenciada?", "Stop managed Codex session?");
     public string LaunchStopConfirmMessage(string profileName) => S(
-        $"A sessão '{profileName}' será encerrada. Salve seu trabalho primeiro. Se ela não fechar normalmente, o Switchboard terminará o processo e alterações não salvas poderão ser perdidas.",
-        $"The managed session '{profileName}' will be stopped. Save your work first. If it does not close normally, Switchboard will terminate its process tree and unsaved work may be lost.");
+        $"A sessão '{profileName}' será encerrada. Salve seu trabalho primeiro. Se ela não fechar normalmente, o Control Center terminará o processo e alterações não salvas poderão ser perdidas.",
+        $"The managed session '{profileName}' will be stopped. Save your work first. If it does not close normally, Control Center will terminate its process tree and unsaved work may be lost.");
     public string LaunchStopConfirmButton => S("Parar sessão", "Stop session");
     public string LaunchProfileStartFailedTitle => S("Falha ao iniciar o Codex", "Codex launch failed");
     public string LaunchProfileStopFailedTitle => S("Não foi possível parar o Codex", "Could not stop Codex");
@@ -153,8 +154,8 @@ public sealed class Strings
         "O Windows não permitiu criar os links de histórico necessários. Ative o Modo de Desenvolvedor ou conceda o direito de criar links simbólicos. Nenhum histórico existente foi substituído.",
         "Windows did not allow the required history links to be created. Enable Developer Mode or grant symbolic-link creation permission. No existing history was replaced.");
     public string LaunchProfileShareChatsExistingData => S(
-        "Este perfil de execução já contém histórico local. O Switchboard não o mescla nem o oculta automaticamente. Crie um novo perfil compartilhado ou preserve o histórico antes de habilitar o compartilhamento.",
-        "This launch profile already contains local history. Switchboard will not merge or hide it automatically. Create a new shared profile or preserve the history before enabling sharing.");
+        "Este perfil de execução já contém histórico local. O Control Center não o mescla nem o oculta automaticamente. Crie um novo perfil compartilhado ou preserve o histórico antes de habilitar o compartilhamento.",
+        "This launch profile already contains local history. Control Center will not merge or hide it automatically. Create a new shared profile or preserve the history before enabling sharing.");
     public string LaunchProfilesHeader => S("Perfis de inicialização", "Launch Profiles");
     public string LaunchProfilesSubtitle => S(
         "Inicie sessões isoladas do Codex CLI ou Desktop com uma conta ou modelo de API fixo.",
@@ -164,14 +165,14 @@ public sealed class Strings
     public string NoMatchingApiProviders => S("Nenhum provedor corresponde à pesquisa.", "No API providers match your search.");
     public string LaunchProfileShareChatsStoragePathUnknown => S(
         "Não foi possível resolver com segurança o local SQLite principal do Codex. Verifique CODEX_SQLITE_HOME e sqlite_home na configuração do Codex.",
-        "Switchboard could not safely resolve the main Codex SQLite location. Check CODEX_SQLITE_HOME and sqlite_home in Codex configuration.");
+        "Control Center could not safely resolve the main Codex SQLite location. Check CODEX_SQLITE_HOME and sqlite_home in Codex configuration.");
     public string LaunchQuitConfirmTitle => S("Sair e parar sessões gerenciadas?", "Quit and stop managed sessions?");
     public string LaunchQuitConfirmMessage(int count) => S(
-        $"Sair do Switchboard também encerrará {count} sessão(ões) gerenciada(s) do Codex. Salve seu trabalho primeiro; se uma sessão não fechar normalmente, suas alterações não salvas poderão ser perdidas.",
-        $"Quitting Switchboard will also stop {count} managed Codex session(s). Save your work first; if a session does not close normally, unsaved work may be lost.");
+        $"Sair do Control Center também encerrará {count} sessão(ões) gerenciada(s) do Codex. Salve seu trabalho primeiro; se uma sessão não fechar normalmente, suas alterações não salvas poderão ser perdidas.",
+        $"Quitting Control Center will also stop {count} managed Codex session(s). Save your work first; if a session does not close normally, unsaved work may be lost.");
     public string LaunchQuitConfirmButton => S("Sair e parar", "Quit and stop");
     public string TrayOpenSettings => S("Configurações", "Settings");
-    public string TrayQuit => S("Sair do Switchboard", "Quit Switchboard");
+    public string TrayQuit => S("Sair do Control Center", "Quit Control Center");
     public string QuickSwitchTargetUnavailableTitle => S("Destino do atalho indisponível", "Shortcut target unavailable");
     public string QuickSwitchAccountMissingMessage => S(
         "A conta atribuída não existe mais. Atualize o atalho em Configurações.",
@@ -209,8 +210,8 @@ public sealed class Strings
         $"Atalho {shortcut} desativado.",
         $"Shortcut {shortcut} is disabled.");
     public string QuickSwitchOverlayActive(string shortcut) => S(
-        $"Ativo enquanto o Switchboard estiver aberto. {shortcut} abre a troca rápida sobre uma janela do Codex.",
-        $"Active while Switchboard is running. {shortcut} opens quick switch over a Codex window.");
+        $"Ativo enquanto o Control Center estiver aberto. {shortcut} abre a troca rápida sobre uma janela do Codex.",
+        $"Active while Control Center is running. {shortcut} opens quick switch over a Codex window.");
     public string QuickSwitchOverlayUnavailable(string shortcut) => S(
         $"{shortcut} não está registrado no Windows. Escolha outro atalho se estiver em uso.",
         $"{shortcut} is not registered in Windows. Choose another shortcut if it is already in use.");
@@ -480,8 +481,8 @@ public sealed class Strings
     public string LegacyMigrationNoneMsg => S("Nenhum dado legado encontrado para migração.", "No legacy data found to migrate.");
     public string ImportLegacyButton => S("Importar dados do Codex Account Switcher", "Import data from Codex Account Switcher");
     public string MigrationSuccessMsg(int count) => S(
-        $"{count} conta(s) migradas com sucesso para o Codex Switchboard. Os arquivos originais foram mantidos intactos.",
-        $"Successfully migrated {count} account(s) to Codex Switchboard. Original files remain untouched.");
+        $"{count} conta(s) migradas com sucesso para o Codex Control Center. Os arquivos originais foram mantidos intactos.",
+        $"Successfully migrated {count} account(s) to Codex Control Center. Original files remain untouched.");
     public string MigrationFailedMsg(string reason) => S($"Falha na migração: {reason}", $"Migration failed: {reason}");
     public string ImportedAccountsMsg(int count) => S(
         $"{count} conta(s) foram importadas para o cofre.", $"{count} account(s) were imported into the vault.");
@@ -550,12 +551,12 @@ public sealed class Strings
     public string TotpCodeCopied => S("Copiado!", "Copied!");
     public string TotpHiddenPlaceholder => "••• •••";
     public string TotpSecurityWarning => S(
-        "Salvar a chave 2FA aqui permite ao Switchboard gerar códigos de autenticação localmente. A chave é protegida para o seu usuário do Windows usando DPAPI. Manter as credenciais da conta e a chave 2FA no mesmo computador traz conveniência, mas reduz a separação física entre os fatores de autenticação.",
-        "Saving a 2FA key here lets Switchboard generate authentication codes locally. The key is encrypted for your Windows user using DPAPI. Keeping both account credentials and the 2FA key on the same computer is more convenient, but reduces separation between authentication factors.");
+        "Salvar a chave 2FA aqui permite ao Control Center gerar códigos de autenticação localmente. A chave é protegida para o seu usuário do Windows usando DPAPI. Manter as credenciais da conta e a chave 2FA no mesmo computador traz conveniência, mas reduz a separação física entre os fatores de autenticação.",
+        "Saving a 2FA key here lets Control Center generate authentication codes locally. The key is encrypted for your Windows user using DPAPI. Keeping both account credentials and the 2FA key on the same computer is more convenient, but reduces separation between authentication factors.");
     public string TotpRemoveConfirmationTitle => S("Remover chave 2FA local?", "Remove local 2FA key?");
     public string TotpRemoveConfirmationMessage => S(
-        "Isso removerá apenas a cópia salva no Switchboard deste computador. O 2FA NÃO será desativado na sua conta da OpenAI/ChatGPT.",
-        "This will remove only Switchboard's locally saved copy on this computer. 2FA will NOT be disabled on your OpenAI/ChatGPT account.");
+        "Isso removerá apenas a cópia salva no Control Center deste computador. O 2FA NÃO será desativado na sua conta da OpenAI/ChatGPT.",
+        "This will remove only Control Center's locally saved copy on this computer. 2FA will NOT be disabled on your OpenAI/ChatGPT account.");
     public string TotpTimeSyncNotice => S(
         "Se os códigos forem rejeitados pelo serviço, verifique se a data e o horário do Windows estão sincronizados.",
         "If codes are rejected by the service, verify that Windows date and time are synchronized.");
@@ -570,11 +571,11 @@ public sealed class Strings
     // Phase 9.1, 9.2 & 9.3: Portão de verificação de usuário do Windows com suporte a Hello e senha da conta
     public string TotpProtectionHeader => S("Proteção dos códigos 2FA", "2FA code protection");
     public string RequireWindowsVerificationLabel => S("Exigir verificação do Windows antes de exibir códigos 2FA", "Require Windows verification before showing 2FA codes");
-    public string WindowsVerificationDescription => S("O Windows Hello/PIN é usado quando disponível. Caso contrário, o Switchboard pode verificar a senha da sua conta atual do Windows.", "Windows Hello/PIN is used when available. Otherwise Switchboard can verify the password of your current Windows account.");
+    public string WindowsVerificationDescription => S("O Windows Hello/PIN é usado quando disponível. Caso contrário, o Control Center pode verificar a senha da sua conta atual do Windows.", "Windows Hello/PIN is used when available. Otherwise Control Center can verify the password of your current Windows account.");
     public string WindowsVerificationFallbackNote => S("Se a infraestrutura de verificação do Windows apresentar falha técnica, seus códigos 2FA continuam acessíveis pela revelação única de emergência.", "If the Windows verification infrastructure experiences a technical failure, your 2FA codes remain accessible through one-time emergency reveal.");
     public string WindowsVerificationDurationLabel => S("Validade da verificação:", "Verification remains valid for:");
     public string WindowsVerificationDurationMinute(int min) => S($"{min} minuto{(min > 1 ? "s" : "")}", $"{min} minute{(min > 1 ? "s" : "")}");
-    public string WindowsVerificationPromptMessage => S("Verifique sua identidade do Windows para revelar os códigos 2FA do Codex Switchboard.", "Verify your Windows identity to reveal Codex Switchboard 2FA codes.");
+    public string WindowsVerificationPromptMessage => S("Verifique sua identidade do Windows para revelar os códigos 2FA do Codex Control Center.", "Verify your Windows identity to reveal Codex Control Center 2FA codes.");
     public string WindowsVerificationTwoTimerNotice => S("Cada código revelado continua sendo ocultado automaticamente após 10 segundos.", "Each revealed code is still automatically hidden after 10 seconds.");
     public string WindowsVerificationHelpTooltip => S("O Windows gerencia a verificação. Dependendo da sua configuração, você pode ser solicitado a usar o Windows Hello, um PIN ou a senha da sua conta do Windows.", "Windows handles the verification. Depending on your sign-in configuration, you may be asked for Windows Hello, a PIN, or your Windows account password.");
     public string WindowsVerificationCanceled => S("A verificação do Windows foi cancelada.", "Windows verification was canceled.");

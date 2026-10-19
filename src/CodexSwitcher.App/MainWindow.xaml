@@ -5,7 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:views="using:CodexSwitcher.App.Views"
     xmlns:tb="using:H.NotifyIcon"
-    Title="Codex Switchboard">
+    Title="Codex Control Center">
     <Window.SystemBackdrop>
         <MicaBackdrop />
     </Window.SystemBackdrop>
@@ -13,7 +13,7 @@
         <views:ShellView x:Name="Root" />
         <tb:TaskbarIcon x:Name="TrayIcon"
                         Width="0" Height="0" Opacity="0" IsHitTestVisible="False"
-                        ToolTipText="Codex Switchboard"
+                        ToolTipText="Codex Control Center"
                         IconSource="/Assets/icon.ico"
                         MenuActivation="RightClick"
                           PopupActivation="LeftClick"

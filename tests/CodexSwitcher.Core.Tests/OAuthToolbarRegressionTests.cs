@@ -96,8 +96,8 @@ public sealed class OAuthToolbarRegressionTests
         Assert.Equal("{ThemeResource BrandAccentBrush}", (string?)oauth.Attribute("Background"));
 
         var strings = ReadSource(Path.Combine("src", "CodexSwitcher.App", "Localization", "Strings.cs"));
-        Assert.Contains("Add a ChatGPT account to Switchboard using browser OAuth.", strings);
-        Assert.Contains("without adding a Switchboard account through OAuth.", strings);
+        Assert.Contains("Add a ChatGPT account to Control Center using browser OAuth.", strings);
+        Assert.Contains("without adding a Control Center account through OAuth.", strings);
     }
 
     [Fact]

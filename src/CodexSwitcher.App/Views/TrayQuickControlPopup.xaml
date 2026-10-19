@@ -21,7 +21,7 @@
             BorderThickness="1" CornerRadius="10">
         <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="10">
             <StackPanel Spacing="2">
-                <TextBlock Text="Codex Switchboard" FontSize="16" FontWeight="SemiBold" />
+                <TextBlock Text="Codex Control Center" FontSize="16" FontWeight="SemiBold" />
                 <TextBlock Text="{x:Bind Loc.TrayActiveTarget}" Opacity="0.72" FontSize="12" />
                 <TextBlock Text="{Binding Routing.ActiveTargetSummary}" TextTrimming="CharacterEllipsis" />
             </StackPanel>
