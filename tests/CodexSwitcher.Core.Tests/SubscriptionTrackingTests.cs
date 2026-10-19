@@ -199,7 +199,7 @@ public sealed class SubscriptionTrackingTests : IDisposable
         var vault = new VaultService(new DpapiSecretProtector(), _fs, _dir.Combine("vault"));
         var paths = CodexPaths.ForHome(_dir.Combine(".codex"));
         var recon = new ReconciliationService(_fs, paths);
-        var service = new ProfileService(vault, store, recon, _fs, paths, new SystemClock(), new FakeAudit());
+        var service = AccountServiceGraph.Create(vault, store, recon, _fs, paths, new SystemClock(), new FakeAudit()).Profiles;
 
         var id = Guid.NewGuid();
         var profile = new ProfileMetadata { Id = id, Nickname = "Work" };

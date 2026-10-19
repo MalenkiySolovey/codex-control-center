@@ -131,7 +131,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ICodexRuntimeResolver>(),
             sp.GetRequiredService<ICodexRuntimeModelCatalogVerifier>(),
             sp.GetRequiredService<ICodexModelCatalogService>(),
-            sp.GetRequiredService<ProfileService>(),
+            sp.GetRequiredService<AccountCredentialService>(),
             sp.GetRequiredService<IFileSystem>(),
             sp.GetRequiredService<ISwitchboardCodexProcessRegistry>()));
         services.AddSingleton<IProcessManager>(sp =>
@@ -144,7 +144,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<AppSettings>(),
             sp.GetRequiredService<IProcessManager>(),
             sp.GetRequiredService<ISwitchboardCodexProcessRegistry>(),
-            sp.GetRequiredService<ProfileService>(),
+            sp.GetRequiredService<AccountRegistry>(),
+            sp.GetRequiredService<CodexAuthReconciler>(),
             sp.GetRequiredService<ICodexRoutingConfigStore>(),
             sp.GetRequiredService<IFileSystem>(),
             sp.GetRequiredService<AppPaths>(),
@@ -235,6 +236,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => new ProfileStore(sp.GetRequiredService<IFileSystem>(), paths.ProfilesPath));
         services.AddSingleton<IProfileStore>(sp => sp.GetRequiredService<ProfileStore>());
         services.AddSingleton(sp => new ReconciliationService(sp.GetRequiredService<IFileSystem>(), paths.Codex));
+        services.AddSingleton<AccountRegistry>();
+        services.AddSingleton<AccountCredentialService>();
+        services.AddSingleton<AccountTransferService>();
+        services.AddSingleton<CodexAuthReconciler>();
         services.AddSingleton<ProfileService>();
 
         services.AddSingleton(sp => new SwitchService(

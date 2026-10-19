@@ -63,7 +63,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
     private readonly ICodexRuntimeResolver _runtimeResolver;
     private readonly ICodexRuntimeModelCatalogVerifier _runtimeModelCatalogVerifier;
     private readonly ICodexModelCatalogService _catalogService;
-    private readonly ProfileService _profileService;
+    private readonly AccountCredentialService _accountCredentials;
     private readonly IFileSystem _fs;
     private readonly ISwitchboardCodexProcessRegistry _processRegistry;
     private readonly object _sync = new();
@@ -121,7 +121,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
         ICodexRuntimeResolver runtimeResolver,
         ICodexRuntimeModelCatalogVerifier runtimeModelCatalogVerifier,
         ICodexModelCatalogService catalogService,
-        ProfileService profileService,
+        AccountCredentialService accountCredentials,
         IFileSystem fileSystem,
         ISwitchboardCodexProcessRegistry processRegistry)
     {
@@ -135,7 +135,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
         _runtimeResolver = runtimeResolver ?? throw new ArgumentNullException(nameof(runtimeResolver));
         _runtimeModelCatalogVerifier = runtimeModelCatalogVerifier ?? throw new ArgumentNullException(nameof(runtimeModelCatalogVerifier));
         _catalogService = catalogService ?? throw new ArgumentNullException(nameof(catalogService));
-        _profileService = profileService ?? throw new ArgumentNullException(nameof(profileService));
+        _accountCredentials = accountCredentials ?? throw new ArgumentNullException(nameof(accountCredentials));
         _fs = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
         _processRegistry = processRegistry ?? throw new ArgumentNullException(nameof(processRegistry));
 
@@ -890,7 +890,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                         StringComparison.OrdinalIgnoreCase);
                     if (changed && !string.IsNullOrWhiteSpace(manifest.InitialAuthFingerprint))
                     {
-                        if (!_profileService.PersistIsolatedLaunchRefreshUnderLock(
+                        if (!_accountCredentials.PersistIsolatedLaunchRefreshUnderLock(
                                 manifest.CredentialProfileId,
                                 manifest.InitialAuthFingerprint,
                                 bytes))
@@ -969,7 +969,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                                 StringComparison.OrdinalIgnoreCase) &&
                             !string.IsNullOrWhiteSpace(state.Manifest.InitialAuthFingerprint))
                         {
-                            if (!_profileService.PersistIsolatedLaunchRefreshUnderLock(
+                            if (!_accountCredentials.PersistIsolatedLaunchRefreshUnderLock(
                                     state.Manifest.CredentialProfileId,
                                     state.Manifest.InitialAuthFingerprint,
                                     bytes))

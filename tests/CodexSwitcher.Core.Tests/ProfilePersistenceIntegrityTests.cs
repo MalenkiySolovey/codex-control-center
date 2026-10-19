@@ -54,7 +54,7 @@ public sealed class ProfilePersistenceIntegrityTests
             Store = new ProfileStore(Fs, ProfilesPath);
             Paths = CodexPaths.ForHome(TempDir.Combine(".codex"));
             var recon = new ReconciliationService(Fs, Paths);
-            ProfilesService = new ProfileService(Vault, Store, recon, Fs, Paths, Clock, Audit);
+            ProfilesService = AccountServiceGraph.Create(Vault, Store, recon, Fs, Paths, Clock, Audit).Profiles;
         }
 
         public List<ProfileMetadata> CreateProfiles(int count)

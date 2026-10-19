@@ -77,7 +77,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
     private readonly ICodexThreadHandoffService _threadHandoffService;
     private readonly IProviderCatalogService _catalogService;
     private readonly IProviderModelCache _modelCache;
-    private readonly ProfileService _profileService;
+    private readonly AccountRegistry _accountRegistry;
     private readonly IProviderDialogService _ui;
     private readonly IClock _clock;
     private readonly AppSettings _settings;
@@ -123,7 +123,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         ICodexThreadHandoffService threadHandoffService,
         IProviderCatalogService catalogService,
         IProviderModelCache modelCache,
-        ProfileService profileService,
+        AccountRegistry accountRegistry,
         IProviderDialogService ui,
         IClock clock,
         AppSettings settings,
@@ -142,7 +142,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         _threadHandoffService = threadHandoffService ?? throw new ArgumentNullException(nameof(threadHandoffService));
         _catalogService = catalogService ?? throw new ArgumentNullException(nameof(catalogService));
         _modelCache = modelCache ?? throw new ArgumentNullException(nameof(modelCache));
-        _profileService = profileService ?? throw new ArgumentNullException(nameof(profileService));
+        _accountRegistry = accountRegistry ?? throw new ArgumentNullException(nameof(accountRegistry));
         _ui = ui ?? throw new ArgumentNullException(nameof(ui));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -555,7 +555,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
 
         if (item.IsTargetActive)
         {
-            await _targetSwitchService.SwitchToChatGptAsync(null, _profileService.Profiles, SwitchExecutionOptions.From(_settings));
+            await _targetSwitchService.SwitchToChatGptAsync(null, _accountRegistry.Profiles.ToList(), SwitchExecutionOptions.From(_settings));
         }
 
         TargetStateChanged?.Invoke(this, EventArgs.Empty);
@@ -586,7 +586,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
 
         if (item.IsTargetActive)
         {
-            await _targetSwitchService.SwitchToChatGptAsync(null, _profileService.Profiles, SwitchExecutionOptions.From(_settings));
+            await _targetSwitchService.SwitchToChatGptAsync(null, _accountRegistry.Profiles.ToList(), SwitchExecutionOptions.From(_settings));
         }
 
         TargetStateChanged?.Invoke(this, EventArgs.Empty);

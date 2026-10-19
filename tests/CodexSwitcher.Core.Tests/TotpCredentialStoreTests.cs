@@ -161,15 +161,8 @@ public sealed class TotpCredentialStoreTests : IDisposable
         var recon = new ReconciliationService(_fs, paths);
         var audit = new FakeAudit();
 
-        var profileService = new ProfileService(
-            vault,
-            store,
-            recon,
-            _fs,
-            paths,
-            _clock,
-            audit,
-            _store);
+        var profileService = AccountServiceGraph.Create(
+            vault, store, recon, _fs, paths, _clock, audit, _store).Profiles;
 
         // Setup a profile
         var token = Sample.Jwt(sub: "sub-totp-1", email: "totp@example.com");
@@ -197,15 +190,8 @@ public sealed class TotpCredentialStoreTests : IDisposable
         var recon = new ReconciliationService(_fs, paths);
         var audit = new FakeAudit();
 
-        var profileService = new ProfileService(
-            vault,
-            store,
-            recon,
-            _fs,
-            paths,
-            _clock,
-            audit,
-            _store);
+        var profileService = AccountServiceGraph.Create(
+            vault, store, recon, _fs, paths, _clock, audit, _store).Profiles;
 
         var token = Sample.Jwt(sub: "sub-totp-2", email: "totp2@example.com");
         var bytes = Sample.AuthJson(idToken: token);

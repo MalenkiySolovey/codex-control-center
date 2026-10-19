@@ -151,7 +151,7 @@ public sealed class ManualQaBugfixTests
             Store = new ProfileStore(Fs, Dir.Combine("profiles.json"));
             Paths = CodexPaths.ForHome(Dir.Combine(".codex"));
             var recon = new ReconciliationService(Fs, Paths);
-            Service = new ProfileService(Vault, Store, recon, Fs, Paths, Clock, new FakeAudit());
+            Service = AccountServiceGraph.Create(Vault, Store, recon, Fs, Paths, Clock, new FakeAudit()).Profiles;
         }
 
         public void Dispose() => Dir.Dispose();

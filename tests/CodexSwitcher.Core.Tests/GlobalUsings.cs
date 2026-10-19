@@ -27,6 +27,7 @@ global using CodexSwitcher.Core.Threads.Models;
 global using CodexSwitcher.Core.Transfer.Contracts;
 global using CodexSwitcher.Core.Transfer.Models;
 global using CodexSwitcher.Core.Transfer.Services;
+global using CodexSwitcher.Core.Tests.TestSupport;
 global using CodexSwitcher.Core.Usage.Contracts;
 global using CodexSwitcher.Core.Usage.Formatting;
 global using CodexSwitcher.Core.Usage.Models;

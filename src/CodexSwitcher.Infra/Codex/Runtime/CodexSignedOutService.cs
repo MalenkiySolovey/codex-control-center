@@ -26,7 +26,8 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
     private readonly AppSettings _settings;
     private readonly IProcessManager _processes;
     private readonly ISwitchboardCodexProcessRegistry _processRegistry;
-    private readonly ProfileService _profiles;
+    private readonly AccountRegistry _accountRegistry;
+    private readonly CodexAuthReconciler _authReconciler;
     private readonly ICodexRoutingConfigStore _routing;
     private readonly IFileSystem _fs;
     private readonly AppPaths _paths;
@@ -38,7 +39,8 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
         AppSettings settings,
         IProcessManager processes,
         ISwitchboardCodexProcessRegistry processRegistry,
-        ProfileService profiles,
+        AccountRegistry accountRegistry,
+        CodexAuthReconciler authReconciler,
         ICodexRoutingConfigStore routing,
         IFileSystem fs,
         AppPaths paths,
@@ -48,7 +50,8 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _processes = processes ?? throw new ArgumentNullException(nameof(processes));
         _processRegistry = processRegistry ?? throw new ArgumentNullException(nameof(processRegistry));
-        _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
+        _accountRegistry = accountRegistry ?? throw new ArgumentNullException(nameof(accountRegistry));
+        _authReconciler = authReconciler ?? throw new ArgumentNullException(nameof(authReconciler));
         _routing = routing ?? throw new ArgumentNullException(nameof(routing));
         _fs = fs ?? throw new ArgumentNullException(nameof(fs));
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
@@ -87,13 +90,13 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
             }
 
             // First reconcile the live slot. If Codex refreshed a managed
-            // credential, ProfileService writes that exact auth.json into the
+            // credential, CodexAuthReconciler writes that exact auth.json into the
             // existing encrypted vault before the live slot is cleared.
             stage = "reconcile-profile";
-            _profiles.Reconcile();
-            _profiles.Save();
-            var savedProfileCount = _profiles.Profiles.Count;
-            var savedBlobFingerprints = _profiles.Profiles
+            _authReconciler.Reconcile();
+            _accountRegistry.Save();
+            var savedProfileCount = _accountRegistry.Profiles.Count;
+            var savedBlobFingerprints = _accountRegistry.Profiles
                 .Select(profile => profile.BlobFingerprint)
                 .ToArray();
 
@@ -166,10 +169,10 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
             await LogoutAndVerifyAsync(runtime.ExecutablePath, cancellationToken).ConfigureAwait(false);
 
             stage = "reconcile-signed-out-state";
-            _profiles.Reconcile();
-            _profiles.Save();
-            if (_profiles.Profiles.Count != savedProfileCount ||
-                !_profiles.Profiles.Select(profile => profile.BlobFingerprint)
+            _authReconciler.Reconcile();
+            _accountRegistry.Save();
+            if (_accountRegistry.Profiles.Count != savedProfileCount ||
+                !_accountRegistry.Profiles.Select(profile => profile.BlobFingerprint)
                     .SequenceEqual(savedBlobFingerprints, StringComparer.Ordinal))
             {
                 throw new InvalidOperationException("Saved profile metadata changed during sign-out.");
@@ -400,8 +403,8 @@ public sealed class CodexSignedOutService : ICodexSignedOutService, IDisposable
 
         try
         {
-            _profiles.Reconcile();
-            _profiles.Save();
+            _authReconciler.Reconcile();
+            _accountRegistry.Save();
         }
         catch
         {

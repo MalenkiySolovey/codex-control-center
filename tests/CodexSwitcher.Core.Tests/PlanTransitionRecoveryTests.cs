@@ -139,7 +139,7 @@ public class PlanTransitionRecoveryTests
         store.SaveAll([profile]);
 
         var reconciliation = new ReconciliationService(fs, paths);
-        var service = new ProfileService(vault, store, reconciliation, fs, paths, clock, audit);
+        var service = AccountServiceGraph.Create(vault, store, reconciliation, fs, paths, clock, audit).Profiles;
         service.Load();
 
         var newAuth = """{"auth_mode":"chatgpt","id_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMTIzIiwiZW1haWwiOiJuZXdAZXhhbXBsZS5jb20iLCJwbGFuVHlwZSI6InBsdXMifQ.signature"}"""u8.ToArray();

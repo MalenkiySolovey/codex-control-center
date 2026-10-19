@@ -137,15 +137,7 @@ public sealed class ApiProvidersViewModelSelectionTests
         var clock = new FakeClock();
         var apiKeyStore = new FakeApiKeySecretStore();
         var profileStore = new ProfileStore(fs, paths.ProfilesPath);
-        var vault = new VaultService(new DpapiSecretProtector(), fs, paths.VaultDir);
-        var profileService = new ProfileService(
-            vault,
-            profileStore,
-            new ReconciliationService(fs, paths.Codex),
-            fs,
-            paths.Codex,
-            clock,
-            new FakeAudit());
+        var accountRegistry = new AccountRegistry(profileStore, clock, new FakeAudit());
 
         return new ApiProvidersViewModel(
             providerStore,
@@ -155,7 +147,7 @@ public sealed class ApiProvidersViewModelSelectionTests
             new NoopThreadHandoffService(),
             new FakeProviderCatalogService(),
             new ProviderModelCache(),
-            profileService,
+            accountRegistry,
             dialog,
             clock,
             new AppSettings { AlwaysConfirmSwitch = false },

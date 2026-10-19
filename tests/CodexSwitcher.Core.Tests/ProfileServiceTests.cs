@@ -18,7 +18,7 @@ public sealed class ProfileServiceTests
             var store = new ProfileStore(fs, Dir.Combine("profiles.json"));
             var paths = CodexPaths.ForHome(Dir.Combine(".codex"));
             var recon = new ReconciliationService(fs, paths);
-            Service = new ProfileService(Vault, store, recon, fs, paths, Clock, new FakeAudit());
+            Service = AccountServiceGraph.Create(Vault, store, recon, fs, paths, Clock, new FakeAudit()).Profiles;
         }
 
         public void Dispose() => Dir.Dispose();
