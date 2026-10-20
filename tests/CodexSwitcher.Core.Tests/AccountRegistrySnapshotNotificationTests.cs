@@ -25,6 +25,7 @@ public sealed class AccountRegistrySnapshotNotificationTests
         registry.Add(CreateProfile("Synthetic display"));
 
         Assert.Equal(1, notifications);
+        Assert.Equal(1, registry.CurrentGeneration);
     }
 
     [Fact]
@@ -39,6 +40,23 @@ public sealed class AccountRegistrySnapshotNotificationTests
 
         Assert.Equal(0, notifications);
         Assert.Empty(registry.Snapshot());
+        Assert.Equal(0, registry.CurrentGeneration);
+    }
+
+    [Fact]
+    public void FailedMutationDoesNotAdvanceAlreadyLoadedGeneration()
+    {
+        var store = new InMemoryProfileStore();
+        var registry = new AccountRegistry(store, new FakeClock(), new FakeAudit());
+        registry.Load();
+        Assert.Equal(1, registry.CurrentGeneration);
+
+        store.FailSave = true;
+        Assert.Throws<IOException>(() => registry.Add(CreateProfile("Not committed")));
+
+        Assert.Equal(1, registry.CurrentGeneration);
+        Assert.Empty(registry.Snapshot());
+        Assert.Empty(registry.ReadCommittedSnapshot().Profiles);
     }
 
     [Fact]
@@ -51,11 +69,31 @@ public sealed class AccountRegistrySnapshotNotificationTests
         {
             notifications++;
             Assert.True(registry.IsLoaded);
+            Assert.Equal(1, registry.CurrentGeneration);
         };
 
         registry.Load();
 
         Assert.Equal(1, notifications);
+        Assert.Equal(1, registry.ReadCommittedSnapshot().Generation);
+    }
+
+    [Fact]
+    public void SubscriberExceptionDoesNotCorruptCommittedGenerationOrPersistence()
+    {
+        var store = new InMemoryProfileStore();
+        var registry = new AccountRegistry(store, new FakeClock(), new FakeAudit());
+        var notifications = 0;
+        registry.SnapshotChanged += () => throw new InvalidOperationException("synthetic subscriber failure");
+        registry.SnapshotChanged += () => notifications++;
+
+        var added = registry.Add(CreateProfile("Committed despite observer failure"));
+
+        Assert.Equal(1, registry.CurrentGeneration);
+        Assert.Equal(1, notifications);
+        Assert.Equal(1, store.SaveCount);
+        Assert.Equal(1, store.LastSavedCount);
+        Assert.Contains(registry.Snapshot(), profile => profile.Id == added.Id);
     }
 
     private static ProfileMetadata CreateProfile(string displayName) => new()
@@ -68,7 +106,7 @@ public sealed class AccountRegistrySnapshotNotificationTests
 
     private sealed class InMemoryProfileStore : IProfileStore
     {
-        public bool FailSave { get; init; }
+        public bool FailSave { get; set; }
         public int SaveCount { get; private set; }
         public int LastSavedCount { get; private set; }
 

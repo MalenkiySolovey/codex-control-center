@@ -239,9 +239,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => new ReconciliationService(sp.GetRequiredService<IFileSystem>(), paths.Codex));
         services.AddSingleton<AccountRegistry>();
         services.AddSingleton(AccountStateShadowSettings.FromEnvironment());
+        services.AddSingleton(sp => AccountReadAuthorityCanarySettings.FromEnvironment(
+            sp.GetRequiredService<AccountStateShadowSettings>()));
+        services.AddSingleton<AccountReadAuthorityCanaryDiagnostics>();
         services.AddSingleton<AccountStateShadowDaemonProcessManager>();
         services.AddSingleton<IAccountStateShadowClientFactory>(sp => sp.GetRequiredService<AccountStateShadowDaemonProcessManager>());
         services.AddSingleton<AccountStateShadowCoordinator>();
+        services.AddSingleton<IAccountStateShadowReadAuthority>(sp => sp.GetRequiredService<AccountStateShadowCoordinator>());
+        services.AddSingleton<IAccountReadSnapshotProvider, AccountReadSnapshotProvider>();
         services.AddHostedService<AccountStateShadowHostedService>();
         services.AddSingleton<AccountCredentialService>();
         services.AddSingleton<AccountTransferService>();

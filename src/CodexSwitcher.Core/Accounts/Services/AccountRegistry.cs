@@ -20,6 +20,7 @@ public sealed class AccountRegistry
     private List<ProfileMetadata> _profiles = [];
     private bool _isLoaded;
     private bool _isLoading;
+    private long _currentGeneration;
 
     internal object SyncRoot { get; } = new();
 
@@ -52,6 +53,26 @@ public sealed class AccountRegistry
     {
         lock (SyncRoot)
             return SnapshotUnderLock();
+    }
+
+    /// <summary>
+    /// The version of the last successfully loaded or persisted registry state.
+    /// Failed persistence never advances this value.
+    /// </summary>
+    public long CurrentGeneration
+    {
+        get
+        {
+            lock (SyncRoot)
+                return _currentGeneration;
+        }
+    }
+
+    /// <summary>Captures detached profile metadata and its committed generation under one lock.</summary>
+    public AccountRegistrySnapshot ReadCommittedSnapshot()
+    {
+        lock (SyncRoot)
+            return new AccountRegistrySnapshot(_currentGeneration, SnapshotUnderLock());
     }
 
     public IReadOnlyList<ProfileMetadata> Load()
@@ -363,12 +384,21 @@ public sealed class AccountRegistry
 
     internal void LoadUnderLock()
     {
+        var previousProfiles = _profiles;
+        var wasLoaded = _isLoaded;
         _isLoading = true;
         try
         {
             _profiles = _store.LoadAll().Select(profile => profile.CreateSnapshot()).ToList();
             EnsureSortOrderInitializedUnderLock();
             _isLoaded = true;
+            _currentGeneration++;
+        }
+        catch
+        {
+            _profiles = previousProfiles;
+            _isLoaded = wasLoaded;
+            throw;
         }
         finally
         {
@@ -382,7 +412,10 @@ public sealed class AccountRegistry
     {
         _store.SaveAll(_profiles, intent);
         if (!_isLoading)
+        {
+            _currentGeneration++;
             NotifySnapshotChanged();
+        }
     }
 
     private void NotifySnapshotChanged()

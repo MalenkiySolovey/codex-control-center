@@ -16,6 +16,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
     private readonly object _processSync = new();
     private Process? _ownedProcess;
     private bool _disposed;
+    private int _lastConnectionHealthy;
 
     public AccountStateShadowDaemonProcessManager(AccountStateShadowSettings settings, AppPaths paths, string pipeName = PipeName)
     {
@@ -56,10 +57,12 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
             }
 
             await client.VerifyCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            Volatile.Write(ref _lastConnectionHealthy, 1);
             return client;
         }
         catch (AccountStateShadowCompatibilityException)
         {
+            Volatile.Write(ref _lastConnectionHealthy, 0);
             if (client is not null)
                 await client.DisposeAsync().ConfigureAwait(false);
             if (startedByThisCall)
@@ -68,9 +71,34 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         }
         catch
         {
+            Volatile.Write(ref _lastConnectionHealthy, 0);
             if (client is not null)
                 await client.DisposeAsync().ConfigureAwait(false);
             throw;
+        }
+    }
+
+    public bool IsLastConnectionHealthy
+    {
+        get
+        {
+            if (Volatile.Read(ref _lastConnectionHealthy) == 0)
+                return false;
+
+            lock (_processSync)
+            {
+                if (_ownedProcess is null)
+                    return false;
+
+                try
+                {
+                    return !_ownedProcess.HasExited;
+                }
+                catch (InvalidOperationException)
+                {
+                    return false;
+                }
+            }
         }
     }
 
@@ -81,6 +109,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         {
             process = _ownedProcess;
             _ownedProcess = null;
+            Volatile.Write(ref _lastConnectionHealthy, 0);
         }
 
         if (process is null)
@@ -110,6 +139,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
             _disposed = true;
             process = _ownedProcess;
             _ownedProcess = null;
+            Volatile.Write(ref _lastConnectionHealthy, 0);
         }
 
         if (process is null)
@@ -166,6 +196,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
 
             _ownedProcess?.Dispose();
             _ownedProcess = null;
+            Volatile.Write(ref _lastConnectionHealthy, 0);
         }
 
         var executablePath = _settings.DaemonExecutablePath!;

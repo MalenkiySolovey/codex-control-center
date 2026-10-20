@@ -177,7 +177,7 @@ public sealed class AccountStateShadowCoordinatorTests
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(3);
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
         while (!condition() && DateTimeOffset.UtcNow < deadline)
             await Task.Delay(10);
         Assert.True(condition(), "The expected shadow coordinator state was not observed before the deadline.");
@@ -203,21 +203,30 @@ public sealed class AccountStateShadowCoordinatorTests
     {
         public FakeClient Client { get; } = client ?? new FakeClient();
         public int ConnectCount { get; private set; }
+        public bool IsLastConnectionHealthy { get; private set; }
 
         public Task<IAccountStateShadowClient> ConnectCompatibleAsync(CancellationToken cancellationToken)
         {
             ConnectCount++;
             cancellationToken.ThrowIfCancellationRequested();
             if (throwCompatibility)
+            {
+                IsLastConnectionHealthy = false;
                 throw new AccountStateShadowCompatibilityException();
+            }
             if (connectFailure is not null)
+            {
+                IsLastConnectionHealthy = false;
                 throw connectFailure;
+            }
+            IsLastConnectionHealthy = true;
             return Task.FromResult<IAccountStateShadowClient>(Client);
         }
 
         public Task StopOwnedProcessAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            IsLastConnectionHealthy = false;
             return Task.CompletedTask;
         }
     }

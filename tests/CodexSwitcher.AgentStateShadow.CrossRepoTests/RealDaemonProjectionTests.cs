@@ -41,16 +41,22 @@ public sealed class RealDaemonProjectionTests(ITestOutputHelper output)
 
         var pipeName = $"agent-state-daemon-test-{Guid.NewGuid():N}";
         var processManager = new AccountStateShadowDaemonProcessManager(settings, appPaths, pipeName);
-        var coordinator = new AccountStateShadowCoordinator(registry, settings, processManager);
+        var canarySettings = AccountReadAuthorityCanarySettings.Parse("1", settings.Enabled);
+        var coordinator = new AccountStateShadowCoordinator(registry, settings, processManager, canarySettings);
+        var readProvider = new AccountReadSnapshotProvider(registry, coordinator, canarySettings);
         var startupTimer = Stopwatch.StartNew();
         await coordinator.StartAsync(CancellationToken.None);
         startupTimer.Stop();
 
         try
         {
+            Assert.Equal(AccountReadSource.Local, readProvider.Read().Source);
+            Assert.Equal(AccountReadCanaryState.PendingInitialSync, readProvider.Read().CanaryState);
             var initialSyncTimer = Stopwatch.StartNew();
             await WaitForProjectionAsync(pipeName, coordinator, accounts => accounts.Count == 0);
             initialSyncTimer.Stop();
+            Assert.Equal(AccountReadSource.DaemonCanary, readProvider.Read().Source);
+            Assert.Equal(registry.CurrentGeneration, readProvider.Read().LastMatchedGeneration);
 
             await processManager.StopOwnedProcessAsync(CancellationToken.None);
             var first = CreateProfile("Synthetic first", 0);
@@ -68,9 +74,12 @@ public sealed class RealDaemonProjectionTests(ITestOutputHelper output)
             Assert.Equal("Synthetic second", inserted[1].DisplayName);
 
             registry.Rename(first.Id, "Synthetic renamed");
+            Assert.Equal(AccountReadSource.Local, readProvider.Read().Source);
+            Assert.Equal(AccountReadCanaryState.LocalFallbackDirty, readProvider.Read().CanaryState);
             var renamed = await WaitForProjectionAsync(pipeName, coordinator, accounts =>
                 accounts.Count == 2 && accounts.Any(account => account.AccountId == first.Id.ToString("D") && account.DisplayName == "Synthetic renamed"));
             Assert.Contains(renamed, account => account.DisplayName == "Synthetic renamed");
+            Assert.Equal(AccountReadSource.DaemonCanary, readProvider.Read().Source);
 
             registry.Reorder([second.Id, first.Id]);
             var reordered = await WaitForProjectionAsync(pipeName, coordinator, accounts =>
@@ -107,6 +116,15 @@ public sealed class RealDaemonProjectionTests(ITestOutputHelper output)
             await WaitForProjectionAsync(pipeName, coordinator, accounts => accounts.Select(account => account.AccountId).SequenceEqual(sizeHundredIds));
             sizeHundredTimer.Stop();
             var sizeHundredSync = coordinator.LastStatus.DurationMilliseconds;
+
+            await processManager.StopOwnedProcessAsync(CancellationToken.None);
+            Assert.Equal(AccountReadSource.Local, readProvider.Read().Source);
+            Assert.Equal(AccountReadCanaryState.LocalFallbackDaemonUnavailable, readProvider.Read().CanaryState);
+            await WaitForProjectionAsync(pipeName, coordinator, accounts => accounts.Select(account => account.AccountId).SequenceEqual(sizeHundredIds));
+            await WaitUntilAsync(() => readProvider.Read().Source == AccountReadSource.DaemonCanary);
+            var recoveredRead = readProvider.Read();
+            Assert.True(recoveredRead.Source == AccountReadSource.DaemonCanary,
+                $"Recovery source={recoveredRead.Source}, generation={recoveredRead.Generation}, requested={recoveredRead.LastRequestedGeneration}, matched={recoveredRead.LastMatchedGeneration}, state={recoveredRead.CanaryState}, category={coordinator.LastStatus.Category}, coordinatorGeneration={coordinator.LastStatus.CurrentGeneration}, coordinatorMatched={coordinator.LastStatus.LastMatchedGeneration}, connectionHealthy={processManager.IsLastConnectionHealthy}.");
 
             Assert.Equal("synchronized", coordinator.LastStatus.Category);
             Assert.Equal(0, coordinator.LastStatus.MismatchCount);
@@ -148,6 +166,19 @@ public sealed class RealDaemonProjectionTests(ITestOutputHelper output)
         }
 
         throw new TimeoutException("The synthetic account projection did not converge before the deadline.");
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            if (predicate())
+                return;
+            await Task.Delay(50);
+        }
+
+        Assert.True(predicate(), "The daemon read-authority canary did not converge before the deadline.");
     }
 
     private static Task<string[]> ReplaceWithSyntheticCountAsync(AccountRegistry registry, int count)

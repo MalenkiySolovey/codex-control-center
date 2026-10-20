@@ -64,6 +64,7 @@ public sealed partial class ActiveTargetPresentationCoordinator : ObservableObje
 {
     private readonly ICodexActiveTargetResolver? _activeTargetResolver;
     private readonly AppPaths? _paths;
+    private readonly IAccountReadSnapshotProvider? _accountReadSnapshotProvider;
     private readonly Strings _loc = Strings.Current;
 
     [ObservableProperty] public partial string ActiveTargetSummary { get; set; } = string.Empty;
@@ -73,15 +74,18 @@ public sealed partial class ActiveTargetPresentationCoordinator : ObservableObje
 
     public ActiveTargetPresentationCoordinator(
         ICodexActiveTargetResolver? activeTargetResolver = null,
-        AppPaths? paths = null)
+        AppPaths? paths = null,
+        IAccountReadSnapshotProvider? accountReadSnapshotProvider = null)
     {
         _activeTargetResolver = activeTargetResolver;
         _paths = paths;
+        _accountReadSnapshotProvider = accountReadSnapshotProvider;
         CurrentTarget = new ActiveTarget.ChatGpt(null, null);
     }
 
     public ActiveTarget RefreshRouting(ProfileMetadata? activeProfile)
     {
+        var accountDisplayName = GetCanonicalDisplayName(activeProfile);
         var configTomlPath = _paths?.Codex.ConfigTomlPath
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "config.toml");
 
@@ -94,15 +98,32 @@ public sealed partial class ActiveTargetPresentationCoordinator : ObservableObje
         {
             IsRoutingActiveToApi = true;
             ActiveTargetSummary = $"{apiTarget.Profile.Nickname} ({apiTarget.Profile.GetEffectiveSelectedModel()})";
-            ActiveTargetCredentialSlot = activeProfile?.DisplayName ?? _loc.NoManaged;
+            ActiveTargetCredentialSlot = accountDisplayName;
         }
         else
         {
             IsRoutingActiveToApi = false;
-            ActiveTargetSummary = activeProfile?.DisplayName ?? _loc.NoManaged;
-            ActiveTargetCredentialSlot = activeProfile?.DisplayName ?? _loc.NoManaged;
+            ActiveTargetSummary = accountDisplayName;
+            ActiveTargetCredentialSlot = accountDisplayName;
         }
 
         return activeTarget;
+    }
+
+    private string GetCanonicalDisplayName(ProfileMetadata? activeProfile)
+    {
+        if (activeProfile is null)
+            return _loc.NoManaged;
+
+        if (_accountReadSnapshotProvider is not null)
+        {
+            var accountId = activeProfile.Id.ToString("D");
+            var descriptor = _accountReadSnapshotProvider.Read().Accounts
+                .FirstOrDefault(account => string.Equals(account.AccountId, accountId, StringComparison.Ordinal));
+            if (descriptor is not null)
+                return descriptor.DisplayName;
+        }
+
+        return activeProfile.DisplayName;
     }
 }

@@ -1,5 +1,6 @@
-using System.Globalization;
 using System.Collections.ObjectModel;
+using System.Globalization;
+using System.Text.Json;
 using System.Threading.Channels;
 using CodexSwitcher.Core.Accounts.Models;
 using CodexSwitcher.Core.Accounts.Services;
@@ -7,10 +8,13 @@ using CodexSwitcher.Core.AgentState.V1;
 
 namespace CodexSwitcher.Infra.AgentState.Shadow;
 
-internal sealed class AccountStateShadowCoordinator : IDisposable
+internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountStateShadowReadAuthority
 {
+    private static readonly TimeSpan RevalidationInterval = TimeSpan.FromSeconds(5);
+
     private readonly AccountRegistry _registry;
     private readonly AccountStateShadowSettings _settings;
+    private readonly bool _readAuthorityCanaryEnabled;
     private readonly IAccountStateShadowClientFactory _clientFactory;
     private readonly Channel<byte> _signals = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
@@ -22,26 +26,37 @@ internal sealed class AccountStateShadowCoordinator : IDisposable
     private readonly object _lifecycleSync = new();
     private CancellationTokenSource? _stopSource;
     private Task? _worker;
-    private AccountStateShadowStatus _lastStatus;
+    private AccountStateShadowReadState _readState;
 
     public AccountStateShadowCoordinator(
         AccountRegistry registry,
         AccountStateShadowSettings settings,
-        IAccountStateShadowClientFactory clientFactory)
+        IAccountStateShadowClientFactory clientFactory,
+        AccountReadAuthorityCanarySettings? canarySettings = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
-        _lastStatus = new AccountStateShadowStatus(settings.Enabled ? "starting" : settings.StartupCategory);
+        _readAuthorityCanaryEnabled = canarySettings?.Enabled == true;
+        _readState = new AccountStateShadowReadState(
+            new AccountStateShadowStatus(
+                settings.Enabled ? "starting" : settings.StartupCategory,
+                CurrentGeneration: registry.CurrentGeneration),
+            null,
+            null);
     }
 
-    public AccountStateShadowStatus LastStatus => Volatile.Read(ref _lastStatus);
+    public AccountStateShadowStatus LastStatus => Volatile.Read(ref _readState).Status;
+
+    public AccountStateShadowReadState ReadAuthorityState => Volatile.Read(ref _readState);
+
+    public bool IsDaemonConnectionHealthy => _clientFactory.IsLastConnectionHealthy;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (!_settings.Enabled)
         {
-            SetStatus(new AccountStateShadowStatus(_settings.StartupCategory));
+            SetStatus(_settings.StartupCategory);
             return Task.CompletedTask;
         }
 
@@ -52,8 +67,9 @@ internal sealed class AccountStateShadowCoordinator : IDisposable
 
             cancellationToken.ThrowIfCancellationRequested();
             _stopSource = new CancellationTokenSource();
+            var stopToken = _stopSource.Token;
             _registry.SnapshotChanged += OnSnapshotChanged;
-            _worker = Task.Run(() => ProcessSignalsAsync(_stopSource.Token), CancellationToken.None);
+            _worker = Task.Run(() => ProcessSignalsAsync(stopToken), CancellationToken.None);
             if (_registry.IsLoaded)
                 SignalSnapshotChanged();
         }
@@ -91,6 +107,7 @@ internal sealed class AccountStateShadowCoordinator : IDisposable
         }
 
         await _clientFactory.StopOwnedProcessAsync(cancellationToken).ConfigureAwait(false);
+        SetStatus(_settings.Enabled ? "stopped" : _settings.StartupCategory);
         lock (_lifecycleSync)
         {
             _stopSource?.Dispose();
@@ -120,13 +137,42 @@ internal sealed class AccountStateShadowCoordinator : IDisposable
         try
         {
             await Task.Yield();
-            while (await _signals.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            using var timer = new PeriodicTimer(RevalidationInterval);
+            var signalWait = _signals.Reader.WaitToReadAsync(cancellationToken).AsTask();
+            var timerWait = timer.WaitForNextTickAsync(cancellationToken).AsTask();
+
+            while (true)
             {
-                while (_signals.Reader.TryRead(out _))
+                await Task.WhenAny(signalWait, timerWait).ConfigureAwait(false);
+                var hasSignal = false;
+                var hasTick = false;
+
+                if (signalWait.IsCompleted)
                 {
+                    hasSignal = await signalWait.ConfigureAwait(false);
+                    if (!hasSignal)
+                        return;
+
+                    while (_signals.Reader.TryRead(out _))
+                    {
+                    }
+
+                    signalWait = _signals.Reader.WaitToReadAsync(cancellationToken).AsTask();
                 }
 
-                await ReconcileLatestSnapshotAsync(cancellationToken).ConfigureAwait(false);
+                if (timerWait.IsCompleted)
+                {
+                    hasTick = await timerWait.ConfigureAwait(false);
+                    if (!hasTick)
+                        return;
+
+                    timerWait = timer.WaitForNextTickAsync(cancellationToken).AsTask();
+                }
+
+                if (hasSignal)
+                    await ReconcileLatestSnapshotAsync(cancellationToken).ConfigureAwait(false);
+                else if (hasTick && _readAuthorityCanaryEnabled && _registry.IsLoaded)
+                    await VerifyLatestSnapshotAsync(cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -134,38 +180,46 @@ internal sealed class AccountStateShadowCoordinator : IDisposable
         }
         catch (Exception)
         {
-            SetStatus(new AccountStateShadowStatus("worker_failed"));
+            SetStatus("worker_failed");
         }
     }
 
     private async Task ReconcileLatestSnapshotAsync(CancellationToken cancellationToken)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        ReadOnlyCollection<AccountDescriptor> expected;
+        var snapshot = _registry.ReadCommittedSnapshot();
+        var expected = ProjectProfiles(snapshot.Profiles);
+        SetStatus("synchronizing", expected.Count, requestedGeneration: snapshot.Generation);
+
         try
         {
-            var profiles = _registry.Snapshot()
-                .OrderBy(profile => profile.SortOrder)
-                .ThenByDescending(profile => profile.CreatedAt)
-                .ToArray();
-            expected = Array.AsReadOnly(profiles
-                .Select((profile, index) => AccountDescriptorProjector.FromProfile(profile, index + 1))
-                .ToArray());
-
             await using var client = await _clientFactory.ConnectCompatibleAsync(cancellationToken).ConfigureAwait(false);
             var counts = await client.ReconcileAsync(new AccountCollection(1, expected), cancellationToken).ConfigureAwait(false);
             var actual = await client.ListAccountsAsync(cancellationToken).ConfigureAwait(false);
             var mismatches = CountMismatches(expected, actual);
             stopwatch.Stop();
-            SetStatus(new AccountStateShadowStatus(
-                mismatches == 0 ? "synchronized" : "mismatch",
-                expected.Count,
-                mismatches,
-                counts.Inserted,
-                counts.Updated,
-                counts.Deleted,
-                counts.Unchanged,
-                stopwatch.ElapsedMilliseconds));
+
+            if (mismatches != 0)
+            {
+                SetStatus("mismatch", expected.Count, mismatches, counts.Inserted, counts.Updated,
+                    counts.Deleted, counts.Unchanged, stopwatch.ElapsedMilliseconds,
+                    requestedGeneration: snapshot.Generation);
+                return;
+            }
+
+            if (_registry.CurrentGeneration != snapshot.Generation)
+            {
+                SetStatus("stale_generation", expected.Count, durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                    requestedGeneration: snapshot.Generation);
+                return;
+            }
+
+            SetStatus("synchronized", expected.Count, inserted: counts.Inserted, updated: counts.Updated,
+                deleted: counts.Deleted, unchanged: counts.Unchanged,
+                durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation,
+                matchedGeneration: snapshot.Generation,
+                matchedAccounts: Array.AsReadOnly(actual.ToArray()));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -173,26 +227,117 @@ internal sealed class AccountStateShadowCoordinator : IDisposable
         catch (AccountStateShadowCompatibilityException)
         {
             stopwatch.Stop();
-            SetStatus(new AccountStateShadowStatus("incompatible", DurationMilliseconds: stopwatch.ElapsedMilliseconds));
+            SetStatus("incompatible", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
         }
         catch (AccountStateShadowRpcException exception) when (exception.Code == -32601)
         {
             stopwatch.Stop();
-            SetStatus(new AccountStateShadowStatus("incompatible", DurationMilliseconds: stopwatch.ElapsedMilliseconds));
+            SetStatus("incompatible", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
+        }
+        catch (JsonException)
+        {
+            stopwatch.Stop();
+            SetStatus("incompatible", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
         }
         catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException or AccountStateShadowUnavailableException)
         {
             stopwatch.Stop();
-            SetStatus(new AccountStateShadowStatus("unavailable", DurationMilliseconds: stopwatch.ElapsedMilliseconds));
+            SetStatus("unavailable", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
         }
         catch (Exception)
         {
             stopwatch.Stop();
-            SetStatus(new AccountStateShadowStatus("sync_failed", DurationMilliseconds: stopwatch.ElapsedMilliseconds));
+            SetStatus("sync_failed", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
         }
     }
 
-    private static int CountMismatches(IReadOnlyList<AccountDescriptor> expected, IReadOnlyList<AccountDescriptor> actual)
+    private async Task VerifyLatestSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var snapshot = _registry.ReadCommittedSnapshot();
+        var expected = ProjectProfiles(snapshot.Profiles);
+        try
+        {
+            await using var client = await _clientFactory.ConnectCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            var actual = await client.ListAccountsAsync(cancellationToken).ConfigureAwait(false);
+            var mismatches = CountMismatches(expected, actual);
+            stopwatch.Stop();
+
+            if (_registry.CurrentGeneration != snapshot.Generation)
+            {
+                SetStatus("stale_generation", expected.Count, mismatches,
+                    durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                    requestedGeneration: snapshot.Generation);
+                return;
+            }
+
+            if (mismatches != 0)
+            {
+                SetStatus("mismatch", expected.Count, mismatches,
+                    durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                    requestedGeneration: snapshot.Generation);
+                SignalSnapshotChanged();
+                return;
+            }
+
+            SetStatus("synchronized", expected.Count,
+                durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation,
+                matchedGeneration: snapshot.Generation,
+                matchedAccounts: Array.AsReadOnly(actual.ToArray()));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (AccountStateShadowCompatibilityException)
+        {
+            stopwatch.Stop();
+            SetStatus("incompatible", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
+        }
+        catch (AccountStateShadowRpcException exception) when (exception.Code == -32601)
+        {
+            stopwatch.Stop();
+            SetStatus("incompatible", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
+        }
+        catch (JsonException)
+        {
+            stopwatch.Stop();
+            SetStatus("incompatible", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
+        }
+        catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException or AccountStateShadowUnavailableException)
+        {
+            stopwatch.Stop();
+            SetStatus("unavailable", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
+        }
+        catch (Exception)
+        {
+            stopwatch.Stop();
+            SetStatus("sync_failed", durationMilliseconds: stopwatch.ElapsedMilliseconds,
+                requestedGeneration: snapshot.Generation);
+        }
+    }
+
+    internal static ReadOnlyCollection<AccountDescriptor> ProjectProfiles(IReadOnlyList<ProfileMetadata> profiles)
+    {
+        var ordered = profiles
+            .OrderBy(profile => profile.SortOrder)
+            .ThenByDescending(profile => profile.CreatedAt)
+            .ToArray();
+        return Array.AsReadOnly(ordered
+            .Select((profile, index) => AccountDescriptorProjector.FromProfile(profile, index + 1))
+            .ToArray());
+    }
+
+    internal static int CountMismatches(IReadOnlyList<AccountDescriptor> expected, IReadOnlyList<AccountDescriptor> actual)
     {
         var expectedIds = expected.Select(account => account.AccountId).ToHashSet(StringComparer.Ordinal);
         var actualById = new Dictionary<string, AccountDescriptor>(StringComparer.Ordinal);
@@ -234,5 +379,38 @@ internal sealed class AccountStateShadowCoordinator : IDisposable
         DateTimeOffset.TryParse(actual, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var actualAt) &&
         expectedAt == actualAt;
 
-    private void SetStatus(AccountStateShadowStatus status) => Interlocked.Exchange(ref _lastStatus, status);
+    private void SetStatus(
+        string category,
+        int accountCount = 0,
+        int mismatchCount = 0,
+        int inserted = 0,
+        int updated = 0,
+        int deleted = 0,
+        int unchanged = 0,
+        long durationMilliseconds = 0,
+        long? requestedGeneration = null,
+        long? matchedGeneration = null,
+        IReadOnlyList<AccountDescriptor>? matchedAccounts = null)
+    {
+        var previous = Volatile.Read(ref _readState);
+        var lastMatchedGeneration = matchedGeneration ?? previous.MatchedGeneration;
+        var lastMatchedAccounts = matchedAccounts ?? previous.MatchedAccounts;
+        var lastTransitionAt = string.Equals(previous.Status.Category, category, StringComparison.Ordinal)
+            ? previous.Status.LastTransitionAt ?? DateTimeOffset.UtcNow
+            : DateTimeOffset.UtcNow;
+        var status = new AccountStateShadowStatus(
+            category,
+            accountCount,
+            mismatchCount,
+            inserted,
+            updated,
+            deleted,
+            unchanged,
+            durationMilliseconds,
+            _registry.CurrentGeneration,
+            requestedGeneration ?? previous.Status.LastRequestedGeneration,
+            lastMatchedGeneration,
+            lastTransitionAt);
+        Interlocked.Exchange(ref _readState, new AccountStateShadowReadState(status, lastMatchedGeneration, lastMatchedAccounts));
+    }
 }
