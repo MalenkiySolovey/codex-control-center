@@ -242,11 +242,21 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => AccountReadAuthorityCanarySettings.FromEnvironment(
             sp.GetRequiredService<AccountStateShadowSettings>()));
         services.AddSingleton<AccountReadAuthorityCanaryDiagnostics>();
+        services.AddSingleton<AccountNicknameMutationDiagnostics>();
+        services.AddSingleton(sp => AccountNicknameWriteCanarySettings.FromEnvironment(
+            sp.GetRequiredService<AccountStateShadowSettings>(),
+            sp.GetRequiredService<AccountReadAuthorityCanarySettings>()));
         services.AddSingleton<AccountStateShadowDaemonProcessManager>();
         services.AddSingleton<IAccountStateShadowClientFactory>(sp => sp.GetRequiredService<AccountStateShadowDaemonProcessManager>());
         services.AddSingleton<AccountStateShadowCoordinator>();
         services.AddSingleton<IAccountStateShadowReadAuthority>(sp => sp.GetRequiredService<AccountStateShadowCoordinator>());
         services.AddSingleton<IAccountReadSnapshotProvider, AccountReadSnapshotProvider>();
+        services.AddSingleton<IAccountNicknameMutationService>(sp => new AccountNicknameMutationService(
+            sp.GetRequiredService<AccountRegistry>(),
+            sp.GetRequiredService<AccountNicknameWriteCanarySettings>(),
+            sp.GetRequiredService<AccountStateShadowCoordinator>(),
+            sp.GetRequiredService<IAccountStateShadowClientFactory>(),
+            sp.GetRequiredService<AccountNicknameMutationDiagnostics>()));
         services.AddHostedService<AccountStateShadowHostedService>();
         services.AddSingleton<AccountCredentialService>();
         services.AddSingleton<AccountTransferService>();

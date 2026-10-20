@@ -116,6 +116,7 @@ public sealed class AccountReadSnapshotProvider : IAccountReadSnapshotProvider
             "unavailable" => AccountReadCanaryState.LocalFallbackDaemonUnavailable,
             "sync_failed" or "worker_failed" => AccountReadCanaryState.LocalFallbackFailed,
             "stopped" => AccountReadCanaryState.LocalFallbackDaemonUnavailable,
+            "nickname_mutation_pending" => AccountReadCanaryState.LocalFallbackDirty,
             "synchronized" when status.LastMatchedGeneration != currentGeneration => AccountReadCanaryState.LocalFallbackDirty,
             "stale_generation" => AccountReadCanaryState.LocalFallbackDirty,
             "synchronized" when !daemonConnectionHealthy => AccountReadCanaryState.LocalFallbackDaemonUnavailable,

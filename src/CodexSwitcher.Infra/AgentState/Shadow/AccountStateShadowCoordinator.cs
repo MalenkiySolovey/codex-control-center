@@ -16,6 +16,8 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
     private readonly AccountStateShadowSettings _settings;
     private readonly bool _readAuthorityCanaryEnabled;
     private readonly IAccountStateShadowClientFactory _clientFactory;
+    private readonly AccountNicknameMutationDiagnostics? _nicknameDiagnostics;
+    private readonly SemaphoreSlim _daemonOperationGate = new(1, 1);
     private readonly Channel<byte> _signals = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
         FullMode = BoundedChannelFullMode.DropOldest,
@@ -32,12 +34,14 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
         AccountRegistry registry,
         AccountStateShadowSettings settings,
         IAccountStateShadowClientFactory clientFactory,
-        AccountReadAuthorityCanarySettings? canarySettings = null)
+        AccountReadAuthorityCanarySettings? canarySettings = null,
+        AccountNicknameMutationDiagnostics? nicknameDiagnostics = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
         _readAuthorityCanaryEnabled = canarySettings?.Enabled == true;
+        _nicknameDiagnostics = nicknameDiagnostics;
         _readState = new AccountStateShadowReadState(
             new AccountStateShadowStatus(
                 settings.Enabled ? "starting" : settings.StartupCategory,
@@ -51,6 +55,17 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
     public AccountStateShadowReadState ReadAuthorityState => Volatile.Read(ref _readState);
 
     public bool IsDaemonConnectionHealthy => _clientFactory.IsLastConnectionHealthy;
+
+    internal async ValueTask<IAsyncDisposable> AcquireNicknameMutationLeaseAsync(CancellationToken cancellationToken)
+    {
+        await _daemonOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return new SemaphoreLease(_daemonOperationGate);
+    }
+
+    internal void MarkNicknameMutationPending(long generation, int accountCount) =>
+        SetStatus("nickname_mutation_pending", accountCount, requestedGeneration: generation);
+
+    internal void RequestReconcile() => SignalSnapshotChanged();
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -186,6 +201,7 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
 
     private async Task ReconcileLatestSnapshotAsync(CancellationToken cancellationToken)
     {
+        await using var gate = await AcquireNicknameMutationLeaseAsync(cancellationToken).ConfigureAwait(false);
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var snapshot = _registry.ReadCommittedSnapshot();
         var expected = ProjectProfiles(snapshot.Profiles);
@@ -194,6 +210,9 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
         try
         {
             await using var client = await _clientFactory.ConnectCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            // Keep the existing canonical projection semantics: reconciliation may rewrite the
+            // daemon's internal nickname to the projected display name. This known flattening
+            // behavior is intentionally not altered by the nickname mutation canary.
             var counts = await client.ReconcileAsync(new AccountCollection(1, expected), cancellationToken).ConfigureAwait(false);
             var actual = await client.ListAccountsAsync(cancellationToken).ConfigureAwait(false);
             var mismatches = CountMismatches(expected, actual);
@@ -220,6 +239,7 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
                 requestedGeneration: snapshot.Generation,
                 matchedGeneration: snapshot.Generation,
                 matchedAccounts: Array.AsReadOnly(actual.ToArray()));
+            _nicknameDiagnostics?.MarkConverged(snapshot.Generation);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -258,6 +278,7 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
 
     private async Task VerifyLatestSnapshotAsync(CancellationToken cancellationToken)
     {
+        await using var gate = await AcquireNicknameMutationLeaseAsync(cancellationToken).ConfigureAwait(false);
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var snapshot = _registry.ReadCommittedSnapshot();
         var expected = ProjectProfiles(snapshot.Profiles);
@@ -290,6 +311,7 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
                 requestedGeneration: snapshot.Generation,
                 matchedGeneration: snapshot.Generation,
                 matchedAccounts: Array.AsReadOnly(actual.ToArray()));
+            _nicknameDiagnostics?.MarkConverged(snapshot.Generation);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -412,5 +434,17 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
             lastMatchedGeneration,
             lastTransitionAt);
         Interlocked.Exchange(ref _readState, new AccountStateShadowReadState(status, lastMatchedGeneration, lastMatchedAccounts));
+    }
+
+    private sealed class SemaphoreLease(SemaphoreSlim semaphore) : IAsyncDisposable
+    {
+        private int _disposed;
+
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                semaphore.Release();
+            return ValueTask.CompletedTask;
+        }
     }
 }

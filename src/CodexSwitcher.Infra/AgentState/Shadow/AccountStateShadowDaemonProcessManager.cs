@@ -102,6 +102,24 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         }
     }
 
+    internal int? OwnedProcessId
+    {
+        get
+        {
+            lock (_processSync)
+            {
+                try
+                {
+                    return _ownedProcess is { HasExited: false } process ? process.Id : null;
+                }
+                catch (InvalidOperationException)
+                {
+                    return null;
+                }
+            }
+        }
+    }
+
     public async Task StopOwnedProcessAsync(CancellationToken cancellationToken)
     {
         Process? process;

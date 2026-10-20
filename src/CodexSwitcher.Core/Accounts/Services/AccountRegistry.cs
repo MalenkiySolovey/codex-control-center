@@ -114,6 +114,27 @@ public sealed class AccountRegistry
         }
     }
 
+    /// <summary>
+    /// Persists a nickname only if the committed registry generation is still the one observed
+    /// before a remote CAS mutation. A failed save restores the complete previous profile and
+    /// does not advance the generation.
+    /// </summary>
+    public bool TryRenameIfGeneration(Guid id, string nickname, long expectedGeneration)
+    {
+        lock (SyncRoot)
+        {
+            if (_currentGeneration != expectedGeneration)
+                return false;
+
+            var profile = UpdateUnderLock(id, item => item.Nickname = nickname?.Trim() ?? string.Empty);
+            if (profile is null)
+                return false;
+
+            _audit.Record("rename", "ok", profile.DisplayName);
+            return true;
+        }
+    }
+
     public void UpdateSubscriptionTracking(Guid id, SubscriptionTracking? tracking)
     {
         lock (SyncRoot)

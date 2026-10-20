@@ -31,11 +31,23 @@ internal sealed record AccountStateShadowReconcileCounts(int Inserted, int Updat
 
 internal interface IAccountStateShadowClient : IAsyncDisposable
 {
+    bool SupportsNicknameMutation => false;
+
     Task<AccountStateShadowReconcileCounts> ReconcileAsync(
         CodexSwitcher.Core.AgentState.V1.AccountCollection collection,
         CancellationToken cancellationToken);
 
     Task<IReadOnlyList<CodexSwitcher.Core.AgentState.V1.AccountDescriptor>> ListAccountsAsync(CancellationToken cancellationToken);
+
+    Task<CodexSwitcher.Core.AgentState.V1.RevisionedAccountDescriptor> GetAccountAsync(
+        string accountId,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Account metadata reads are not available on this client.");
+
+    Task<CodexSwitcher.Core.AgentState.V1.RevisionedAccountDescriptor> UpdateMetadataAsync(
+        CodexSwitcher.Core.AgentState.V1.AccountMetadataUpdate update,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Account metadata writes are not available on this client.");
 }
 
 internal interface IAccountStateShadowClientFactory

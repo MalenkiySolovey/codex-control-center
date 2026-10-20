@@ -18,6 +18,130 @@ namespace CodexSwitcher.AgentStateShadow.CrossRepoTests;
 public sealed class RealDaemonProjectionTests(ITestOutputHelper output)
 {
     [Fact]
+    public async Task InteractiveNicknameCanaryUsesRealPipeCasSurvivesRestartAndLeavesNoDaemonOrphan()
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The real daemon integration test requires Windows named pipes.");
+
+        var executablePath = Environment.GetEnvironmentVariable(AccountStateShadowSettings.ExecutableEnvironmentVariable);
+        Assert.False(string.IsNullOrWhiteSpace(executablePath));
+        Assert.True(File.Exists(executablePath));
+        var settings = AccountStateShadowSettings.Parse("1", executablePath);
+        var readSettings = AccountReadAuthorityCanarySettings.Parse("1", settings.Enabled);
+        var writeSettings = AccountNicknameWriteCanarySettings.Parse("1", settings.Enabled, readSettings.Enabled);
+        Assert.True(writeSettings.Enabled);
+
+        using var temp = new TemporaryDirectory();
+        var appPaths = new AppPaths(
+            root: Path.Combine(temp.Path, "switchboard"),
+            codexHome: Path.Combine(temp.Path, "codex-home"),
+            legacyRoot: Path.Combine(temp.Path, "legacy-switcher"));
+        appPaths.EnsureDirectories();
+        var profileStore = new ProfileStore(new PhysicalFileSystem(), appPaths.ProfilesPath);
+        var registry = new AccountRegistry(profileStore, new TestClock(), new NoopAuditLog());
+        registry.Load();
+
+        var first = CreateProfile("Synthetic first", 0);
+        var second = CreateProfile("Synthetic second", 1);
+        var third = CreateProfile("Synthetic third", 2);
+        registry.Add(first);
+        registry.Add(second);
+        registry.Add(third);
+
+        var pipeName = $"agent-state-daemon-test-{Guid.NewGuid():N}";
+        using var processManager = new AccountStateShadowDaemonProcessManager(settings, appPaths, pipeName);
+        var diagnostics = new AccountNicknameMutationDiagnostics();
+        var coordinator = new AccountStateShadowCoordinator(registry, settings, processManager, readSettings, diagnostics);
+        var readProvider = new AccountReadSnapshotProvider(registry, coordinator, readSettings);
+        var service = new AccountNicknameMutationService(
+            registry, writeSettings, coordinator, processManager, diagnostics);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        var daemonPids = new List<int>();
+        try
+        {
+            await WaitForProjectionAsync(pipeName, coordinator, accounts => accounts.Count == 3);
+            daemonPids.Add(processManager.OwnedProcessId!.Value);
+            var initialRead = readProvider.Read();
+            Assert.Equal(AccountReadSource.DaemonCanary, initialRead.Source);
+
+            await using var beforeClient = new AccountStateShadowRpcClient(pipeName);
+            await beforeClient.ConnectAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
+            await beforeClient.VerifyCompatibleAsync(CancellationToken.None);
+            Assert.True(beforeClient.SupportsNicknameMutation);
+            var before = await beforeClient.GetAccountAsync(first.Id.ToString("D"), CancellationToken.None);
+            var generationBeforeRename = registry.CurrentGeneration;
+
+            var firstRename = await service.RenameAsync(first.Id, "Synthetic CAS renamed");
+            Assert.Equal(AccountNicknameMutationOutcome.DaemonAndLocal, firstRename.Outcome);
+            Assert.Equal("Synthetic CAS renamed", registry.Find(first.Id)!.Nickname);
+            Assert.Equal(generationBeforeRename + 1, registry.CurrentGeneration);
+            await WaitUntilAsync(() => readProvider.Read().Source == AccountReadSource.DaemonCanary &&
+                readProvider.Read().Generation == registry.CurrentGeneration);
+            await using var afterClient = new AccountStateShadowRpcClient(pipeName);
+            await afterClient.ConnectAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
+            await afterClient.VerifyCompatibleAsync(CancellationToken.None);
+            var after = await afterClient.GetAccountAsync(first.Id.ToString("D"), CancellationToken.None);
+            Assert.Equal("Synthetic CAS renamed", after.Account.DisplayName);
+            Assert.NotEqual(before.Revision, after.Revision);
+            Assert.Equal("Synthetic CAS renamed", Assert.Single(profileStore.LoadAll(), profile => profile.Id == first.Id).Nickname);
+            Assert.Contains(diagnostics.Transitions, transition => transition.State == "Converged");
+
+            var externalUpdate = await afterClient.UpdateMetadataAsync(
+                new AccountMetadataUpdate(1, first.Id.ToString("D"), "Synthetic conflicting writer", after.Revision),
+                CancellationToken.None);
+            Assert.Equal("Synthetic conflicting writer", externalUpdate.Account.DisplayName);
+            var staleCas = await Assert.ThrowsAsync<AccountStateShadowRpcException>(() => afterClient.UpdateMetadataAsync(
+                new AccountMetadataUpdate(1, first.Id.ToString("D"), "Synthetic stale overwrite", after.Revision),
+                CancellationToken.None));
+            Assert.Equal(-32009, staleCas.Code);
+            Assert.Equal("Synthetic conflicting writer",
+                (await afterClient.ListAccountsAsync(CancellationToken.None)).Single(account => account.AccountId == first.Id.ToString("D")).DisplayName);
+            coordinator.RequestReconcile();
+            await WaitUntilAsync(async () =>
+            {
+                var reconciled = await afterClient.GetAccountAsync(first.Id.ToString("D"), CancellationToken.None);
+                return string.Equals(reconciled.Account.DisplayName, "Synthetic CAS renamed", StringComparison.Ordinal) &&
+                    coordinator.LastStatus.Category == "synchronized" &&
+                    coordinator.LastStatus.LastMatchedGeneration == registry.CurrentGeneration;
+            });
+            Assert.Equal("Synthetic CAS renamed",
+                (await afterClient.GetAccountAsync(first.Id.ToString("D"), CancellationToken.None)).Account.DisplayName);
+
+            var firstDaemonPid = processManager.OwnedProcessId!.Value;
+            await processManager.StopOwnedProcessAsync(CancellationToken.None);
+            await WaitForProcessExitAsync(firstDaemonPid);
+            Assert.Equal(AccountReadSource.Local, readProvider.Read().Source);
+
+            await WaitUntilAsync(() => readProvider.Read().Source == AccountReadSource.DaemonCanary &&
+                coordinator.LastStatus.Category == "synchronized" &&
+                coordinator.LastStatus.LastMatchedGeneration == registry.CurrentGeneration);
+            daemonPids.Add(processManager.OwnedProcessId!.Value);
+
+            var secondRename = await service.RenameAsync(second.Id, "Synthetic after restart");
+            Assert.Equal(AccountNicknameMutationOutcome.DaemonAndLocal, secondRename.Outcome);
+            await WaitUntilAsync(() => readProvider.Read().Source == AccountReadSource.DaemonCanary &&
+                readProvider.Read().Generation == registry.CurrentGeneration);
+            Assert.Equal("Synthetic after restart", registry.Find(second.Id)!.Nickname);
+
+            output.WriteLine("nickname_canary=daemon_cas_local_mirror_reconcile_pass");
+            output.WriteLine("synthetic_accounts=3 credentials=0");
+            output.WriteLine("stale_cas_conflict=guarded");
+            output.WriteLine("daemon_restart=persisted_and_reactivated");
+        }
+        finally
+        {
+            var finalDaemonPid = processManager.OwnedProcessId;
+            await coordinator.StopAsync(CancellationToken.None);
+            if (finalDaemonPid.HasValue)
+                daemonPids.Add(finalDaemonPid.Value);
+            foreach (var processId in daemonPids.Distinct())
+                await WaitForProcessExitAsync(processId);
+            Assert.Null(processManager.OwnedProcessId);
+        }
+    }
+
+    [Fact]
     public async Task ProductionRegistryAndProfileStoreReconcileThroughThePinnedRealDaemon()
     {
         if (!OperatingSystem.IsWindows())
@@ -179,6 +303,41 @@ public sealed class RealDaemonProjectionTests(ITestOutputHelper output)
         }
 
         Assert.True(predicate(), "The daemon read-authority canary did not converge before the deadline.");
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> predicate)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            if (await predicate())
+                return;
+            await Task.Delay(50);
+        }
+
+        Assert.True(await predicate(), "The daemon read-authority canary did not converge before the deadline.");
+    }
+
+    private static async Task WaitForProcessExitAsync(int processId)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            try
+            {
+                using var process = Process.GetProcessById(processId);
+                if (process.HasExited)
+                    return;
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+
+            await Task.Delay(50);
+        }
+
+        Assert.Fail($"Owned daemon process {processId} did not exit.");
     }
 
     private static Task<string[]> ReplaceWithSyntheticCountAsync(AccountRegistry registry, int count)

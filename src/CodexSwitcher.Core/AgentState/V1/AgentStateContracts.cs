@@ -29,6 +29,9 @@ public sealed record AccountMetadataUpdate(
     string Nickname,
     string? ExpectedRevision = null);
 
+/// <summary>A descriptor paired with an opaque owner-issued CAS revision.</summary>
+public sealed record RevisionedAccountDescriptor(AccountDescriptor Account, string Revision);
+
 /// <summary>Reference to secret material held by a separate protected store; it never contains secret bytes.</summary>
 public sealed record SecretReference(
     int SchemaVersion,

@@ -378,6 +378,17 @@ public sealed class Strings
 
     public string RenameTitle => S("Renomear conta", "Rename account");
     public string RenamePrompt => S("Novo apelido:", "New nickname:");
+    public string NicknameConflictTitle => S("Apelido não atualizado", "Nickname not updated");
+    public string NicknameConflictMsg => S(
+        "O estado da conta mudou em outro lugar. A alteração não foi sobrescrita; tente novamente.",
+        "The account state changed elsewhere. Nothing was overwritten; try again.");
+    public string NicknameUpdateFailedTitle => S("Falha ao atualizar apelido", "Nickname update failed");
+    public string NicknameUpdateCompensatedMsg => S(
+        "A alteração local não foi salva. O estado do daemon foi restaurado ao valor local anterior.",
+        "The local change could not be saved. The daemon state was restored to the prior local value.");
+    public string NicknameUpdateDivergedMsg => S(
+        "A alteração não foi confirmada. A origem local foi mantida e a reconciliação foi solicitada.",
+        "The change could not be confirmed. Local state was preserved and reconciliation was requested.");
     public string RemoveTitle => S("Remover conta", "Remove account");
     public string RemoveConfirm(string name) => S(
         $"Remover \"{name}\" do cofre? O login cifrado desta conta será apagado.",

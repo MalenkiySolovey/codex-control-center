@@ -85,6 +85,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     private readonly IUiDispatcher _dispatcher;
     private readonly IAppNotificationService _notifications;
     private readonly IAppBusyService _busy;
+    private readonly IAccountNicknameMutationService? _nicknameMutationService;
 
     private readonly ObservableCollection<AccountItemViewModel> _all = [];
     private ActiveTarget? _lastActiveTarget;
@@ -139,7 +140,8 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         ICodexTargetSwitchService? targetSwitchService = null,
         ICodexLaunchService? launchService = null,
         IUiDispatcher? dispatcher = null,
-        ICodexSignedOutService? signedOutService = null)
+        ICodexSignedOutService? signedOutService = null,
+        IAccountNicknameMutationService? nicknameMutationService = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
@@ -156,6 +158,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         _busy = busy ?? throw new ArgumentNullException(nameof(busy));
         _targetSwitchService = targetSwitchService;
         _signedOutService = signedOutService;
+        _nicknameMutationService = nicknameMutationService;
         _launchService = launchService;
         _dispatcher = dispatcher ?? ImmediateUiDispatcher.Instance;
 
@@ -611,7 +614,26 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         if (item is null) return;
         var nick = await _ui.PromptTextAsync(Loc.RenameTitle, Loc.RenamePrompt, item.DisplayName, Loc.Save);
         if (nick is null) return;
-        _registry.Rename(item.Id, nick);
+        if (_nicknameMutationService is null)
+        {
+            _registry.Rename(item.Id, nick);
+        }
+        else
+        {
+            var result = await _nicknameMutationService.RenameAsync(item.Id, nick);
+            switch (result.Outcome)
+            {
+                case AccountNicknameMutationOutcome.Conflict:
+                    ShowInfo(Loc.NicknameConflictTitle, Loc.NicknameConflictMsg, InfoBarSeverity.Warning);
+                    break;
+                case AccountNicknameMutationOutcome.FailedCompensated:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameUpdateCompensatedMsg, InfoBarSeverity.Warning);
+                    break;
+                case AccountNicknameMutationOutcome.FailedDiverged:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameUpdateDivergedMsg, InfoBarSeverity.Error);
+                    break;
+            }
+        }
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
     }
 
