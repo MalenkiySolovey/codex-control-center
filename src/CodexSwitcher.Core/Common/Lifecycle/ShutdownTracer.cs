@@ -57,6 +57,7 @@ public sealed class ShutdownTracer
     private readonly List<ShutdownMilestoneTiming> _milestones = [];
     private readonly object _lock = new();
     private long _startTimestamp;
+    private bool _progressFlushEnabled;
 
     public bool IsStarted => _stopwatch.IsRunning;
     public double TotalElapsedMilliseconds => _stopwatch.Elapsed.TotalMilliseconds;
@@ -87,6 +88,7 @@ public sealed class ShutdownTracer
     {
         _startTimestamp = Stopwatch.GetTimestamp();
         _stopwatch.Restart();
+        _progressFlushEnabled = true;
         RecordMilestone("S0:CloseRequested");
     }
 
@@ -106,6 +108,9 @@ public sealed class ShutdownTracer
             var elapsedMs = (ts - _startTimestamp) * 1000.0 / Stopwatch.Frequency;
             _milestones.Add(new ShutdownMilestoneTiming(name, ts, elapsedMs));
         }
+
+        if (_progressFlushEnabled)
+            FlushToFile();
     }
 
     public double? GetMilestoneElapsed(string name)

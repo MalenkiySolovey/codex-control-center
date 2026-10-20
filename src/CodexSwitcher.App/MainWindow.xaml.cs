@@ -63,6 +63,7 @@ using H.NotifyIcon;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace CodexSwitcher.App;
 
@@ -90,11 +91,13 @@ public sealed partial class MainWindow : Window
     private readonly ICommonDialogService _dialogs;
     private readonly AppSettings _settings;
     private readonly MenuFlyout _trayMenu = new();
+    private TaskbarIcon? TrayIcon { get; set; }
     private readonly HashSet<CodexSwitcher.App.ViewModels.AccountItemViewModel> _trayObservedAccounts = [];
     private readonly HashSet<CodexSwitcher.App.ViewModels.AccountUsageViewModel> _trayObservedUsage = [];
-    private TrayQuickControlPopup? _trayQuickControlPopup;
     private QuickSwitchOverlayWindow? _quickSwitchOverlayWindow;
     private bool _exitRequestedFromTray;
+    private bool _shutdownInProgress;
+    private bool _shutdownCompleted;
 
     public CodexSwitcher.App.Views.ShellView ShellRoot => Root;
 
@@ -132,7 +135,6 @@ public sealed partial class MainWindow : Window
         var id = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
         _appWindow = AppWindow.GetFromWindowId(id);
         _chromeService.TrySetWindowIcon(this, _appWindow);
-        InitializeTrayIcon();
         try
         {
             _globalHotkeyService.AttachToWindow(
@@ -155,17 +157,6 @@ public sealed partial class MainWindow : Window
         if (Content is FrameworkElement rootVisual)
         {
             themeService.Initialize(rootVisual);
-            if (_trayQuickControlPopup is not null)
-            {
-                _trayQuickControlPopup.RequestedTheme = rootVisual.ActualTheme;
-                rootVisual.ActualThemeChanged += (_, _) =>
-                {
-                    if (_trayQuickControlPopup is not null)
-                    {
-                        _trayQuickControlPopup.RequestedTheme = rootVisual.ActualTheme;
-                    }
-                };
-            }
         }
 
         handleProvider.MainWindowHandle = hwnd;
@@ -180,17 +171,49 @@ public sealed partial class MainWindow : Window
         if (Interlocked.Exchange(ref _activatedOnce, 1) == 0)
         {
             StartupTracer.Instance.RecordMilestone("T10:FirstWindowActivated");
+            // H.NotifyIcon creates its native shell icon when the control loads. Defer
+            // that creation until after the WinUI system backdrop has initialized; the
+            // library's tray context menu otherwise may not open in unpackaged builds.
+            DispatcherQueue.TryEnqueue(InitializeTrayIcon);
         }
         _lifecycleCoordinator.HandleActivation(args.WindowActivationState, () => Root.ViewModel?.HideAllRevealedTotp());
     }
 
     private void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
     {
+        if (_shutdownCompleted)
+            return;
+
+        args.Cancel = true;
         if (!_exitRequestedFromTray)
         {
-            args.Cancel = true;
             HideToTray();
             ShutdownTracer.Instance.RecordMilestone("S15:WindowHidden");
+            return;
+        }
+
+        _ = ShutdownBeforeCloseAsync();
+    }
+
+    private async Task ShutdownBeforeCloseAsync()
+    {
+        if (_shutdownInProgress)
+            return;
+
+        _shutdownInProgress = true;
+        try
+        {
+            if (Application.Current is App app)
+                await app.ShutdownHostAsync();
+        }
+        finally
+        {
+            _shutdownCompleted = true;
+            Close();
+            // The native tray icon owns a dispatcher/window handle independently
+            // of the main window. Explicitly terminate the WinUI app after the
+            // graceful host shutdown so tray Exit cannot leave a hidden process.
+            Application.Current.Exit();
         }
     }
 
@@ -211,37 +234,34 @@ public sealed partial class MainWindow : Window
 
     private void InitializeTrayIcon()
     {
-        _trayMenu.Opening += (_, _) => RebuildTrayMenu();
-        TrayIcon.ContextFlyout = _trayMenu;
+        if (TrayIcon is not null)
+            return;
+
+        // Populate the native tray menu before loading the control so the shell's
+        // first right-click always has a complete menu, even in a fresh profile.
+        RebuildTrayMenu();
+
+        TrayIcon = new TaskbarIcon
+        {
+            Width = 0,
+            Height = 0,
+            Opacity = 0,
+            IsHitTestVisible = false,
+            ToolTipText = "Codex Control Center",
+            IconSource = new BitmapImage { UriSource = new Uri("ms-appx:///Assets/icon.ico") },
+            ContextFlyout = _trayMenu,
+            ContextMenuMode = ContextMenuMode.PopupMenu,
+            NoLeftClickDelay = true,
+            LeftClickCommand = new RelayCommand(RestoreFromTray),
+            DoubleClickCommand = new RelayCommand(RestoreFromTray),
+        };
+        RootGrid.Children.Add(TrayIcon);
+
         Root.TrayTooltipSettingsChanged += RefreshTrayTooltip;
         Root.ViewModel.Routing.PropertyChanged += OnTrayRoutingPropertyChanged;
         Root.ViewModel.Accounts.AllItems.CollectionChanged += OnTrayAccountsCollectionChanged;
         AttachTrayAccountObservers();
         RefreshTrayTooltip();
-
-        _trayQuickControlPopup = new TrayQuickControlPopup
-        {
-            DataContext = Root.ViewModel,
-            RequestedTheme = Root.ActualTheme,
-        };
-        _trayQuickControlPopup.OpenSwitchboardRequested += OpenSwitchboardFromTrayPopup;
-        _trayQuickControlPopup.RefreshAllRequested += RefreshAllFromTrayPopup;
-        _trayQuickControlPopup.OpenCodexRequested += OpenCodexFromTrayPopup;
-        _trayQuickControlPopup.AccountSwitchRequested += SwitchAccountFromTrayPopup;
-        _trayQuickControlPopup.ApiProviderSwitchRequested += SwitchApiProviderFromTrayPopup;
-        _trayQuickControlPopup.LaunchProfileToggleRequested += ToggleLaunchProfileFromTrayPopup;
-        _trayQuickControlPopup.ManageLaunchProfilesRequested += OpenLaunchProfilesFromTrayPopup;
-        _trayQuickControlPopup.OpenSettingsRequested += OpenSettingsFromTrayPopup;
-        _trayQuickControlPopup.QuitRequested += ExitFromTray;
-        TrayIcon.TrayPopup = _trayQuickControlPopup;
-
-        // H.NotifyIcon invokes LeftClickCommand before displaying TrayPopup. Leaving it unset
-        // keeps a left click useful while Switchboard is hidden instead of restoring the window.
-        TrayIcon.DoubleClickCommand = new RelayCommand(() =>
-        {
-            TrayIcon.CloseTrayPopup();
-            BringToFront();
-        });
     }
 
     private void OnTrayRoutingPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -251,6 +271,7 @@ public sealed partial class MainWindow : Window
             or nameof(CodexSwitcher.App.Shell.Routing.ActiveTargetPresentationCoordinator.IsRoutingActiveToApi))
         {
             RefreshTrayTooltip();
+            ScheduleTrayMenuRefresh();
         }
     }
 
@@ -258,6 +279,7 @@ public sealed partial class MainWindow : Window
     {
         AttachTrayAccountObservers();
         RefreshTrayTooltip();
+        ScheduleTrayMenuRefresh();
     }
 
     private void AttachTrayAccountObservers()
@@ -287,7 +309,11 @@ public sealed partial class MainWindow : Window
         _trayObservedUsage.Clear();
     }
 
-    private void OnTrayAccountPropertyChanged(object? sender, PropertyChangedEventArgs e) => RefreshTrayTooltip();
+    private void OnTrayAccountPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        RefreshTrayTooltip();
+        ScheduleTrayMenuRefresh();
+    }
 
     private void OnTrayUsagePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -297,6 +323,17 @@ public sealed partial class MainWindow : Window
             or nameof(CodexSwitcher.App.ViewModels.AccountUsageViewModel.IsStale))
         {
             RefreshTrayTooltip();
+            ScheduleTrayMenuRefresh();
+        }
+    }
+
+    private void ScheduleTrayMenuRefresh()
+    {
+        if (TrayIcon is not null)
+        {
+            // Keep all WinUI flyout mutations on the dispatcher, never in the tray
+            // notification callback that must immediately display the native menu.
+            DispatcherQueue.TryEnqueue(RebuildTrayMenu);
         }
     }
 
@@ -334,7 +371,7 @@ public sealed partial class MainWindow : Window
         _trayMenu.Items.Clear();
         AddTrayItem(Strings.Current.TrayOpenSwitchboard, BringToFront);
         AddTrayItem(Strings.Current.TrayRefreshAll, () => Root.ViewModel.Accounts.RefreshAllCommand.Execute(null));
-        AddTrayItem(Strings.Current.TrayOpenCodex, OpenCodexFromTrayPopup);
+        AddTrayItem(Strings.Current.TrayOpenCodex, OpenCodexFromTray);
 
         _trayMenu.Items.Add(new MenuFlyoutSeparator());
         AddTrayHeading(Strings.Current.TrayActiveTarget);
@@ -357,47 +394,19 @@ public sealed partial class MainWindow : Window
         AddTrayItem(Strings.Current.TrayQuit, ExitFromTray);
     }
 
-    private void OpenSwitchboardFromTrayPopup()
+    private void OpenCodexFromTray()
     {
-        TrayIcon.CloseTrayPopup();
-        BringToFront();
-    }
-
-    private async void RefreshAllFromTrayPopup()
-    {
-        await RunTrayActionFromPopupAsync(
-            () => Root.ViewModel.Accounts.RefreshAllCommand.ExecuteAsync(null));
-    }
-
-    private void OpenCodexFromTrayPopup()
-    {
-        TrayIcon.CloseTrayPopup();
         if (!_processManager.TryLaunchDesktop())
         {
             BringToFront();
         }
     }
 
-    private async void SwitchAccountFromTrayPopup(ViewModels.AccountItemViewModel account)
-    {
-        await RunTrayActionFromPopupAsync(
-            () => Root.ViewModel.Accounts.SwitchCommand.ExecuteAsync(account),
-            requiresSwitchConfirmation: true);
-    }
-
-    private async void SwitchApiProviderFromTrayPopup(ViewModels.ApiProviderItemViewModel provider)
-    {
-        await RunTrayActionFromPopupAsync(
-            () => Root.ViewModel.ApiProviders.SwitchToApiProviderCommand.ExecuteAsync(provider),
-            requiresSwitchConfirmation: true);
-    }
-
-    private async Task RunTrayActionFromPopupAsync(
+    private async Task RunTrayActionAsync(
         Func<Task> action,
         bool requiresSwitchConfirmation = false,
         IntPtr restoreForegroundWindow = default)
     {
-        TrayIcon.CloseTrayPopup();
         if (requiresSwitchConfirmation && _settings.AlwaysConfirmSwitch)
         {
             BringToFront();
@@ -444,11 +453,11 @@ public sealed partial class MainWindow : Window
         _quickSwitchOverlayWindow?.Close();
         var overlay = new QuickSwitchOverlayWindow(Root.ViewModel, Root.ActualTheme, foregroundWindow);
         _quickSwitchOverlayWindow = overlay;
-        overlay.AccountSwitchRequested += account => _ = RunTrayActionFromPopupAsync(
+        overlay.AccountSwitchRequested += account => _ = RunTrayActionAsync(
             () => Root.ViewModel.Accounts.SwitchCommand.ExecuteAsync(account),
             requiresSwitchConfirmation: true,
             restoreForegroundWindow: foregroundWindow);
-        overlay.ApiProviderSwitchRequested += provider => _ = RunTrayActionFromPopupAsync(
+        overlay.ApiProviderSwitchRequested += provider => _ = RunTrayActionAsync(
             () => Root.ViewModel.ApiProviders.SwitchToApiProviderCommand.ExecuteAsync(provider),
             requiresSwitchConfirmation: true,
             restoreForegroundWindow: foregroundWindow);
@@ -557,30 +566,8 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void ToggleLaunchProfileFromTrayPopup(Features.Launch.CodexLaunchProfileItemViewModel profile)
-    {
-        if (profile.IsRunning)
-        {
-            TrayIcon.CloseTrayPopup();
-            BringToFront();
-        }
-
-        await RunTrayActionFromPopupAsync(
-            () => Root.ViewModel.LaunchProfiles.ToggleProfileCommand.ExecuteAsync(profile));
-    }
-
-    private void OpenLaunchProfilesFromTrayPopup() => OpenTabFromTray(2);
-
-    private void OpenSettingsFromTrayPopup()
-    {
-        TrayIcon.CloseTrayPopup();
-        BringToFront();
-        Root.OpenSettingsFromTray();
-    }
-
     private void OpenTabFromTray(int tab)
     {
-        TrayIcon.CloseTrayPopup();
         BringToFront();
         Root.ViewModel.SelectedTab = tab;
     }
@@ -616,8 +603,13 @@ public sealed partial class MainWindow : Window
 
     private void AddTrayItem(string text, Action action, bool enabled = true)
     {
-        var item = new MenuFlyoutItem { Text = text, IsEnabled = enabled };
-        item.Click += (_, _) => action();
+        var item = new MenuFlyoutItem
+        {
+            Text = text,
+            IsEnabled = enabled,
+            // PopupMenu mode invokes MenuFlyoutItem.Command rather than Click.
+            Command = new RelayCommand(action),
+        };
         _trayMenu.Items.Add(item);
     }
 
@@ -628,7 +620,6 @@ public sealed partial class MainWindow : Window
             var sessionCount = Root.ViewModel.LaunchProfiles.RunningSessions.Count;
             if (sessionCount > 0)
             {
-                TrayIcon.CloseTrayPopup();
                 BringToFront();
                 var loc = Strings.Current;
                 var confirmed = await _dialogs.ConfirmAsync(
@@ -643,7 +634,7 @@ public sealed partial class MainWindow : Window
             }
 
             _exitRequestedFromTray = true;
-            Close();
+            await ShutdownBeforeCloseAsync();
         }
         catch (Exception ex)
         {
@@ -658,6 +649,8 @@ public sealed partial class MainWindow : Window
         ShowWindow(hwnd, SW_RESTORE);
         SetForegroundWindow(hwnd);
     }
+
+    private void RestoreFromTray() => BringToFront();
 
     public void HideToTray()
     {

@@ -70,21 +70,30 @@ public sealed class TrayAndLifecycleArchitectureTests
     }
 
     [Fact]
-    public void TraySwitchesDispatchThroughExistingAccountAndProviderCommands()
+    public void TrayLeftClickRestoresAndRightClickOpensExpandableQuitMenu()
     {
-        var popup = ReadSource(Path.Combine("src", "CodexSwitcher.App", "Views", "TrayQuickControlPopup.xaml.cs"));
         var mainWindow = ReadSource(Path.Combine("src", "CodexSwitcher.App", "MainWindow.xaml.cs"));
+        var initializeTrayIcon = GetMethodBody(mainWindow, "private void InitializeTrayIcon()");
+        var onWindowActivated = GetMethodBody(mainWindow, "private void OnWindowActivated(");
+        var addTrayItem = GetMethodBody(mainWindow, "private void AddTrayItem(");
+        var shutdownBeforeClose = GetMethodBody(mainWindow, "private async Task ShutdownBeforeCloseAsync()");
 
-        Assert.Contains("AccountSwitchRequested?.Invoke(account)", popup);
-        Assert.Contains("ApiProviderSwitchRequested?.Invoke(provider)", popup);
-        Assert.Contains("_trayQuickControlPopup.AccountSwitchRequested += SwitchAccountFromTrayPopup;", mainWindow);
-        Assert.Contains("_trayQuickControlPopup.ApiProviderSwitchRequested += SwitchApiProviderFromTrayPopup;", mainWindow);
-
-        var accountSwitch = GetMethodBody(mainWindow, "private async void SwitchAccountFromTrayPopup(");
-        Assert.Contains("Root.ViewModel.Accounts.SwitchCommand.ExecuteAsync(account)", accountSwitch);
-
-        var providerSwitch = GetMethodBody(mainWindow, "private async void SwitchApiProviderFromTrayPopup(");
-        Assert.Contains("Root.ViewModel.ApiProviders.SwitchToApiProviderCommand.ExecuteAsync(provider)", providerSwitch);
+        Assert.Contains("DispatcherQueue.TryEnqueue(InitializeTrayIcon);", onWindowActivated);
+        Assert.Contains("RebuildTrayMenu();", initializeTrayIcon);
+        Assert.Contains("ContextMenuMode = ContextMenuMode.PopupMenu", initializeTrayIcon);
+        Assert.Contains("ContextFlyout = _trayMenu", initializeTrayIcon);
+        Assert.Contains("LeftClickCommand = new RelayCommand(RestoreFromTray)", initializeTrayIcon);
+        Assert.DoesNotContain("RightClickCommand", initializeTrayIcon);
+        Assert.DoesNotContain("_trayMenu.Opening", initializeTrayIcon);
+        Assert.Contains("RootGrid.Children.Add(TrayIcon);", initializeTrayIcon);
+        Assert.Contains("DispatcherQueue.TryEnqueue(RebuildTrayMenu);", mainWindow);
+        Assert.Contains("ContextFlyout", mainWindow);
+        Assert.Contains("private void RestoreFromTray() => BringToFront();", mainWindow);
+        Assert.Contains("AddTrayItem(Strings.Current.TrayQuit, ExitFromTray);", mainWindow);
+        Assert.Contains("Command = new RelayCommand(action)", addTrayItem);
+        Assert.DoesNotContain("item.Click +=", addTrayItem);
+        Assert.DoesNotContain("TrayIcon.TrayPopup =", mainWindow);
+        Assert.True(shutdownBeforeClose.IndexOf("Close();", StringComparison.Ordinal) < shutdownBeforeClose.IndexOf("Application.Current.Exit();", StringComparison.Ordinal));
     }
 
     [Fact]

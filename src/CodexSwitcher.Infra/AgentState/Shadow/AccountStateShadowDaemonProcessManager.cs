@@ -4,7 +4,7 @@ using CodexSwitcher.Infra.Security.Hardening;
 
 namespace CodexSwitcher.Infra.AgentState.Shadow;
 
-internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShadowClientFactory
+internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShadowClientFactory, IDisposable
 {
     internal const string PipeName = "codex-switchboard-agent-state-shadow-v1";
     private static readonly TimeSpan InitialConnectTimeout = TimeSpan.FromMilliseconds(300);
@@ -15,6 +15,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
     private readonly string _pipeName;
     private readonly object _processSync = new();
     private Process? _ownedProcess;
+    private bool _disposed;
 
     public AccountStateShadowDaemonProcessManager(AccountStateShadowSettings settings, AppPaths paths, string pipeName = PipeName)
     {
@@ -28,6 +29,12 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
 
     public async Task<IAccountStateShadowClient> ConnectCompatibleAsync(CancellationToken cancellationToken)
     {
+        lock (_processSync)
+        {
+            if (_disposed)
+                throw new AccountStateShadowUnavailableException();
+        }
+
         if (!_settings.Enabled || string.IsNullOrWhiteSpace(_settings.DaemonExecutablePath))
             throw new AccountStateShadowUnavailableException();
 
@@ -79,17 +86,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         if (process is null)
             return;
 
-        try
-        {
-            if (!process.HasExited)
-                process.Kill();
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-        }
+        TryKill(process);
 
         try
         {
@@ -105,6 +102,52 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         }
     }
 
+    public void Dispose()
+    {
+        Process? process;
+        lock (_processSync)
+        {
+            _disposed = true;
+            process = _ownedProcess;
+            _ownedProcess = null;
+        }
+
+        if (process is null)
+            return;
+
+        TryKill(process);
+        try
+        {
+            if (!process.HasExited)
+                process.WaitForExit(200);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+        }
+    }
+
     private void EnsureShadowDataDirectory()
     {
         if (!DirectoryHardening.TryRestrictToCurrentUser(_dataDirectory))
@@ -115,6 +158,9 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
     {
         lock (_processSync)
         {
+            if (_disposed)
+                throw new AccountStateShadowUnavailableException();
+
             if (_ownedProcess is { HasExited: false })
                 return false;
 
@@ -158,10 +204,28 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         process.BeginErrorReadLine();
         lock (_processSync)
         {
-            _ownedProcess = process;
+            if (!_disposed)
+            {
+                _ownedProcess = process;
+                return true;
+            }
         }
 
-        return true;
+        TryKill(process);
+        try
+        {
+            if (!process.HasExited)
+                process.WaitForExit(200);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        finally
+        {
+            process.Dispose();
+        }
+
+        throw new AccountStateShadowUnavailableException();
     }
 
     private async Task<AccountStateShadowRpcClient> ConnectDuringStartupAsync(CancellationToken cancellationToken)

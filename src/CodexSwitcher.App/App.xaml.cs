@@ -161,6 +161,11 @@ public partial class App : Application
 
     private async void OnMainWindowClosed(object sender, WindowEventArgs args)
     {
+        await ShutdownHostAsync();
+    }
+
+    internal async Task ShutdownHostAsync()
+    {
         if (_host is not null)
         {
             var tracer = ShutdownTracer.Instance;
