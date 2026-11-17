@@ -21,6 +21,7 @@ public sealed class AccountRegistry
     private bool _isLoaded;
     private bool _isLoading;
     private long _currentGeneration;
+    private bool _nicknameWritesFenced;
 
     internal object SyncRoot { get; } = new();
 
@@ -68,6 +69,23 @@ public sealed class AccountRegistry
         }
     }
 
+    /// <summary>True after durable authority migration evidence makes local nickname writes unsafe.</summary>
+    public bool NicknameWritesFenced
+    {
+        get
+        {
+            lock (SyncRoot)
+                return _nicknameWritesFenced;
+        }
+    }
+
+    /// <summary>Fences compatibility APIs after nickname authority may have moved to the daemon.</summary>
+    public void SetNicknameWritesFenced(bool fenced)
+    {
+        lock (SyncRoot)
+            _nicknameWritesFenced = fenced;
+    }
+
     /// <summary>Captures detached profile metadata and its committed generation under one lock.</summary>
     public AccountRegistrySnapshot ReadCommittedSnapshot()
     {
@@ -108,6 +126,7 @@ public sealed class AccountRegistry
     {
         lock (SyncRoot)
         {
+            ThrowIfNicknameWritesFencedUnderLock();
             var profile = UpdateUnderLock(id, item => item.Nickname = nickname?.Trim() ?? string.Empty);
             if (profile is not null)
                 _audit.Record("rename", "ok", profile.DisplayName);
@@ -123,6 +142,8 @@ public sealed class AccountRegistry
     {
         lock (SyncRoot)
         {
+            if (_nicknameWritesFenced)
+                return false;
             if (_currentGeneration != expectedGeneration)
                 return false;
 
@@ -132,6 +153,53 @@ public sealed class AccountRegistry
 
             _audit.Record("rename", "ok", profile.DisplayName);
             return true;
+        }
+    }
+
+    /// <summary>Persists only a verified daemon nickname as a compatibility cache value.</summary>
+    public bool UpdateNicknameMirrorsIfGeneration(IReadOnlyDictionary<Guid, string?> nicknames, long expectedGeneration)
+    {
+        ArgumentNullException.ThrowIfNull(nicknames);
+        lock (SyncRoot)
+        {
+            if (_currentGeneration != expectedGeneration || nicknames.Count != _profiles.Count ||
+                nicknames.Keys.Any(id => !ContainsUnderLock(id)))
+                return false;
+
+            var previousFence = _nicknameWritesFenced;
+            _nicknameWritesFenced = false;
+            try
+            {
+                UpdateManyUnderLock(nicknames.ToDictionary(
+                    pair => pair.Key,
+                    pair => (Action<ProfileMetadata>)(profile => profile.Nickname = pair.Value ?? string.Empty)));
+            }
+            finally
+            {
+                _nicknameWritesFenced = previousFence;
+            }
+
+            return _currentGeneration >= expectedGeneration;
+        }
+    }
+
+    /// <summary>Reloads the durable index and verifies exact nickname mirrors without replacing current in-memory state.</summary>
+    public bool VerifyPersistedNicknameMirrors(IReadOnlyDictionary<Guid, string?> nicknames)
+    {
+        ArgumentNullException.ThrowIfNull(nicknames);
+        lock (SyncRoot)
+        {
+            var knownIds = _profiles.Select(profile => profile.Id).ToHashSet();
+            if (nicknames.Count != knownIds.Count || !nicknames.Keys.ToHashSet().SetEquals(knownIds))
+                return false;
+
+            var persisted = _store.LoadAll();
+            if (persisted.Count != knownIds.Count || !persisted.Select(profile => profile.Id).ToHashSet().SetEquals(knownIds))
+                return false;
+
+            var persistedById = persisted.ToDictionary(profile => profile.Id);
+            return nicknames.All(pair => persistedById.TryGetValue(pair.Key, out var profile) &&
+                string.Equals(profile.Nickname ?? string.Empty, pair.Value ?? string.Empty, StringComparison.Ordinal));
         }
     }
 
@@ -258,6 +326,8 @@ public sealed class AccountRegistry
             var previous = _profiles[index];
             var updated = previous.CreateSnapshot();
             update(updated);
+            if (_nicknameWritesFenced && !string.Equals(previous.Nickname, updated.Nickname, StringComparison.Ordinal))
+                throw new InvalidOperationException("Local nickname writes are fenced by daemon authority.");
             _profiles[index] = updated;
             try
             {
@@ -283,6 +353,8 @@ public sealed class AccountRegistry
                 throw new InvalidOperationException($"Account ID '{profile.Id}' is already registered.");
 
             var ownedProfile = profile.CreateSnapshot();
+            if (_nicknameWritesFenced)
+                ownedProfile.Nickname = string.Empty;
             _profiles.Add(ownedProfile);
             try
             {
@@ -298,6 +370,12 @@ public sealed class AccountRegistry
         }
     }
 
+    private void ThrowIfNicknameWritesFencedUnderLock()
+    {
+        if (_nicknameWritesFenced)
+            throw new InvalidOperationException("Local nickname writes are fenced by daemon authority.");
+    }
+
     internal void AddManyUnderLock(IReadOnlyList<ProfileMetadata> profiles, ProfileSaveIntent intent)
     {
         ArgumentNullException.ThrowIfNull(profiles);
@@ -311,6 +389,11 @@ public sealed class AccountRegistry
                 throw new InvalidOperationException("One or more account IDs are already registered.");
 
             var added = profiles.Select(profile => profile.CreateSnapshot()).ToList();
+            if (_nicknameWritesFenced)
+            {
+                foreach (var profile in added)
+                    profile.Nickname = string.Empty;
+            }
             _profiles.AddRange(added);
             try
             {
@@ -338,7 +421,12 @@ public sealed class AccountRegistry
             {
                 var index = updated.FindIndex(profile => profile.Id == id);
                 if (index >= 0)
+                {
+                    var previousNickname = updated[index].Nickname;
                     update(updated[index]);
+                    if (_nicknameWritesFenced && !string.Equals(previousNickname, updated[index].Nickname, StringComparison.Ordinal))
+                        throw new InvalidOperationException("Local nickname writes are fenced by daemon authority.");
+                }
             }
 
             _profiles = updated;

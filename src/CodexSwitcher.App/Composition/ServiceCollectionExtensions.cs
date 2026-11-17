@@ -246,11 +246,29 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => AccountNicknameWriteCanarySettings.FromEnvironment(
             sp.GetRequiredService<AccountStateShadowSettings>(),
             sp.GetRequiredService<AccountReadAuthorityCanarySettings>()));
-        services.AddSingleton<AccountStateShadowDaemonProcessManager>();
+        services.AddSingleton(NicknameAuthorityCanarySettings.FromEnvironment());
+        services.AddSingleton(sp => new NicknameAuthorityMigrationJournal(
+            sp.GetRequiredService<IFileSystem>(), paths));
+        services.AddSingleton(sp => new AccountStateShadowDaemonProcessManager(
+            sp.GetRequiredService<AccountStateShadowSettings>(),
+            paths,
+            AccountStateShadowDaemonProcessManager.PipeName,
+            sp.GetRequiredService<NicknameAuthorityCanarySettings>(),
+            sp.GetRequiredService<NicknameAuthorityMigrationJournal>()));
         services.AddSingleton<IAccountStateShadowClientFactory>(sp => sp.GetRequiredService<AccountStateShadowDaemonProcessManager>());
         services.AddSingleton<AccountStateShadowCoordinator>();
         services.AddSingleton<IAccountStateShadowReadAuthority>(sp => sp.GetRequiredService<AccountStateShadowCoordinator>());
         services.AddSingleton<IAccountReadSnapshotProvider, AccountReadSnapshotProvider>();
+        services.AddSingleton<AccountNicknameAuthorityService>(sp => new AccountNicknameAuthorityService(
+            sp.GetRequiredService<AccountRegistry>(),
+            sp.GetRequiredService<AccountTransferService>(),
+            sp.GetRequiredService<NicknameAuthorityCanarySettings>(),
+            sp.GetRequiredService<NicknameAuthorityMigrationJournal>(),
+            sp.GetRequiredService<AccountStateShadowCoordinator>(),
+            sp.GetRequiredService<IAccountStateShadowClientFactory>(),
+            paths));
+        services.AddSingleton<IAccountNicknameAuthorityService>(sp => sp.GetRequiredService<AccountNicknameAuthorityService>());
+        services.AddHostedService<NicknameAuthorityStartupFenceHostedService>();
         services.AddSingleton<IAccountNicknameMutationService>(sp => new AccountNicknameMutationService(
             sp.GetRequiredService<AccountRegistry>(),
             sp.GetRequiredService<AccountNicknameWriteCanarySettings>(),

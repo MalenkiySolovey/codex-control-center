@@ -128,8 +128,8 @@ function Test-CanonicalCheckout {
             }
         }
     }
-    if ($seenIds.Count -ne 9) {
-        throw "Fetched protocol must contain exactly nine canonical v1 schemas."
+    if ($seenIds.Count -ne 14) {
+        throw "Fetched protocol must contain exactly fourteen canonical v1 schemas."
     }
 }
 

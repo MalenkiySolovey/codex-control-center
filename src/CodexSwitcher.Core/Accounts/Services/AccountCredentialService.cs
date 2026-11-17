@@ -70,7 +70,7 @@ public sealed class AccountCredentialService
                     profile.LastError = null;
                     profile.LastRefreshedAt = file?.LastRefresh ?? _clock.UtcNow;
                     SubscriptionMetadataService.ApplyCurrentCredential(profile, authJson, _clock.UtcNow);
-                    if (!string.IsNullOrWhiteSpace(nickname))
+                    if (!_registry.NicknameWritesFenced && !string.IsNullOrWhiteSpace(nickname))
                         profile.Nickname = nickname.Trim();
                 })!;
 
@@ -80,7 +80,7 @@ public sealed class AccountCredentialService
 
             var profile = new ProfileMetadata
             {
-                Nickname = nickname?.Trim() ?? string.Empty,
+                Nickname = _registry.NicknameWritesFenced ? string.Empty : nickname?.Trim() ?? string.Empty,
                 AccountEmail = claims.Email,
                 DetectedDisplayName = claims.DisplayName,
                 AccountSub = claims.Sub,

@@ -31,7 +31,7 @@ public sealed record AccountStateShadowSettings(bool Enabled, string? DaemonExec
         }
     }
 
-    private static bool IsNetworkPath(string path)
+    internal static bool IsNetworkPath(string path)
     {
         if (path.StartsWith("\\\\", StringComparison.Ordinal))
             return true;

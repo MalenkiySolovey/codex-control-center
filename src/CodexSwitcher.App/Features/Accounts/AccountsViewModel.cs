@@ -86,6 +86,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
     private readonly IAppNotificationService _notifications;
     private readonly IAppBusyService _busy;
     private readonly IAccountNicknameMutationService? _nicknameMutationService;
+    private readonly IAccountNicknameAuthorityService? _nicknameAuthority;
 
     private readonly ObservableCollection<AccountItemViewModel> _all = [];
     private ActiveTarget? _lastActiveTarget;
@@ -141,7 +142,8 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         ICodexLaunchService? launchService = null,
         IUiDispatcher? dispatcher = null,
         ICodexSignedOutService? signedOutService = null,
-        IAccountNicknameMutationService? nicknameMutationService = null)
+        IAccountNicknameMutationService? nicknameMutationService = null,
+        IAccountNicknameAuthorityService? nicknameAuthority = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
@@ -159,6 +161,7 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         _targetSwitchService = targetSwitchService;
         _signedOutService = signedOutService;
         _nicknameMutationService = nicknameMutationService;
+        _nicknameAuthority = nicknameAuthority;
         _launchService = launchService;
         _dispatcher = dispatcher ?? ImmediateUiDispatcher.Instance;
 
@@ -186,6 +189,17 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             _authReconciler.Load(auditOrphans: false);
             return Task.CompletedTask;
         });
+
+        if (_nicknameAuthority is not null)
+        {
+            await _nicknameAuthority.InitializeAsync();
+            await ResolveNicknameAuthorityConflictsAsync();
+            if (_nicknameAuthority.IsAuthorityPotentiallyActive && !_nicknameAuthority.IsAuthorityActive &&
+                _nicknameAuthority.GetPendingConflicts().Count == 0)
+            {
+                ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameAuthorityUnavailableMsg, InfoBarSeverity.Warning);
+            }
+        }
 
         // Cache-first startup: restore cached usage immediately without network delay
         await _usage.LoadCacheAsync(Loc.Pt);
@@ -450,12 +464,21 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         var profile = _credentials.AddFromAuthJson(authJson, null);
         var nick = await _ui.PromptTextAsync(Loc.NicknameTitle, Loc.NicknamePrompt,
             profile.DetectedDisplayName ?? string.Empty, Loc.Save);
-        if (!string.IsNullOrWhiteSpace(nick))
+        if (!string.IsNullOrWhiteSpace(nick) && _nicknameAuthority?.IsAuthorityPotentiallyActive == true)
+        {
+            var result = await _nicknameAuthority.RenameAsync(profile.Id, nick);
+            if (result.Outcome is AccountNicknameMutationOutcome.FailedDiverged or AccountNicknameMutationOutcome.Conflict)
+                ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameAuthorityUnavailableMsg, InfoBarSeverity.Warning);
+        }
+        else if (!string.IsNullOrWhiteSpace(nick))
             _registry.Rename(profile.Id, nick);
+        else if (_nicknameAuthority?.IsAuthorityActive == true)
+            await _nicknameAuthority.SynchronizeActiveSourceAsync();
 
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
-        ShowInfo(Loc.AddedTitle, Loc.AddedMsg(profile.DisplayName), InfoBarSeverity.Success);
-        _ = _usage.TriggerBackgroundRefreshForProfiles([profile]);
+        var savedProfile = _registry.Find(profile.Id) ?? profile;
+        ShowInfo(Loc.AddedTitle, Loc.AddedMsg(savedProfile.DisplayName), InfoBarSeverity.Success);
+        _ = _usage.TriggerBackgroundRefreshForProfiles([savedProfile]);
     }
 
     [RelayCommand]
@@ -563,15 +586,26 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
 
         var prevProfiles = _registry.Profiles.ToList();
         var count = 0;
-        await RunBusy(Loc.BusyImporting, () =>
+        var failedNicknames = 0;
+        await RunBusy(Loc.BusyImporting, async () =>
         {
-            count = _transfer.Import(document);
-            return Task.CompletedTask;
+            if (_nicknameAuthority?.IsAuthorityPotentiallyActive == true)
+            {
+                var result = await _nicknameAuthority.ImportAsync(document);
+                count = result.ImportedAccounts;
+                failedNicknames = result.FailedNicknames;
+            }
+            else
+            {
+                count = _transfer.Import(document);
+            }
         });
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
         if (count > 0)
         {
             ShowInfo(Loc.ImportedTitle, Loc.ImportedAccountsMsg(count), InfoBarSeverity.Success);
+            if (failedNicknames > 0)
+                ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameAuthorityUnavailableMsg, InfoBarSeverity.Warning);
             var newProfiles = _registry.Profiles.Where(p => !prevProfiles.Any(prev => prev.Id == p.Id)).ToList();
             if (newProfiles.Count > 0)
             {
@@ -589,7 +623,17 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         var saved = false;
         await RunBusy(Loc.BusyExporting, async () =>
         {
-            saved = await _ui.SaveExportFileAsync("codex-switcher-accounts.codexswitcher", _transfer.ExportAll());
+            try
+            {
+                var document = _nicknameAuthority is null
+                    ? _transfer.ExportAll()
+                    : await _nicknameAuthority.ExportAllAsync();
+                saved = await _ui.SaveExportFileAsync("codex-switcher-accounts.codexswitcher", document);
+            }
+            catch (Exception)
+            {
+                ShowInfo(Loc.ExportTitle, Loc.NicknameExportUnavailableMsg, InfoBarSeverity.Warning);
+            }
         });
         if (saved) ShowInfo(Loc.ExportedTitle, Loc.ExportedAllMsg(_all.Count), InfoBarSeverity.Success);
     }
@@ -603,7 +647,17 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         var saved = false;
         await RunBusy(Loc.BusyExporting, async () =>
         {
-            saved = await _ui.SaveExportFileAsync("codex-switcher-account.codexswitcher", _transfer.ExportOne(item.Id));
+            try
+            {
+                var document = _nicknameAuthority is null
+                    ? _transfer.ExportOne(item.Id)
+                    : await _nicknameAuthority.ExportOneAsync(item.Id);
+                saved = await _ui.SaveExportFileAsync("codex-switcher-account.codexswitcher", document);
+            }
+            catch (Exception)
+            {
+                ShowInfo(Loc.ExportTitle, Loc.NicknameExportUnavailableMsg, InfoBarSeverity.Warning);
+            }
         });
         if (saved) ShowInfo(Loc.ExportedTitle, Loc.ExportedOneMsg(item.DisplayName), InfoBarSeverity.Success);
     }
@@ -614,7 +668,20 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         if (item is null) return;
         var nick = await _ui.PromptTextAsync(Loc.RenameTitle, Loc.RenamePrompt, item.DisplayName, Loc.Save);
         if (nick is null) return;
-        if (_nicknameMutationService is null)
+        if (_nicknameAuthority?.IsAuthorityPotentiallyActive == true)
+        {
+            var result = await _nicknameAuthority.RenameAsync(item.Id, nick);
+            switch (result.Outcome)
+            {
+                case AccountNicknameMutationOutcome.Conflict:
+                    ShowInfo(Loc.NicknameConflictTitle, Loc.NicknameConflictMsg, InfoBarSeverity.Warning);
+                    break;
+                case AccountNicknameMutationOutcome.FailedDiverged:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameAuthorityUnavailableMsg, InfoBarSeverity.Warning);
+                    break;
+            }
+        }
+        else if (_nicknameMutationService is null)
         {
             _registry.Rename(item.Id, nick);
         }
@@ -635,6 +702,38 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
             }
         }
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
+    }
+
+    private async Task ResolveNicknameAuthorityConflictsAsync()
+    {
+        if (_nicknameAuthority is null)
+            return;
+
+        for (var attempt = 0; attempt < 32; attempt++)
+        {
+            var conflicts = _nicknameAuthority.GetPendingConflicts();
+            if (conflicts.Count == 0)
+                return;
+            var conflict = conflicts[0];
+
+            var profile = _registry.Find(conflict.AccountId);
+            var accountName = profile?.DisplayName ?? Loc.CodexAccount;
+            var selected = await _ui.PromptTextAsync(
+                Loc.NicknameConflictTitle,
+                Loc.NicknameMigrationConflictPrompt(conflict.LocalNickname, conflict.DaemonNickname),
+                conflict.LocalNickname ?? string.Empty,
+                Loc.Save);
+            if (selected is null)
+                return;
+
+            var result = await _nicknameAuthority.ResolveMigrationConflictAsync(conflict.AccountId, selected);
+            if (result.Outcome is AccountNicknameMutationOutcome.Conflict or AccountNicknameMutationOutcome.FailedDiverged)
+            {
+                ShowInfo(Loc.NicknameConflictTitle, Loc.NicknameConflictMsg, InfoBarSeverity.Warning);
+                return;
+            }
+            ShowInfo(Loc.NicknameConflictTitle, Loc.NicknameMigrationConflictResolved(accountName), InfoBarSeverity.Informational);
+        }
     }
 
     [RelayCommand]

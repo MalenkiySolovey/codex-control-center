@@ -7,20 +7,34 @@ namespace CodexSwitcher.Infra.AgentState.Shadow;
 internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShadowClientFactory, IDisposable
 {
     internal const string PipeName = "codex-switchboard-agent-state-shadow-v1";
+    internal const string NicknameAuthorityPipeName = "codex-switchboard-agent-state-nickname-authority-v1";
     private static readonly TimeSpan InitialConnectTimeout = TimeSpan.FromMilliseconds(300);
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(6);
 
     private readonly AccountStateShadowSettings _settings;
+    private readonly NicknameAuthorityCanarySettings _authoritySettings;
+    private readonly NicknameAuthorityMigrationJournal? _nicknameJournal;
     private readonly string _dataDirectory;
     private readonly string _pipeName;
     private readonly object _processSync = new();
     private Process? _ownedProcess;
+    private DaemonMode? _ownedMode;
+    // Once authority was reachable in this app session, an unexpected disconnect is an offline
+    // condition. Do not silently spawn a replacement from a nickname write/export request.
+    private bool _authorityConnectionEstablished;
     private bool _disposed;
     private int _lastConnectionHealthy;
 
-    public AccountStateShadowDaemonProcessManager(AccountStateShadowSettings settings, AppPaths paths, string pipeName = PipeName)
+    public AccountStateShadowDaemonProcessManager(
+        AccountStateShadowSettings settings,
+        AppPaths paths,
+        string pipeName = PipeName,
+        NicknameAuthorityCanarySettings? authoritySettings = null,
+        NicknameAuthorityMigrationJournal? nicknameJournal = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _authoritySettings = authoritySettings ?? NicknameAuthorityCanarySettings.FromEnvironment();
+        _nicknameJournal = nicknameJournal;
         ArgumentNullException.ThrowIfNull(paths);
         if (string.IsNullOrWhiteSpace(pipeName) || !IsSupportedPipeName(pipeName))
             throw new ArgumentException("The shadow pipe name is invalid.", nameof(pipeName));
@@ -33,6 +47,9 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         lock (_processSync)
         {
             if (_disposed)
+                throw new AccountStateShadowUnavailableException();
+
+            if (!MayRunLegacyShadowMode())
                 throw new AccountStateShadowUnavailableException();
         }
 
@@ -52,7 +69,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
             {
                 await client.DisposeAsync().ConfigureAwait(false);
                 client = null;
-                startedByThisCall = EnsureOwnedProcessStarted(cancellationToken);
+                startedByThisCall = EnsureOwnedProcessStarted(DaemonMode.Shadow, cancellationToken);
                 client = await ConnectDuringStartupAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -78,28 +95,133 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         }
     }
 
+    private bool MayRunLegacyShadowMode()
+    {
+        if (_nicknameJournal?.Exists != true)
+            return true;
+        try
+        {
+            var journal = _nicknameJournal.Read();
+            return journal is null ||
+                (!journal.AuthorityWasActivated && journal.AuthorityState == NicknameAuthorityStates.LegacyLocal && journal.MigrationId is null);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public async Task<IAccountStateShadowClient> ConnectNicknameAuthorityCompatibleAsync(CancellationToken cancellationToken)
+    {
+        lock (_processSync)
+        {
+            if (_disposed)
+                throw new AccountStateShadowUnavailableException();
+        }
+        EnsureShadowDataDirectory();
+        var startedByThisCall = false;
+        AccountStateShadowRpcClient? client = new(NicknameAuthorityPipeName);
+        try
+        {
+            DaemonMode? initialOwnedMode;
+            lock (_processSync)
+                initialOwnedMode = _ownedMode;
+            if (initialOwnedMode == DaemonMode.Shadow)
+                await StopOwnedProcessAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                await client.ConnectAsync(InitialConnectTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or TimeoutException)
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+                client = null;
+
+                if (await IsLegacyDaemonReachableAsync(cancellationToken).ConfigureAwait(false))
+                    throw new AccountStateShadowUnavailableException();
+
+                bool authorityWasAlreadyConnected;
+                lock (_processSync)
+                    authorityWasAlreadyConnected = _authorityConnectionEstablished;
+                if (authorityWasAlreadyConnected)
+                    throw new AccountStateShadowUnavailableException();
+
+                if (!_authoritySettings.CanStartDaemon)
+                    throw new AccountStateShadowUnavailableException();
+
+                startedByThisCall = EnsureOwnedProcessStarted(DaemonMode.NicknameAuthority, cancellationToken);
+                client = await ConnectAuthorityDuringStartupAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await client.VerifyNicknameAuthorityCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            lock (_processSync)
+                _authorityConnectionEstablished = true;
+            Volatile.Write(ref _lastConnectionHealthy, 1);
+            return client;
+        }
+        catch (AccountStateShadowCompatibilityException)
+        {
+            Volatile.Write(ref _lastConnectionHealthy, 0);
+            if (client is not null)
+                await client.DisposeAsync().ConfigureAwait(false);
+            if (startedByThisCall)
+                await StopOwnedProcessAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        catch
+        {
+            Volatile.Write(ref _lastConnectionHealthy, 0);
+            if (client is not null)
+                await client.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    public async Task<IAccountStateShadowClient?> TryConnectExistingNicknameAuthorityAsync(CancellationToken cancellationToken)
+    {
+        lock (_processSync)
+        {
+            if (_disposed)
+                throw new AccountStateShadowUnavailableException();
+        }
+
+        var client = new AccountStateShadowRpcClient(NicknameAuthorityPipeName);
+        try
+        {
+            await client.ConnectAsync(InitialConnectTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or TimeoutException)
+        {
+            await client.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+
+        try
+        {
+            DaemonMode? ownedMode;
+            lock (_processSync)
+                ownedMode = _ownedMode;
+            if (ownedMode == DaemonMode.Shadow)
+                await StopOwnedProcessAsync(cancellationToken).ConfigureAwait(false);
+
+            await client.VerifyNicknameAuthorityCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            lock (_processSync)
+                _authorityConnectionEstablished = true;
+            Volatile.Write(ref _lastConnectionHealthy, 1);
+            return client;
+        }
+        catch
+        {
+            Volatile.Write(ref _lastConnectionHealthy, 0);
+            await client.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     public bool IsLastConnectionHealthy
     {
-        get
-        {
-            if (Volatile.Read(ref _lastConnectionHealthy) == 0)
-                return false;
-
-            lock (_processSync)
-            {
-                if (_ownedProcess is null)
-                    return false;
-
-                try
-                {
-                    return !_ownedProcess.HasExited;
-                }
-                catch (InvalidOperationException)
-                {
-                    return false;
-                }
-            }
-        }
+        get => Volatile.Read(ref _lastConnectionHealthy) != 0;
     }
 
     internal int? OwnedProcessId
@@ -127,6 +249,10 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         {
             process = _ownedProcess;
             _ownedProcess = null;
+            _ownedMode = null;
+            // This is an explicit lifecycle stop (for example, app shutdown or a mode switch).
+            // An unexpected process exit does not go through this path and stays latched offline.
+            _authorityConnectionEstablished = false;
             Volatile.Write(ref _lastConnectionHealthy, 0);
         }
 
@@ -138,7 +264,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         try
         {
             if (!process.HasExited)
-                await process.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromMilliseconds(200), cancellationToken).ConfigureAwait(false);
+                await process.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is OperationCanceledException or TimeoutException or InvalidOperationException)
         {
@@ -149,6 +275,16 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         }
     }
 
+    public Task StopOwnedLegacyProcessAsync(CancellationToken cancellationToken)
+    {
+        lock (_processSync)
+        {
+            if (_ownedMode != DaemonMode.Shadow)
+                return Task.CompletedTask;
+        }
+        return StopOwnedProcessAsync(cancellationToken);
+    }
+
     public void Dispose()
     {
         Process? process;
@@ -157,6 +293,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
             _disposed = true;
             process = _ownedProcess;
             _ownedProcess = null;
+            _ownedMode = null;
             Volatile.Write(ref _lastConnectionHealthy, 0);
         }
 
@@ -202,79 +339,77 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
             throw new AccountStateShadowUnavailableException();
     }
 
-    private bool EnsureOwnedProcessStarted(CancellationToken cancellationToken)
+    private bool EnsureOwnedProcessStarted(DaemonMode mode, CancellationToken cancellationToken)
     {
         lock (_processSync)
         {
             if (_disposed)
                 throw new AccountStateShadowUnavailableException();
 
+            if (mode == DaemonMode.Shadow && !MayRunLegacyShadowMode())
+                throw new AccountStateShadowUnavailableException();
+
             if (_ownedProcess is { HasExited: false })
+            {
+                if (_ownedMode != mode)
+                    throw new AccountStateShadowUnavailableException();
                 return false;
+            }
 
             _ownedProcess?.Dispose();
             _ownedProcess = null;
+            _ownedMode = null;
             Volatile.Write(ref _lastConnectionHealthy, 0);
-        }
 
-        var executablePath = _settings.DaemonExecutablePath!;
-        if (!File.Exists(executablePath))
-            throw new AccountStateShadowUnavailableException();
+            var executablePath = mode == DaemonMode.Shadow
+                ? _settings.DaemonExecutablePath
+                : _authoritySettings.DaemonExecutablePath;
+            if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
+                throw new AccountStateShadowUnavailableException();
 
-        var startInfo = new ProcessStartInfo(executablePath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-            WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        startInfo.ArgumentList.Add("--data-dir");
-        startInfo.ArgumentList.Add(_dataDirectory);
-        startInfo.ArgumentList.Add("--pipe-name");
-        startInfo.ArgumentList.Add(_pipeName);
-        startInfo.ArgumentList.Add("--shadow-mode");
-
-        cancellationToken.ThrowIfCancellationRequested();
-        Process process;
-        try
-        {
-            process = Process.Start(startInfo) ?? throw new AccountStateShadowUnavailableException();
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
-        {
-            throw new AccountStateShadowUnavailableException();
-        }
-
-        process.OutputDataReceived += static (_, _) => { };
-        process.ErrorDataReceived += static (_, _) => { };
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-        lock (_processSync)
-        {
-            if (!_disposed)
+            var startInfo = new ProcessStartInfo(executablePath)
             {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("--data-dir");
+            startInfo.ArgumentList.Add(_dataDirectory);
+            startInfo.ArgumentList.Add("--pipe-name");
+            startInfo.ArgumentList.Add(mode == DaemonMode.Shadow ? _pipeName : NicknameAuthorityPipeName);
+            startInfo.ArgumentList.Add(mode == DaemonMode.Shadow ? "--shadow-mode" : "--experimental-nickname-authority");
+
+            cancellationToken.ThrowIfCancellationRequested();
+            Process process;
+            try
+            {
+                process = Process.Start(startInfo) ?? throw new AccountStateShadowUnavailableException();
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+            {
+                throw new AccountStateShadowUnavailableException();
+            }
+
+            try
+            {
+                process.OutputDataReceived += static (_, _) => { };
+                process.ErrorDataReceived += static (_, _) => { };
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
                 _ownedProcess = process;
+                _ownedMode = mode;
                 return true;
             }
+            catch
+            {
+                TryKill(process);
+                process.Dispose();
+                throw;
+            }
         }
-
-        TryKill(process);
-        try
-        {
-            if (!process.HasExited)
-                process.WaitForExit(200);
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        finally
-        {
-            process.Dispose();
-        }
-
-        throw new AccountStateShadowUnavailableException();
     }
 
     private async Task<AccountStateShadowRpcClient> ConnectDuringStartupAsync(CancellationToken cancellationToken)
@@ -303,6 +438,58 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         }
 
         throw new AccountStateShadowUnavailableException();
+    }
+
+    private async Task<AccountStateShadowRpcClient> ConnectAuthorityDuringStartupAsync(CancellationToken cancellationToken)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < StartupTimeout)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_processSync)
+            {
+                if (_ownedProcess is { HasExited: true })
+                    throw new AccountStateShadowUnavailableException();
+            }
+
+            var client = new AccountStateShadowRpcClient(NicknameAuthorityPipeName);
+            try
+            {
+                await client.ConnectAsync(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
+                return client;
+            }
+            catch (Exception exception) when (exception is IOException or TimeoutException)
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+                await Task.Delay(75, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new AccountStateShadowUnavailableException();
+    }
+
+    private async Task<bool> IsLegacyDaemonReachableAsync(CancellationToken cancellationToken)
+    {
+        var legacy = new AccountStateShadowRpcClient(_pipeName);
+        try
+        {
+            await legacy.ConnectAsync(InitialConnectTimeout, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or TimeoutException or AccountStateShadowCompatibilityException or AccountStateShadowRpcException)
+        {
+            return false;
+        }
+        finally
+        {
+            await legacy.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private enum DaemonMode
+    {
+        Shadow,
+        NicknameAuthority
     }
 
     private static bool IsSupportedPipeName(string pipeName)

@@ -100,8 +100,8 @@ foreach ($entry in @($manifest.schemas)) {
 
 $schemaDirectory = Join-Path $ProtocolRoot "schemas\v1"
 $actualSchemas = @(Get-ChildItem -LiteralPath $schemaDirectory -Filter "*.schema.json" -File -Recurse)
-if ($actualSchemas.Count -ne $seenIds.Count -or $seenIds.Count -ne 9) {
-    throw "Vendored schema inventory does not match the nine canonical v1 records."
+if ($actualSchemas.Count -ne $seenIds.Count -or $seenIds.Count -ne 14) {
+    throw "Vendored schema inventory does not match the fourteen canonical v1 records."
 }
 
 $legacyPath = Join-Path $RepoRoot "contracts\agent-state\v1"
@@ -112,7 +112,7 @@ if (Test-Path -LiteralPath $legacyPath) {
     }
 }
 
-Write-Host "Pinned Agent State Protocol manifest, provenance, nine schema hashes, IDs, and examples verified offline." -ForegroundColor Green
+Write-Host "Pinned Agent State Protocol manifest, provenance, fourteen schema hashes, IDs, and examples verified offline." -ForegroundColor Green
 Write-Host "Running the focused DTO-to-schema conformance tests without restore or network access..." -ForegroundColor Cyan
 $TestProject = Join-Path $RepoRoot "tests\CodexSwitcher.Core.Tests\CodexSwitcher.Core.Tests.csproj"
 & dotnet test $TestProject -c Release --no-build --no-restore --filter "FullyQualifiedName~AgentStateContractTests"

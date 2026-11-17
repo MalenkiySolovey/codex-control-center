@@ -10,23 +10,40 @@ public sealed class AccountReadSnapshotProvider : IAccountReadSnapshotProvider
     private readonly IAccountStateShadowReadAuthority _coordinator;
     private readonly AccountReadAuthorityCanarySettings _canarySettings;
     private readonly AccountReadAuthorityCanaryDiagnostics? _diagnostics;
+    private readonly IAccountNicknameAuthorityService? _nicknameAuthority;
 
     public AccountReadSnapshotProvider(
         AccountRegistry registry,
         IAccountStateShadowReadAuthority coordinator,
         AccountReadAuthorityCanarySettings canarySettings,
-        AccountReadAuthorityCanaryDiagnostics? diagnostics = null)
+        AccountReadAuthorityCanaryDiagnostics? diagnostics = null,
+        IAccountNicknameAuthorityService? nicknameAuthority = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _canarySettings = canarySettings ?? throw new ArgumentNullException(nameof(canarySettings));
         _diagnostics = diagnostics;
+        _nicknameAuthority = nicknameAuthority;
     }
 
     public AccountReadSnapshot Read()
     {
         var committed = _registry.ReadCommittedSnapshot();
         var localAccounts = AccountStateShadowCoordinator.ProjectProfiles(committed.Profiles);
+        if (_nicknameAuthority?.IsAuthorityPotentiallyActive == true)
+        {
+            var state = _coordinator.ReadAuthorityState;
+            var canaryState = _nicknameAuthority.IsAuthorityActive && _coordinator.IsDaemonConnectionHealthy
+                ? AccountReadCanaryState.DaemonActive
+                : AccountReadCanaryState.LocalFallbackDaemonUnavailable;
+            return Record(CreateSnapshot(
+                AccountReadSource.Local,
+                committed.Generation,
+                localAccounts,
+                canaryState,
+                true,
+                state.Status));
+        }
         if (!_canarySettings.Requested)
         {
             return Record(CreateSnapshot(

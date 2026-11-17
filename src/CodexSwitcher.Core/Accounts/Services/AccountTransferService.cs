@@ -9,6 +9,9 @@ using CodexSwitcher.Core.Transfer.Models;
 
 namespace CodexSwitcher.Core.Accounts.Services;
 
+public sealed record AccountTransferImportedNickname(Guid AccountId, string Nickname);
+public sealed record AccountTransferImportResult(int Count, IReadOnlyList<AccountTransferImportedNickname> Nicknames);
+
 /// <summary>
 /// Owns the portable account document format and its import/export lifecycle. Export documents
 /// contain plaintext credentials and must be handled by callers as secrets.
@@ -38,6 +41,16 @@ public sealed class AccountTransferService
         }
     }
 
+    public string ExportOne(Guid id, string? verifiedNickname)
+    {
+        lock (_registry.SyncRoot)
+        {
+            var profile = _registry.FindUnderLock(id)
+                ?? throw new InvalidOperationException("Perfil não encontrado.");
+            return SerializeTransfer([ToTransferredAccount(profile, verifiedNickname)]);
+        }
+    }
+
     public string ExportAll()
     {
         lock (_registry.SyncRoot)
@@ -49,11 +62,29 @@ public sealed class AccountTransferService
         }
     }
 
+    public string ExportAll(IReadOnlyDictionary<Guid, string?> verifiedNicknames)
+    {
+        ArgumentNullException.ThrowIfNull(verifiedNicknames);
+        lock (_registry.SyncRoot)
+        {
+            var ordered = _registry.Profiles.OrderBy(profile => profile.SortOrder).ToList();
+            if (ordered.Count != verifiedNicknames.Count || ordered.Any(profile => !verifiedNicknames.ContainsKey(profile.Id)))
+                throw new InvalidOperationException("Current nickname states could not be verified for every account.");
+            return SerializeTransfer(ordered.Select(profile => ToTransferredAccount(profile, verifiedNicknames[profile.Id])).ToList());
+        }
+    }
+
     /// <summary>
     /// Imports a transfer document or a legacy raw auth.json. All entries are validated before
     /// any profile is mutated, preserving the existing all-inputs-checked-first behavior.
     /// </summary>
     public int Import(string document)
+        => ImportCore(document, applyNicknames: true).Count;
+
+    /// <summary>Imports credentials/profiles without writing imported nicknames into local authority.</summary>
+    public AccountTransferImportResult ImportWithoutNicknames(string document) => ImportCore(document, applyNicknames: false);
+
+    private AccountTransferImportResult ImportCore(string document, bool applyNicknames)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(document);
 
@@ -77,7 +108,7 @@ public sealed class AccountTransferService
 
                 _credentials.AddFromAuthJson(authJson, null);
                 _audit.Record("import", "raw-auth-json");
-                return 1;
+                return new AccountTransferImportResult(1, []);
             }
             finally
             {
@@ -112,14 +143,17 @@ public sealed class AccountTransferService
                 validated.Add((entry, authJson));
             }
 
+            var nicknameIntents = new List<AccountTransferImportedNickname>();
             foreach (var (entry, authJson) in validated)
             {
-                var profile = _credentials.AddFromAuthJson(authJson, entry.Nickname);
+                var profile = _credentials.AddFromAuthJson(authJson, applyNicknames ? entry.Nickname : null);
                 _registry.SetSortOrderUnderLock(profile.Id, entry.SortOrder);
+                if (!applyNicknames && !string.IsNullOrWhiteSpace(entry.Nickname))
+                    nicknameIntents.Add(new AccountTransferImportedNickname(profile.Id, entry.Nickname));
             }
 
             _audit.Record("import", "ok", transfer.Accounts.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            return transfer.Accounts.Count;
+            return new AccountTransferImportResult(transfer.Accounts.Count, nicknameIntents);
         }
         finally
         {
@@ -128,14 +162,16 @@ public sealed class AccountTransferService
         }
     }
 
-    private TransferredAccount ToTransferredAccount(ProfileMetadata profile)
+    private TransferredAccount ToTransferredAccount(ProfileMetadata profile) => ToTransferredAccount(profile, profile.Nickname);
+
+    private TransferredAccount ToTransferredAccount(ProfileMetadata profile, string? nickname)
     {
         var authJson = _credentials.LoadCredential(profile.Id);
         try
         {
             return new TransferredAccount
             {
-                Nickname = profile.Nickname,
+                Nickname = nickname,
                 SortOrder = profile.SortOrder,
                 AuthJsonBase64 = Convert.ToBase64String(authJson),
             };

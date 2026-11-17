@@ -15,6 +15,7 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
     private readonly AccountRegistry _registry;
     private readonly AccountStateShadowSettings _settings;
     private readonly bool _readAuthorityCanaryEnabled;
+    private bool _legacyShadowDisabled;
     private readonly IAccountStateShadowClientFactory _clientFactory;
     private readonly AccountNicknameMutationDiagnostics? _nicknameDiagnostics;
     private readonly SemaphoreSlim _daemonOperationGate = new(1, 1);
@@ -35,12 +36,15 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
         AccountStateShadowSettings settings,
         IAccountStateShadowClientFactory clientFactory,
         AccountReadAuthorityCanarySettings? canarySettings = null,
-        AccountNicknameMutationDiagnostics? nicknameDiagnostics = null)
+        AccountNicknameMutationDiagnostics? nicknameDiagnostics = null,
+        NicknameAuthorityCanarySettings? nicknameAuthoritySettings = null,
+        NicknameAuthorityMigrationJournal? migrationJournal = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
         _readAuthorityCanaryEnabled = canarySettings?.Enabled == true;
+        _legacyShadowDisabled = nicknameAuthoritySettings?.Requested == true || migrationJournal?.Exists == true;
         _nicknameDiagnostics = nicknameDiagnostics;
         _readState = new AccountStateShadowReadState(
             new AccountStateShadowStatus(
@@ -67,8 +71,23 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
 
     internal void RequestReconcile() => SignalSnapshotChanged();
 
+    internal void DisableLegacyShadowWrites() => Volatile.Write(ref _legacyShadowDisabled, true);
+
+    internal async Task PauseLegacyShadowAsync(CancellationToken cancellationToken)
+    {
+        DisableLegacyShadowWrites();
+        await StopWorkerAsync(cancellationToken).ConfigureAwait(false);
+        await _clientFactory.StopOwnedLegacyProcessAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        if (Volatile.Read(ref _legacyShadowDisabled))
+        {
+            SetStatus("nickname_authority_lifecycle_owned");
+            return Task.CompletedTask;
+        }
+
         if (!_settings.Enabled)
         {
             SetStatus(_settings.StartupCategory);
@@ -93,6 +112,13 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await StopWorkerAsync(cancellationToken).ConfigureAwait(false);
+        await _clientFactory.StopOwnedProcessAsync(cancellationToken).ConfigureAwait(false);
+        SetStatus(_settings.Enabled ? "stopped" : _settings.StartupCategory);
+    }
+
+    private async Task StopWorkerAsync(CancellationToken cancellationToken)
     {
         Task? worker;
         lock (_lifecycleSync)
@@ -121,8 +147,6 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
             }
         }
 
-        await _clientFactory.StopOwnedProcessAsync(cancellationToken).ConfigureAwait(false);
-        SetStatus(_settings.Enabled ? "stopped" : _settings.StartupCategory);
         lock (_lifecycleSync)
         {
             _stopSource?.Dispose();
@@ -201,6 +225,8 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
 
     private async Task ReconcileLatestSnapshotAsync(CancellationToken cancellationToken)
     {
+        if (Volatile.Read(ref _legacyShadowDisabled))
+            return;
         await using var gate = await AcquireNicknameMutationLeaseAsync(cancellationToken).ConfigureAwait(false);
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var snapshot = _registry.ReadCommittedSnapshot();
@@ -278,6 +304,8 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
 
     private async Task VerifyLatestSnapshotAsync(CancellationToken cancellationToken)
     {
+        if (Volatile.Read(ref _legacyShadowDisabled))
+            return;
         await using var gate = await AcquireNicknameMutationLeaseAsync(cancellationToken).ConfigureAwait(false);
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var snapshot = _registry.ReadCommittedSnapshot();

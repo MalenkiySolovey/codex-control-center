@@ -382,6 +382,18 @@ public sealed class Strings
     public string NicknameConflictMsg => S(
         "O estado da conta mudou em outro lugar. A alteração não foi sobrescrita; tente novamente.",
         "The account state changed elsewhere. Nothing was overwritten; try again.");
+    public string NicknameMigrationConflictPrompt(string? localNickname, string? daemonNickname) => S(
+        $"Há dois apelidos diferentes para esta conta. Local: {localNickname ?? "(vazio)"}; daemon: {daemonNickname ?? "(vazio)"}. Escolha o apelido que deve permanecer.",
+        $"This account has two different nicknames. Local: {localNickname ?? "(empty)"}; daemon: {daemonNickname ?? "(empty)"}. Choose the nickname to keep.");
+    public string NicknameMigrationConflictResolved(string name) => S(
+        $"O conflito de apelido de {name} foi resolvido.",
+        $"The nickname conflict for {name} was resolved.");
+    public string NicknameAuthorityUnavailableMsg => S(
+        "A autoridade atual de apelidos não está disponível. As credenciais e a conta foram preservadas; o apelido não foi gravado localmente.",
+        "The current nickname authority is unavailable. The account and credentials were preserved; the nickname was not written locally.");
+    public string NicknameExportUnavailableMsg => S(
+        "Não foi possível verificar os apelidos atuais no daemon. A exportação foi interrompida para não incluir apelidos em cache desatualizados.",
+        "Current nicknames could not be verified from the daemon. Export was stopped to avoid including stale cached nicknames.");
     public string NicknameUpdateFailedTitle => S("Falha ao atualizar apelido", "Nickname update failed");
     public string NicknameUpdateCompensatedMsg => S(
         "A alteração local não foi salva. O estado do daemon foi restaurado ao valor local anterior.",
