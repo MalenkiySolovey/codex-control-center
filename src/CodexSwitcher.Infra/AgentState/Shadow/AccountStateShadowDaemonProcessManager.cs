@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using CodexSwitcher.Infra.Common.Paths;
 using CodexSwitcher.Infra.Security.Hardening;
 
@@ -16,6 +18,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
     private readonly NicknameAuthorityMigrationJournal? _nicknameJournal;
     private readonly string _dataDirectory;
     private readonly string _pipeName;
+    private readonly string _authorityPipeName;
     private readonly object _processSync = new();
     private Process? _ownedProcess;
     private DaemonMode? _ownedMode;
@@ -38,9 +41,20 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         ArgumentNullException.ThrowIfNull(paths);
         if (string.IsNullOrWhiteSpace(pipeName) || !IsSupportedPipeName(pipeName))
             throw new ArgumentException("The shadow pipe name is invalid.", nameof(pipeName));
-        _pipeName = pipeName;
         _dataDirectory = Path.Combine(paths.Root, "agent-state-shadow-v1");
+        var usesDefaultRoot = string.Equals(
+            Path.GetFullPath(paths.Root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(AppPaths.DefaultRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            StringComparison.OrdinalIgnoreCase);
+        _pipeName = string.Equals(pipeName, PipeName, StringComparison.Ordinal) && !usesDefaultRoot
+            ? CreateRootScopedPipeName(_dataDirectory, "shadow")
+            : pipeName;
+        _authorityPipeName = usesDefaultRoot
+            ? NicknameAuthorityPipeName
+            : CreateRootScopedPipeName(_dataDirectory, "authority");
     }
+
+    internal string AuthorityPipeName => _authorityPipeName;
 
     public async Task<IAccountStateShadowClient> ConnectCompatibleAsync(CancellationToken cancellationToken)
     {
@@ -59,6 +73,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         EnsureShadowDataDirectory();
         var startedByThisCall = false;
         AccountStateShadowRpcClient? client = new(_pipeName);
+        var verifiedDuringStartup = false;
         try
         {
             try
@@ -69,11 +84,18 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
             {
                 await client.DisposeAsync().ConfigureAwait(false);
                 client = null;
-                startedByThisCall = EnsureOwnedProcessStarted(DaemonMode.Shadow, cancellationToken);
-                client = await ConnectDuringStartupAsync(cancellationToken).ConfigureAwait(false);
+                var connection = await ConnectAfterStartupLeaseAsync(DaemonMode.Shadow, _pipeName, cancellationToken).ConfigureAwait(false);
+                client = connection.Client;
+                startedByThisCall = connection.StartedByThisCall;
+                verifiedDuringStartup = true;
             }
 
-            await client.VerifyCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            if (!verifiedDuringStartup)
+            {
+                if (await IsCompetingDaemonReachableAsync(DaemonMode.Shadow, cancellationToken).ConfigureAwait(false))
+                    throw new AccountStateShadowUnavailableException();
+                await client.VerifyCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            }
             Volatile.Write(ref _lastConnectionHealthy, 1);
             return client;
         }
@@ -120,7 +142,8 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         }
         EnsureShadowDataDirectory();
         var startedByThisCall = false;
-        AccountStateShadowRpcClient? client = new(NicknameAuthorityPipeName);
+        AccountStateShadowRpcClient? client = new(_authorityPipeName);
+        var verifiedDuringStartup = false;
         try
         {
             DaemonMode? initialOwnedMode;
@@ -150,11 +173,18 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
                 if (!_authoritySettings.CanStartDaemon)
                     throw new AccountStateShadowUnavailableException();
 
-                startedByThisCall = EnsureOwnedProcessStarted(DaemonMode.NicknameAuthority, cancellationToken);
-                client = await ConnectAuthorityDuringStartupAsync(cancellationToken).ConfigureAwait(false);
+                var connection = await ConnectAfterStartupLeaseAsync(DaemonMode.NicknameAuthority, _authorityPipeName, cancellationToken).ConfigureAwait(false);
+                client = connection.Client;
+                startedByThisCall = connection.StartedByThisCall;
+                verifiedDuringStartup = true;
             }
 
-            await client.VerifyNicknameAuthorityCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            if (!verifiedDuringStartup)
+            {
+                if (await IsCompetingDaemonReachableAsync(DaemonMode.NicknameAuthority, cancellationToken).ConfigureAwait(false))
+                    throw new AccountStateShadowUnavailableException();
+                await client.VerifyNicknameAuthorityCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            }
             lock (_processSync)
                 _authorityConnectionEstablished = true;
             Volatile.Write(ref _lastConnectionHealthy, 1);
@@ -186,7 +216,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
                 throw new AccountStateShadowUnavailableException();
         }
 
-        var client = new AccountStateShadowRpcClient(NicknameAuthorityPipeName);
+        var client = new AccountStateShadowRpcClient(_authorityPipeName);
         try
         {
             await client.ConnectAsync(InitialConnectTimeout, cancellationToken).ConfigureAwait(false);
@@ -339,6 +369,72 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
             throw new AccountStateShadowUnavailableException();
     }
 
+    private async Task<(AccountStateShadowRpcClient Client, bool StartedByThisCall)> ConnectAfterStartupLeaseAsync(
+        DaemonMode mode,
+        string targetPipe,
+        CancellationToken cancellationToken)
+    {
+        await using var startupLease = await DaemonStartupLease.AcquireAsync(_dataDirectory, cancellationToken).ConfigureAwait(false);
+        if (await IsCompetingDaemonReachableAsync(mode, cancellationToken).ConfigureAwait(false))
+            throw new AccountStateShadowUnavailableException();
+
+        var client = await TryConnectPipeAsync(targetPipe, cancellationToken).ConfigureAwait(false);
+        var startedByThisCall = false;
+        try
+        {
+            if (client is null)
+            {
+                if (mode == DaemonMode.Shadow && (!_settings.Enabled || !MayRunLegacyShadowMode()))
+                    throw new AccountStateShadowUnavailableException();
+                if (mode == DaemonMode.NicknameAuthority && !_authoritySettings.CanStartDaemon)
+                    throw new AccountStateShadowUnavailableException();
+
+                startedByThisCall = EnsureOwnedProcessStarted(mode, cancellationToken);
+                client = mode == DaemonMode.Shadow
+                    ? await ConnectDuringStartupAsync(cancellationToken).ConfigureAwait(false)
+                    : await ConnectAuthorityDuringStartupAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (mode == DaemonMode.Shadow)
+                await client.VerifyCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            else
+                await client.VerifyNicknameAuthorityCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            return (client, startedByThisCall);
+        }
+        catch
+        {
+            if (client is not null)
+                await client.DisposeAsync().ConfigureAwait(false);
+            if (startedByThisCall)
+                await StopOwnedProcessAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task<bool> IsCompetingDaemonReachableAsync(DaemonMode requestedMode, CancellationToken cancellationToken)
+    {
+        if (requestedMode == DaemonMode.NicknameAuthority)
+            return await IsLegacyDaemonReachableAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var authority = await TryConnectPipeAsync(_authorityPipeName, cancellationToken).ConfigureAwait(false);
+        return authority is not null;
+    }
+
+    private static async Task<AccountStateShadowRpcClient?> TryConnectPipeAsync(string pipeName, CancellationToken cancellationToken)
+    {
+        var client = new AccountStateShadowRpcClient(pipeName);
+        try
+        {
+            await client.ConnectAsync(InitialConnectTimeout, cancellationToken).ConfigureAwait(false);
+            return client;
+        }
+        catch (Exception exception) when (exception is IOException or TimeoutException)
+        {
+            await client.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+    }
+
     private bool EnsureOwnedProcessStarted(DaemonMode mode, CancellationToken cancellationToken)
     {
         lock (_processSync)
@@ -379,7 +475,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
             startInfo.ArgumentList.Add("--data-dir");
             startInfo.ArgumentList.Add(_dataDirectory);
             startInfo.ArgumentList.Add("--pipe-name");
-            startInfo.ArgumentList.Add(mode == DaemonMode.Shadow ? _pipeName : NicknameAuthorityPipeName);
+            startInfo.ArgumentList.Add(mode == DaemonMode.Shadow ? _pipeName : _authorityPipeName);
             startInfo.ArgumentList.Add(mode == DaemonMode.Shadow ? "--shadow-mode" : "--experimental-nickname-authority");
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -452,7 +548,7 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
                     throw new AccountStateShadowUnavailableException();
             }
 
-            var client = new AccountStateShadowRpcClient(NicknameAuthorityPipeName);
+            var client = new AccountStateShadowRpcClient(_authorityPipeName);
             try
             {
                 await client.ConnectAsync(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
@@ -500,6 +596,14 @@ internal sealed class AccountStateShadowDaemonProcessManager : IAccountStateShad
         const string testPrefix = "agent-state-daemon-test-";
         return pipeName.StartsWith(testPrefix, StringComparison.Ordinal) && pipeName.Length == testPrefix.Length + 32 &&
             pipeName[testPrefix.Length..].All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+    }
+
+    private static string CreateRootScopedPipeName(string dataDirectory, string mode)
+    {
+        var identity = Path.GetFullPath(dataDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .ToUpperInvariant() + "|" + mode;
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+        return $"agent-state-daemon-test-{digest[..32]}";
     }
 }
 

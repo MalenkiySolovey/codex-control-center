@@ -333,11 +333,23 @@ internal sealed class AccountStateShadowRpcClient : IAccountStateShadowClient
         CancellationToken cancellationToken)
     {
         ValidateMutation(mutation);
-        var result = await CallAsync("accounts.updateNickname", new NicknameMutationParameters(mutation, expectedAuthorityEpoch, migrationId), cancellationToken).ConfigureAwait(false);
-        if (!HasExactProperties(result, "nicknameState", "account") ||
-            !result.TryGetProperty("nicknameState", out var state) || !result.TryGetProperty("account", out var account))
-            throw new AccountStateShadowCompatibilityException();
-        return new NicknameMutationResult { NicknameState = ParseNicknameState(state), Account = ParseAccountDescriptor(account) };
+        try
+        {
+            var result = await CallAsync("accounts.updateNickname", new NicknameMutationParameters(mutation, expectedAuthorityEpoch, migrationId), cancellationToken).ConfigureAwait(false);
+            if (!HasExactProperties(result, "nicknameState", "account") ||
+                !result.TryGetProperty("nicknameState", out var state) || !result.TryGetProperty("account", out var account))
+                throw new AccountStateShadowRpcOutcomeUnknownException();
+            return new NicknameMutationResult { NicknameState = ParseNicknameState(state), Account = ParseAccountDescriptor(account) };
+        }
+        catch (AccountStateShadowRpcOutcomeUnknownException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is AccountStateShadowCompatibilityException or JsonException or InvalidOperationException)
+        {
+            // The daemon may have committed before returning an unusable response.
+            throw new AccountStateShadowRpcOutcomeUnknownException();
+        }
     }
 
     public async Task<SourceReconcileResult> ReconcileSourceAsync(
@@ -367,7 +379,11 @@ internal sealed class AccountStateShadowRpcClient : IAccountStateShadowClient
     private async Task<JsonElement> CallAsync(string method, object parameters, CancellationToken cancellationToken)
     {
         if (!_pipe.IsConnected)
+        {
+            if (method == "accounts.updateNickname")
+                throw new AccountStateShadowRpcRequestNotSentException();
             throw new IOException("The shadow state connection is unavailable.");
+        }
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(TimeSpan.FromSeconds(5));
@@ -378,16 +394,27 @@ internal sealed class AccountStateShadowRpcClient : IAccountStateShadowClient
             throw new InvalidDataException("The shadow state request exceeds the supported frame size.");
 
         byte[] responseBytes;
+        var requestMayHaveBeenSent = false;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            requestMayHaveBeenSent = true;
             await _pipe.WriteAsync(request, requestToken).ConfigureAwait(false);
             await _pipe.WriteAsync(NewLine, requestToken).ConfigureAwait(false);
             await _pipe.FlushAsync(requestToken).ConfigureAwait(false);
             responseBytes = await ReadFrameAsync(requestToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (requestMayHaveBeenSent && method == "accounts.updateNickname")
+        {
+            throw new AccountStateShadowRpcOutcomeUnknownException();
+        }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new AccountStateShadowRpcTimeoutException();
+        }
+        catch (IOException) when (requestMayHaveBeenSent && method == "accounts.updateNickname")
+        {
+            throw new AccountStateShadowRpcOutcomeUnknownException();
         }
 
         using var response = JsonDocument.Parse(responseBytes, new JsonDocumentOptions { MaxDepth = 32 });
@@ -646,3 +673,5 @@ internal sealed class AccountStateShadowRpcException(int code, string? category 
 }
 
 internal sealed class AccountStateShadowRpcTimeoutException : TimeoutException { }
+internal sealed class AccountStateShadowRpcOutcomeUnknownException : IOException { }
+internal sealed class AccountStateShadowRpcRequestNotSentException : IOException { }

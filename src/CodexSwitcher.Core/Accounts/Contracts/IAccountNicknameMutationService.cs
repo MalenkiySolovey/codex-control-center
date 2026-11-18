@@ -6,6 +6,9 @@ public enum AccountNicknameMutationOutcome
     LocalOnly,
     NoOp,
     DaemonAndLocal,
+    DaemonAppliedCachePending,
+    ProvenNotApplied,
+    OutcomeUnknown,
     Conflict,
     FailedCompensated,
     FailedDiverged

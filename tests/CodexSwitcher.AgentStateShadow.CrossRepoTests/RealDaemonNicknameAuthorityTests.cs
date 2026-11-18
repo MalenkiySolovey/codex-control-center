@@ -23,6 +23,127 @@ namespace CodexSwitcher.AgentStateShadow.CrossRepoTests;
 public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
 {
     [Fact]
+    public async Task ConcurrentControlCentersShareOneAuthorityOwnerAndKeepRootsIndependent()
+    {
+        if (Environment.GetEnvironmentVariable("CC_DAEMON_STARTUP_CHILD") == "1")
+        {
+            await RunDaemonStartupChildAsync();
+            return;
+        }
+
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The real daemon integration test requires Windows named pipes.");
+
+        var executablePath = Environment.GetEnvironmentVariable(AccountStateShadowSettings.ExecutableEnvironmentVariable);
+        Assert.False(string.IsNullOrWhiteSpace(executablePath));
+        Assert.True(File.Exists(executablePath));
+        using var temp = new TemporaryDirectory();
+        var sharedRoot = Path.Combine(temp.Path, "shared-root");
+        var sharedPaths = CreateSyntheticPaths(sharedRoot);
+        sharedPaths.EnsureDirectories();
+        var sharedPipe = CreateAuthorityPipeName(sharedRoot);
+        var syntheticAccountId = Guid.Parse("abcdef01-2345-6789-abcd-ef0123456789");
+
+        int seedDaemonPid;
+        using (var seedManager = CreateManager(sharedPaths, executablePath!))
+        {
+            await using var client = await seedManager.ConnectNicknameAuthorityCompatibleAsync(CancellationToken.None);
+            var initial = await client.GetNicknameAuthorityAsync(CancellationToken.None);
+            Assert.Equal(NicknameAuthorityStates.LegacyLocal, initial.State);
+            var preparing = await client.BeginNicknameAuthorityPreparationAsync(initial.Epoch, CancellationToken.None);
+            await client.ReconcileSourceAsync(new AccountSourceCollection
+            {
+                Accounts = [CreateSyntheticSource(syntheticAccountId)]
+            }, preparing.Epoch, preparing.MigrationId, CancellationToken.None);
+            var before = await client.GetNicknameAsync(syntheticAccountId.ToString("D"), CancellationToken.None);
+            await client.UpdateNicknameAsync(new AccountNicknameMutation
+            {
+                AccountId = syntheticAccountId.ToString("D"),
+                Nickname = "Shared synthetic nickname",
+                SafeFallbackDisplayName = "Account",
+                ExpectedRevision = before.Revision
+            }, preparing.Epoch, preparing.MigrationId, CancellationToken.None);
+            var verified = await client.MarkNicknameAuthorityVerifiedAsync(preparing.Epoch, preparing.MigrationId!, CancellationToken.None);
+            var active = await client.ActivateNicknameAuthorityAsync(verified.Epoch, preparing.MigrationId!, CancellationToken.None);
+            Assert.Equal(NicknameAuthorityStates.DaemonNicknameAuthority, active.State);
+            seedDaemonPid = Assert.IsType<int>(seedManager.OwnedProcessId);
+            await seedManager.StopOwnedProcessAsync(CancellationToken.None);
+        }
+        await WaitForProcessExitAsync(seedDaemonPid);
+
+        var startFile = Path.Combine(temp.Path, "clients-start");
+        var first = StartDaemonStartupChild("client-one", sharedRoot, executablePath!, startFile);
+        var second = StartDaemonStartupChild("client-two", sharedRoot, executablePath!, startFile);
+        try
+        {
+            await File.WriteAllTextAsync(startFile, "start");
+            var firstReportTask = ReadStartupChildReportAsync(first);
+            var secondReportTask = ReadStartupChildReportAsync(second);
+            var reports = await Task.WhenAll(firstReportTask, secondReportTask);
+            var firstReport = reports[0];
+            var secondReport = reports[1];
+            Assert.Equal(firstReport.AuthorityPipe, secondReport.AuthorityPipe);
+            Assert.Equal(firstReport.DataDirectory, secondReport.DataDirectory);
+            Assert.Equal(NicknameAuthorityStates.DaemonNicknameAuthority, firstReport.State);
+            Assert.Equal(firstReport.State, secondReport.State);
+            Assert.Equal(firstReport.AuthorityEpoch, secondReport.AuthorityEpoch);
+            Assert.Equal("Shared synthetic nickname", firstReport.Nickname);
+            Assert.Equal(firstReport.Nickname, secondReport.Nickname);
+            var owner = firstReport.OwnedDaemonProcessId.HasValue ? firstReport : secondReport;
+            var nonOwner = firstReport.OwnedDaemonProcessId.HasValue ? secondReport : firstReport;
+            var ownerProcess = firstReport.OwnedDaemonProcessId.HasValue ? first : second;
+            var nonOwnerProcess = firstReport.OwnedDaemonProcessId.HasValue ? second : first;
+            Assert.True(owner.OwnedDaemonProcessId.HasValue);
+            Assert.Null(nonOwner.OwnedDaemonProcessId);
+            var sharedDaemonPid = owner.OwnedDaemonProcessId.Value;
+            Assert.Equal(Path.GetFullPath(executablePath!), GetProcessExecutablePath(sharedDaemonPid));
+
+            var isolatedRoot = Path.Combine(temp.Path, "isolated-root");
+            var isolatedPaths = CreateSyntheticPaths(isolatedRoot);
+            isolatedPaths.EnsureDirectories();
+            using var isolatedManager = CreateManager(isolatedPaths, executablePath!);
+            await using (var isolatedClient = await isolatedManager.ConnectNicknameAuthorityCompatibleAsync(CancellationToken.None))
+            {
+                var isolatedStatus = await isolatedClient.GetNicknameAuthorityAsync(CancellationToken.None);
+                var isolatedNicknames = await isolatedClient.ListNicknamesAsync(CancellationToken.None);
+                Assert.Equal(NicknameAuthorityStates.LegacyLocal, isolatedStatus.State);
+                Assert.DoesNotContain(isolatedNicknames.Accounts, nickname => nickname.AccountId == syntheticAccountId.ToString("D"));
+            }
+            var isolatedDaemonPid = Assert.IsType<int>(isolatedManager.OwnedProcessId);
+            Assert.NotEqual(owner.AuthorityPipe, isolatedManager.AuthorityPipeName);
+            Assert.NotEqual(owner.DataDirectory, Path.Combine(isolatedRoot, "agent-state-shadow-v1"));
+            Assert.NotEqual(sharedDaemonPid, isolatedDaemonPid);
+            Assert.Single(Directory.GetFiles(Path.Combine(sharedRoot, "agent-state-shadow-v1"), "state.db", SearchOption.AllDirectories));
+            Assert.Single(Directory.GetFiles(Path.Combine(isolatedRoot, "agent-state-shadow-v1"), "state.db", SearchOption.AllDirectories));
+
+            await ReleaseDaemonStartupChildAsync(nonOwnerProcess);
+            Assert.False(ProcessHasExited(sharedDaemonPid), "The non-owning Control Center terminated the shared daemon.");
+            var stillShared = await ReadAuthoritySnapshotAsync(sharedPipe);
+            Assert.Equal(NicknameAuthorityStates.DaemonNicknameAuthority, stillShared.Status.State);
+            Assert.Equal("Shared synthetic nickname", await ReadNicknameAsync(sharedPipe, syntheticAccountId));
+            Assert.False(ProcessHasExited(isolatedDaemonPid));
+
+            await ReleaseDaemonStartupChildAsync(ownerProcess);
+            await WaitForProcessExitAsync(sharedDaemonPid);
+            Assert.False(ProcessHasExited(isolatedDaemonPid), "Stopping the shared-root owner affected a different root's daemon.");
+
+            await isolatedManager.StopOwnedProcessAsync(CancellationToken.None);
+            await WaitForProcessExitAsync(isolatedDaemonPid);
+            Assert.Null(isolatedManager.OwnedProcessId);
+            output.WriteLine($"startup_shared_root_pipe={sharedPipe} owner_pid={sharedDaemonPid} non_owner_test_pid={nonOwnerProcess.Process.Id}");
+            output.WriteLine($"startup_isolated_pipe={isolatedManager.AuthorityPipeName} daemon_pid={isolatedDaemonPid}");
+            output.WriteLine("two_process_startup=one_owner shared_state=verified non_owner_disconnect=survives different_roots=independent abandoned_lease=recovered_by_unit_test");
+        }
+        finally
+        {
+            await ReleaseDaemonStartupChildAsync(first);
+            await ReleaseDaemonStartupChildAsync(second);
+            await StopNestedTestProcessAsync(first);
+            await StopNestedTestProcessAsync(second);
+        }
+    }
+
+    [Fact]
     public async Task PinnedDaemonSupportsSyntheticCutoverMutationRestartOfflineImportExportAndRollback()
     {
         if (!OperatingSystem.IsWindows())
@@ -211,7 +332,7 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
             Assert.True(registry.NicknameWritesFenced);
             Assert.Empty(authority.GetPendingConflicts());
 
-            var activeSnapshot = await ReadAuthoritySnapshotAsync();
+            var activeSnapshot = await ReadAuthoritySnapshotAsync(processManager.AuthorityPipeName);
             Assert.Equal(NicknameAuthorityStates.DaemonNicknameAuthority, activeSnapshot.Status.State);
             Assert.Equal(2, activeSnapshot.Info.DatabaseSchemaVersion);
             Assert.Equal("Work", activeSnapshot.Nicknames.Single(state => state.AccountId == legacyProfile.Id.ToString("D")).Nickname);
@@ -223,19 +344,19 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
 
             var rename = await authority.RenameAsync(legacyProfile.Id, "Personal", CancellationToken.None);
             Assert.Equal(AccountNicknameMutationOutcome.DaemonAndLocal, rename.Outcome);
-            Assert.Equal("Personal", await ReadNicknameAsync(legacyProfile.Id));
+            Assert.Equal("Personal", await ReadNicknameAsync(processManager.AuthorityPipeName, legacyProfile.Id));
             Assert.Equal("Personal", profileStore.LoadAll().Single(profile => profile.Id == legacyProfile.Id).Nickname);
 
             var clear = await authority.RenameAsync(legacyProfile.Id, "", CancellationToken.None);
             Assert.Equal(AccountNicknameMutationOutcome.DaemonAndLocal, clear.Outcome);
-            Assert.Null(await ReadNicknameAsync(legacyProfile.Id));
-            Assert.Equal("Alice", (await ReadAuthoritySnapshotAsync()).Accounts.Single(account => account.AccountId == legacyProfile.Id.ToString("D")).DisplayName);
+            Assert.Null(await ReadNicknameAsync(processManager.AuthorityPipeName, legacyProfile.Id));
+            Assert.Equal("Alice", (await ReadAuthoritySnapshotAsync(processManager.AuthorityPipeName)).Accounts.Single(account => account.AccountId == legacyProfile.Id.ToString("D")).DisplayName);
 
             var explicitAtNickname = await authority.RenameAsync(secondProfile.Id, "@synthetic-label", CancellationToken.None);
             Assert.Equal(AccountNicknameMutationOutcome.DaemonAndLocal, explicitAtNickname.Outcome);
-            Assert.Equal("@synthetic-label", await ReadNicknameAsync(secondProfile.Id));
+            Assert.Equal("@synthetic-label", await ReadNicknameAsync(processManager.AuthorityPipeName, secondProfile.Id));
             await authority.RenameAsync(secondProfile.Id, "", CancellationToken.None);
-            var emailOnlyFallback = (await ReadAuthoritySnapshotAsync()).Accounts.Single(account => account.AccountId == secondProfile.Id.ToString("D"));
+            var emailOnlyFallback = (await ReadAuthoritySnapshotAsync(processManager.AuthorityPipeName)).Accounts.Single(account => account.AccountId == secondProfile.Id.ToString("D"));
             Assert.Equal("Account", emailOnlyFallback.DisplayName);
             Assert.DoesNotContain("synthetic-email-only-marker@example.invalid", JsonSerializer.Serialize(emailOnlyFallback), StringComparison.Ordinal);
             await authority.RenameAsync(secondProfile.Id, "Studio", CancellationToken.None);
@@ -244,13 +365,13 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
             Assert.Equal(AccountNicknameMutationOutcome.DaemonAndLocal, restoreNickname.Outcome);
             registry.UpdateUnderLock(legacyProfile.Id, profile => profile.DetectedDisplayName = "Alice Smith");
             await authority.SynchronizeActiveSourceAsync(CancellationToken.None);
-            var hiddenBaseUpdate = await ReadAuthoritySnapshotAsync();
+            var hiddenBaseUpdate = await ReadAuthoritySnapshotAsync(processManager.AuthorityPipeName);
             Assert.Equal("Work", hiddenBaseUpdate.Nicknames.Single(state => state.AccountId == legacyProfile.Id.ToString("D")).Nickname);
             Assert.Equal("Work", hiddenBaseUpdate.Accounts.Single(account => account.AccountId == legacyProfile.Id.ToString("D")).DisplayName);
 
             var clearAfterBaseUpdate = await authority.RenameAsync(legacyProfile.Id, "", CancellationToken.None);
             Assert.Equal(AccountNicknameMutationOutcome.DaemonAndLocal, clearAfterBaseUpdate.Outcome);
-            Assert.Equal("Alice Smith", (await ReadAuthoritySnapshotAsync()).Accounts.Single(account => account.AccountId == legacyProfile.Id.ToString("D")).DisplayName);
+            Assert.Equal("Alice Smith", (await ReadAuthoritySnapshotAsync(processManager.AuthorityPipeName)).Accounts.Single(account => account.AccountId == legacyProfile.Id.ToString("D")).DisplayName);
             await authority.RenameAsync(legacyProfile.Id, "Work", CancellationToken.None);
 
             var addedProfile = credentials.AddFromAuthJson(CreateSyntheticAuthJson("synthetic-direct-add"), "Requested add name");
@@ -258,20 +379,20 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
             await authority.SynchronizeActiveSourceAsync(CancellationToken.None);
             var addNickname = await authority.RenameAsync(addedProfile.Id, "Requested add name", CancellationToken.None);
             Assert.Equal(AccountNicknameMutationOutcome.DaemonAndLocal, addNickname.Outcome);
-            Assert.Equal("Requested add name", await ReadNicknameAsync(addedProfile.Id));
+            Assert.Equal("Requested add name", await ReadNicknameAsync(processManager.AuthorityPipeName, addedProfile.Id));
 
             var importDocument = CreateTransferDocument("synthetic-import-sub", "Imported", 2);
             var imported = await authority.ImportAsync(importDocument, CancellationToken.None);
             Assert.Equal(new AccountNicknameImportResult(1, 1, 0), imported);
             var importedProfile = Assert.Single(registry.Profiles, profile => profile.AccountSub == "synthetic-import-sub");
             Assert.Equal("Imported", importedProfile.Nickname);
-            Assert.Equal("Imported", await ReadNicknameAsync(importedProfile.Id));
+            Assert.Equal("Imported", await ReadNicknameAsync(processManager.AuthorityPipeName, importedProfile.Id));
 
             var updateDocument = CreateTransferDocument("synthetic-import-sub", "Updated import", 2);
             var updatedImport = await authority.ImportAsync(updateDocument, CancellationToken.None);
             Assert.Equal(new AccountNicknameImportResult(1, 1, 0), updatedImport);
             Assert.Equal(6, registry.Profiles.Count);
-            Assert.Equal("Updated import", await ReadNicknameAsync(importedProfile.Id));
+            Assert.Equal("Updated import", await ReadNicknameAsync(processManager.AuthorityPipeName, importedProfile.Id));
 
             var exported = JsonSerializer.Deserialize<AccountTransferDocument>(await authority.ExportAllAsync(CancellationToken.None))!;
             Assert.Equal(6, exported.Accounts.Count);
@@ -290,7 +411,7 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
             daemonPids.Add(unexpectedExitPid.Value);
 
             var unexpectedExitRename = await authority.RenameAsync(legacyProfile.Id, "Must not persist offline", CancellationToken.None);
-            Assert.Equal(AccountNicknameMutationOutcome.FailedDiverged, unexpectedExitRename.Outcome);
+            Assert.Equal(AccountNicknameMutationOutcome.ProvenNotApplied, unexpectedExitRename.Outcome);
             Assert.Equal("Work", registry.Find(legacyProfile.Id)!.Nickname);
             Assert.Null(processManager.OwnedProcessId);
             Assert.False(processManager.IsLastConnectionHealthy);
@@ -336,7 +457,7 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
                 Assert.True(registry.NicknameWritesFenced);
                 Assert.False(offlineAuthority.IsLocalAuthorityVerified);
                 var offlineRename = await offlineAuthority.RenameAsync(legacyProfile.Id, "Must not persist offline", CancellationToken.None);
-                Assert.Equal(AccountNicknameMutationOutcome.FailedDiverged, offlineRename.Outcome);
+                Assert.Equal(AccountNicknameMutationOutcome.ProvenNotApplied, offlineRename.Outcome);
                 Assert.Equal("Work", registry.Find(legacyProfile.Id)!.Nickname);
                 var offlineExport = await Record.ExceptionAsync(() => offlineAuthority.ExportAllAsync(CancellationToken.None));
                 Assert.IsType<AccountStateShadowUnavailableException>(offlineExport);
@@ -355,7 +476,7 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
                 registry, transfer, authoritySettings, journal, coordinator, processManager, appPaths);
             await authority.InitializeAsync(CancellationToken.None);
             Assert.True(authority.IsAuthorityActive);
-            Assert.Equal("Work", await ReadNicknameAsync(legacyProfile.Id));
+            Assert.Equal("Work", await ReadNicknameAsync(processManager.AuthorityPipeName, legacyProfile.Id));
             var activeProcessAfterRestart = processManager.OwnedProcessId;
             Assert.NotNull(activeProcessAfterRestart);
             daemonPids.Add(activeProcessAfterRestart.Value);
@@ -421,6 +542,207 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
         Assert.Fail("The synthetic legacy projection did not converge.");
     }
 
+    private async Task RunDaemonStartupChildAsync()
+    {
+        var root = RequiredEnvironmentValue("CC_DAEMON_STARTUP_ROOT");
+        var executablePath = RequiredEnvironmentValue(AccountStateShadowSettings.ExecutableEnvironmentVariable);
+        var startFile = RequiredEnvironmentValue("CC_DAEMON_STARTUP_START_FILE");
+        var reportFile = RequiredEnvironmentValue("CC_DAEMON_STARTUP_REPORT_FILE");
+        var releaseFile = RequiredEnvironmentValue("CC_DAEMON_STARTUP_RELEASE_FILE");
+        var paths = CreateSyntheticPaths(root);
+        paths.EnsureDirectories();
+        await WaitForFileAsync(startFile, TimeSpan.FromSeconds(45));
+
+        using var manager = CreateManager(paths, executablePath);
+        await using var client = await manager.ConnectNicknameAuthorityCompatibleAsync(CancellationToken.None);
+        var status = await client.GetNicknameAuthorityAsync(CancellationToken.None);
+        var nickname = await client.GetNicknameAsync("abcdef01-2345-6789-abcd-ef0123456789", CancellationToken.None);
+        var report = new DaemonStartupChildReport(
+            Environment.ProcessId,
+            manager.OwnedProcessId,
+            manager.AuthorityPipeName,
+            Path.Combine(paths.Root, "agent-state-shadow-v1"),
+            status.State,
+            status.Epoch,
+            nickname.Nickname);
+        var tempReport = reportFile + ".tmp";
+        await File.WriteAllTextAsync(tempReport, JsonSerializer.Serialize(report));
+        File.Move(tempReport, reportFile, overwrite: true);
+        output.WriteLine($"startup_child_process={report.ClientProcessId} owned_daemon={report.OwnedDaemonProcessId?.ToString(CultureInfo.InvariantCulture) ?? "none"} state={report.State} epoch={report.AuthorityEpoch}");
+        await WaitForFileAsync(releaseFile, TimeSpan.FromSeconds(45));
+    }
+
+    private static AccountStateShadowDaemonProcessManager CreateManager(AppPaths paths, string executablePath, string? pipeName = null)
+    {
+        var shadowSettings = AccountStateShadowSettings.Parse("1", executablePath);
+        var authoritySettings = NicknameAuthorityCanarySettings.Parse("1", executablePath);
+        return new AccountStateShadowDaemonProcessManager(
+            shadowSettings,
+            paths,
+            pipeName ?? AccountStateShadowDaemonProcessManager.PipeName,
+            authoritySettings);
+    }
+
+    private static AppPaths CreateSyntheticPaths(string root) => new(
+        root,
+        Path.Combine(root, "codex-home"),
+        Path.Combine(root, "legacy-home"));
+
+    private static string CreateAuthorityPipeName(string root)
+    {
+        var normalized = Path.GetFullPath(Path.Combine(root, "agent-state-shadow-v1"))
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToUpperInvariant() + "|authority";
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
+        return $"agent-state-daemon-test-{digest[..32]}";
+    }
+
+    private static AccountSourceDescriptor CreateSyntheticSource(Guid accountId) => new()
+    {
+        AccountId = accountId.ToString("D"),
+        SafeFallbackDisplayName = "Account",
+        Health = "valid",
+        IsActive = false,
+        SortOrder = 0,
+        CreatedAt = "2026-11-18T10:00:00Z",
+        PlanType = "synthetic"
+    };
+
+    private static NestedStartupTestProcess StartDaemonStartupChild(string childName, string sharedRoot, string executablePath, string startFile)
+    {
+        var repository = FindRepositoryRoot();
+        var testProject = Path.Combine(repository, "tests", "CodexSwitcher.AgentStateShadow.CrossRepoTests", "CodexSwitcher.AgentStateShadow.CrossRepoTests.csproj");
+        var testName = "CodexSwitcher.AgentStateShadow.CrossRepoTests.RealDaemonNicknameAuthorityTests.ConcurrentControlCentersShareOneAuthorityOwnerAndKeepRootsIndependent";
+        var processStart = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = repository,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        processStart.ArgumentList.Add("test");
+        processStart.ArgumentList.Add(testProject);
+        processStart.ArgumentList.Add("--configuration");
+        processStart.ArgumentList.Add("Release");
+        processStart.ArgumentList.Add("--no-build");
+        processStart.ArgumentList.Add("--no-restore");
+        processStart.ArgumentList.Add("--filter");
+        processStart.ArgumentList.Add("FullyQualifiedName=" + testName);
+        processStart.ArgumentList.Add("--logger");
+        processStart.ArgumentList.Add("console;verbosity=minimal");
+        var safeFileName = childName.Replace('-', '_');
+        processStart.Environment["CC_DAEMON_STARTUP_CHILD"] = "1";
+        processStart.Environment["CC_DAEMON_STARTUP_ROOT"] = sharedRoot;
+        processStart.Environment["CC_DAEMON_STARTUP_START_FILE"] = startFile;
+        var reportFile = Path.Combine(Path.GetDirectoryName(startFile)!, safeFileName + ".json");
+        var releaseFile = Path.Combine(Path.GetDirectoryName(startFile)!, safeFileName + ".exit");
+        processStart.Environment["CC_DAEMON_STARTUP_REPORT_FILE"] = reportFile;
+        processStart.Environment["CC_DAEMON_STARTUP_RELEASE_FILE"] = releaseFile;
+        processStart.Environment[AccountStateShadowSettings.ExecutableEnvironmentVariable] = executablePath;
+        var process = Process.Start(processStart) ?? throw new InvalidOperationException("Could not launch a synthetic Control Center test process.");
+        return new NestedStartupTestProcess(
+            process,
+            reportFile,
+            releaseFile,
+            process.StandardOutput.ReadToEndAsync(),
+            process.StandardError.ReadToEndAsync());
+    }
+
+    private static async Task<DaemonStartupChildReport> ReadStartupChildReportAsync(NestedStartupTestProcess child)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < TimeSpan.FromSeconds(45))
+        {
+            if (File.Exists(child.ReportFile))
+            {
+                var json = await File.ReadAllTextAsync(child.ReportFile);
+                var report = JsonSerializer.Deserialize<DaemonStartupChildReport>(json);
+                return report ?? throw new InvalidDataException("The synthetic child report was invalid.");
+            }
+            if (child.Process.HasExited)
+            {
+                var stdout = await child.StandardOutput;
+                var stderr = await child.StandardError;
+                throw new InvalidOperationException($"A synthetic Control Center child exited before reporting (code {child.Process.ExitCode}). {stdout} {stderr}");
+            }
+            await Task.Delay(25);
+        }
+        throw new TimeoutException("A synthetic Control Center child did not report daemon ownership in time.");
+    }
+
+    private static async Task ReleaseDaemonStartupChildAsync(NestedStartupTestProcess child)
+    {
+        if (child.Process.HasExited)
+            return;
+        await File.WriteAllTextAsync(child.ReleaseFile, "exit");
+    }
+
+    private static async Task StopNestedTestProcessAsync(NestedStartupTestProcess child)
+    {
+        if (!child.Process.HasExited)
+        {
+            try
+            {
+                await child.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            catch (TimeoutException)
+            {
+                child.Process.Kill(entireProcessTree: true);
+                await child.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        var stdout = await child.StandardOutput;
+        var stderr = await child.StandardError;
+        if (child.Process.ExitCode != 0)
+            throw new InvalidOperationException($"Synthetic Control Center child failed (code {child.Process.ExitCode}). {stdout} {stderr}");
+        child.Process.Dispose();
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(Path.GetDirectoryName(typeof(RealDaemonNicknameAuthorityTests).Assembly.Location)!);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "CodexSwitcher.slnx")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+        throw new DirectoryNotFoundException("Could not locate the Control Center repository root.");
+    }
+
+    private static string RequiredEnvironmentValue(string name) =>
+        Environment.GetEnvironmentVariable(name) is { Length: > 0 } value
+            ? value
+            : throw new InvalidOperationException($"Required synthetic test environment variable {name} is missing.");
+
+    private static async Task WaitForFileAsync(string path, TimeSpan timeout)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (deadline.Elapsed < timeout)
+        {
+            if (File.Exists(path))
+                return;
+            await Task.Delay(25);
+        }
+        throw new TimeoutException("A synthetic daemon-startup coordination marker did not arrive in time.");
+    }
+
+    private sealed record DaemonStartupChildReport(
+        int ClientProcessId,
+        int? OwnedDaemonProcessId,
+        string AuthorityPipe,
+        string DataDirectory,
+        string State,
+        long AuthorityEpoch,
+        string? Nickname);
+
+    private sealed record NestedStartupTestProcess(
+        Process Process,
+        string ReportFile,
+        string ReleaseFile,
+        Task<string> StandardOutput,
+        Task<string> StandardError);
+
     private static async Task<IReadOnlyList<AccountDescriptor>> ReadLegacyAccountsAsync(string pipeName)
     {
         await using var client = new AccountStateShadowRpcClient(pipeName);
@@ -430,9 +752,9 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
     }
 
     private static async Task<(AuthorityDaemonInfo Info, NicknameAuthorityStatus Status,
-        IReadOnlyList<AccountNicknameState> Nicknames, IReadOnlyList<AccountDescriptor> Accounts)> ReadAuthoritySnapshotAsync()
+        IReadOnlyList<AccountNicknameState> Nicknames, IReadOnlyList<AccountDescriptor> Accounts)> ReadAuthoritySnapshotAsync(string pipeName)
     {
-        await using var client = new AccountStateShadowRpcClient(AccountStateShadowDaemonProcessManager.NicknameAuthorityPipeName);
+        await using var client = new AccountStateShadowRpcClient(pipeName);
         await client.ConnectAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
         await client.VerifyNicknameAuthorityCompatibleAsync(CancellationToken.None);
         var nicknames = await client.ListNicknamesAsync(CancellationToken.None);
@@ -443,9 +765,9 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
             await client.ListAccountsAsync(CancellationToken.None));
     }
 
-    private static async Task<string?> ReadNicknameAsync(Guid accountId)
+    private static async Task<string?> ReadNicknameAsync(string pipeName, Guid accountId)
     {
-        await using var client = new AccountStateShadowRpcClient(AccountStateShadowDaemonProcessManager.NicknameAuthorityPipeName);
+        await using var client = new AccountStateShadowRpcClient(pipeName);
         await client.ConnectAsync(TimeSpan.FromSeconds(2), CancellationToken.None);
         await client.VerifyNicknameAuthorityCompatibleAsync(CancellationToken.None);
         return (await client.GetNicknameAsync(accountId.ToString("D"), CancellationToken.None)).Nickname;
@@ -496,7 +818,7 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
         Id = Guid.NewGuid(),
         Nickname = nickname,
         DetectedDisplayName = detectedName,
-        CreatedAt = new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero).AddSeconds(order),
+        CreatedAt = new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero).AddSeconds(order).AddTicks(1_234_567),
         PlanType = "synthetic",
         HealthStatus = HealthStatus.Valid,
         SortOrder = order
@@ -525,6 +847,12 @@ public sealed class RealDaemonNicknameAuthorityTests(ITestOutputHelper output)
         {
             return true;
         }
+    }
+
+    private static string GetProcessExecutablePath(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        return Path.GetFullPath(process.MainModule?.FileName ?? throw new InvalidOperationException("Could not verify the synthetic daemon executable path."));
     }
 
     private sealed class TestClock : IClock

@@ -69,6 +69,12 @@ internal sealed class AccountStateShadowCoordinator : IDisposable, IAccountState
     internal void MarkNicknameMutationPending(long generation, int accountCount) =>
         SetStatus("nickname_mutation_pending", accountCount, requestedGeneration: generation);
 
+    internal void MarkNicknameSourceSyncPending(long generation, int accountCount) =>
+        SetStatus("nickname_source_sync_pending", accountCount, requestedGeneration: generation);
+
+    internal void MarkNicknameSourceSynchronized(long generation, int accountCount) =>
+        SetStatus("nickname_source_synchronized", accountCount, requestedGeneration: generation, matchedGeneration: generation);
+
     internal void RequestReconcile() => SignalSnapshotChanged();
 
     internal void DisableLegacyShadowWrites() => Volatile.Write(ref _legacyShadowDisabled, true);

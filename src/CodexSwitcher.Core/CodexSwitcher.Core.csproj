@@ -10,6 +10,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="CodexSwitcher.Core.Tests" />
     <InternalsVisibleTo Include="CodexSwitcher.AgentStateShadow.CrossRepoTests" />
   </ItemGroup>
 

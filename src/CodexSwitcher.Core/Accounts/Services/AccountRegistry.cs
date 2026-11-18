@@ -172,7 +172,8 @@ public sealed class AccountRegistry
             {
                 UpdateManyUnderLock(nicknames.ToDictionary(
                     pair => pair.Key,
-                    pair => (Action<ProfileMetadata>)(profile => profile.Nickname = pair.Value ?? string.Empty)));
+                    pair => (Action<ProfileMetadata>)(profile => profile.Nickname = pair.Value ?? string.Empty)),
+                    notifySnapshotChanged: false);
             }
             finally
             {
@@ -407,7 +408,9 @@ public sealed class AccountRegistry
         }
     }
 
-    internal void UpdateManyUnderLock(IReadOnlyDictionary<Guid, Action<ProfileMetadata>> updates)
+    internal void UpdateManyUnderLock(
+        IReadOnlyDictionary<Guid, Action<ProfileMetadata>> updates,
+        bool notifySnapshotChanged = true)
     {
         ArgumentNullException.ThrowIfNull(updates);
         if (updates.Count == 0)
@@ -432,7 +435,7 @@ public sealed class AccountRegistry
             _profiles = updated;
             try
             {
-                SaveUnderLock();
+                SaveUnderLock(notifySnapshotChanged: notifySnapshotChanged);
             }
             catch
             {
@@ -517,13 +520,16 @@ public sealed class AccountRegistry
         NotifySnapshotChanged();
     }
 
-    private void SaveUnderLock(ProfileSaveIntent intent = ProfileSaveIntent.NormalUpdate)
+    private void SaveUnderLock(
+        ProfileSaveIntent intent = ProfileSaveIntent.NormalUpdate,
+        bool notifySnapshotChanged = true)
     {
         _store.SaveAll(_profiles, intent);
         if (!_isLoading)
         {
             _currentGeneration++;
-            NotifySnapshotChanged();
+            if (notifySnapshotChanged)
+                NotifySnapshotChanged();
         }
     }
 

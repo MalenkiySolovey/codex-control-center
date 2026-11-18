@@ -12,6 +12,7 @@ namespace CodexSwitcher.Infra.AgentState.Shadow;
 internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorityService, IDisposable
 {
     private const int MaximumReplans = 3;
+    private const int MaximumSourceRefreshPasses = 3;
     private readonly AccountRegistry _registry;
     private readonly AccountTransferService _transfer;
     private readonly NicknameAuthorityCanarySettings _settings;
@@ -22,6 +23,7 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
     private readonly SemaphoreSlim _initializeGate = new(1, 1);
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly object _stateSync = new();
+    private readonly object _sourceRefreshSync = new();
     private NicknameAuthorityJournal? _journalState;
     private NicknameAuthorityStatus? _authorityState;
     private List<AccountNicknameAuthorityConflict> _pendingConflicts = [];
@@ -29,8 +31,9 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
     private bool _journalInvalid;
     private bool _authorityMayBeActive;
     private bool _localAuthorityVerified = true;
-    private int _mirrorUpdateInProgress;
-    private int _activeSourceRefreshQueued;
+    private long _activeSourceRefreshRequestedGeneration;
+    private int _activeSourceRefreshWorkerRunning;
+    private int _activeSourceRefreshPending;
 
     internal AccountNicknameAuthorityService(
         AccountRegistry registry,
@@ -344,6 +347,16 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
                 if (localNickname is not null && daemonNickname.Nickname is null)
                 {
                     var result = await TryApplyNicknameAsync(client, profile, localNickname, daemonNickname, initialStatus, migrationId: initialStatus.MigrationId, cancellationToken).ConfigureAwait(false);
+                    if (result.OutcomeUnknown)
+                    {
+                        SetFailClosed("nickname_mutation_outcome_unknown");
+                        return;
+                    }
+                    if (result.ProvenNotApplied)
+                    {
+                        SetFailClosed("nickname_mutation_not_applied");
+                        return;
+                    }
                     if (result.Conflict)
                     {
                         conflicts.Add(new AccountNicknameAuthorityConflict(profile.Id, localNickname, result.Current?.Nickname));
@@ -462,6 +475,8 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
         if (!IsAuthorityPotentiallyActive)
             return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.LocalOnly, "legacy_local");
 
+        var remoteApplyVerified = false;
+        var localMirrorPersisted = false;
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -470,7 +485,7 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
             var (info, status) = await ReadAuthorityStateAsync(client, cancellationToken).ConfigureAwait(false);
             SetFailClosedState(status);
             if (status.State is not (NicknameAuthorityStates.DaemonNicknameAuthority or NicknameAuthorityStates.Preparing))
-                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.FailedDiverged, "authority_not_writable");
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.ProvenNotApplied, "authority_not_writable");
 
             var profile = _registry.Find(accountId);
             if (profile is null)
@@ -484,11 +499,34 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
             var mutation = await TryApplyNicknameAsync(client, profile, desired, exact[accountId], status, MigrationIdFor(status), cancellationToken).ConfigureAwait(false);
             if (mutation.Conflict)
                 return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.Conflict, "revision_conflict_different_name");
+            if (mutation.OutcomeUnknown)
+            {
+                MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.OutcomeUnknown, "outcome_unknown");
+            }
+            if (mutation.ProvenNotApplied)
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.ProvenNotApplied, "not_applied");
 
-            var confirmed = await ReadNicknamesAsync(client, _registry.Profiles, allowMissing: false, cancellationToken).ConfigureAwait(false);
+            remoteApplyVerified = true;
+            IReadOnlyDictionary<Guid, AccountNicknameState> confirmed;
+            try
+            {
+                confirmed = await ReadNicknamesAsync(client, _registry.Profiles, allowMissing: false, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+                QueueActiveSourceRefreshWorker();
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.DaemonAppliedCachePending, "cache_repair_pending");
+            }
             var mirrorMap = confirmed.ToDictionary(pair => pair.Key, pair => pair.Value.Nickname);
             if (!ApplyAndVerifyMirrors(_registry.CurrentGeneration, mirrorMap))
-                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.FailedDiverged, "local_cache_persistence_failed");
+            {
+                MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+                QueueActiveSourceRefreshWorker();
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.DaemonAppliedCachePending, "cache_repair_pending");
+            }
+            localMirrorPersisted = true;
 
             if (status.State == NicknameAuthorityStates.DaemonNicknameAuthority)
                 SaveActiveJournal(status, _registry.ReadCommittedSnapshot(), confirmed);
@@ -496,7 +534,18 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.FailedDiverged, ClassifyFailure(exception));
+            if (remoteApplyVerified)
+            {
+                if (localMirrorPersisted)
+                {
+                    SetFailClosed(ClassifyFailure(exception));
+                    return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.DaemonAndLocal, "verified");
+                }
+                MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+                QueueActiveSourceRefreshWorker();
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.DaemonAppliedCachePending, "cache_repair_pending");
+            }
+            return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.ProvenNotApplied, ClassifyFailure(exception));
         }
         finally
         {
@@ -533,10 +582,18 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
             var resolved = await TryApplyNicknameAsync(client, profile, NormalizeNickname(selectedNickname), current, status, status.MigrationId, cancellationToken).ConfigureAwait(false);
             if (resolved.Conflict)
                 return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.Conflict, "revision_conflict_different_name");
+            if (resolved.OutcomeUnknown)
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.OutcomeUnknown, "outcome_unknown");
+            if (resolved.ProvenNotApplied)
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.ProvenNotApplied, "not_applied");
 
             var latest = await ReadNicknamesAsync(client, _registry.Profiles, allowMissing: false, cancellationToken).ConfigureAwait(false);
             if (!ApplyAndVerifyMirrors(_registry.CurrentGeneration, latest.ToDictionary(pair => pair.Key, pair => pair.Value.Nickname)))
-                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.FailedDiverged, "local_cache_persistence_failed");
+            {
+                MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+                QueueActiveSourceRefreshWorker();
+                return new AccountNicknameMutationResult(AccountNicknameMutationOutcome.DaemonAppliedCachePending, "cache_repair_pending");
+            }
 
             lock (_stateSync)
                 _pendingConflicts.RemoveAll(conflict => conflict.AccountId == accountId);
@@ -563,31 +620,138 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
     {
         if (!IsAuthorityPotentiallyActive)
             return;
+        var matchedGeneration = await SynchronizeActiveSourceOnceAsync(cancellationToken).ConfigureAwait(false);
+        if (matchedGeneration is { } generation)
+            MarkActiveSourceRefreshSatisfied(generation);
+        else
+            MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+    }
+
+    private async Task<long?> SynchronizeActiveSourceOnceAsync(CancellationToken cancellationToken)
+    {
         await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await using var daemonLease = await _coordinator.AcquireNicknameMutationLeaseAsync(cancellationToken).ConfigureAwait(false);
-            await using var client = await _clientFactory.ConnectNicknameAuthorityCompatibleAsync(cancellationToken).ConfigureAwait(false);
+            var existingClient = await _clientFactory.TryConnectExistingNicknameAuthorityAsync(cancellationToken).ConfigureAwait(false);
+            if (existingClient is null)
+                return null;
+            await using var client = existingClient;
             var (_, status) = await ReadAuthorityStateAsync(client, cancellationToken).ConfigureAwait(false);
             if (status.State != NicknameAuthorityStates.DaemonNicknameAuthority)
-                return;
+                return null;
             SetFailClosedState(status);
+
             var snapshot = _registry.ReadCommittedSnapshot();
             await ReconcileActiveSourceAsync(client, status, snapshot, migrationIntents: null, cancellationToken).ConfigureAwait(false);
-            var exact = await ReadNicknamesAsync(client, _registry.Profiles, allowMissing: false, cancellationToken).ConfigureAwait(false);
-            if (!ApplyAndVerifyMirrors(_registry.CurrentGeneration, exact.ToDictionary(pair => pair.Key, pair => pair.Value.Nickname)))
+            if (_registry.CurrentGeneration != snapshot.Generation)
+                return null;
+
+            var exact = await ReadNicknamesAsync(client, snapshot.Profiles, allowMissing: false, cancellationToken).ConfigureAwait(false);
+            if (_registry.CurrentGeneration != snapshot.Generation)
+                return null;
+
+            if (!ApplyAndVerifyMirrors(snapshot.Generation, exact.ToDictionary(pair => pair.Key, pair => pair.Value.Nickname)))
+            {
                 SetFailClosed("local_cache_persistence_failed");
-            else
-                SaveActiveJournal(status, _registry.ReadCommittedSnapshot(), exact);
+                return null;
+            }
+
+            var persistedGeneration = _registry.CurrentGeneration;
+            if (persistedGeneration > snapshot.Generation + 1)
+                return null;
+            SaveActiveJournal(status, _registry.ReadCommittedSnapshot(), exact);
+            return snapshot.Generation;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             SetFailClosed(ClassifyFailure(exception));
+            return null;
         }
         finally
         {
             _operationGate.Release();
         }
+    }
+
+    private void MarkActiveSourceRefreshPending(long generation)
+    {
+        lock (_sourceRefreshSync)
+        {
+            _activeSourceRefreshRequestedGeneration = Math.Max(_activeSourceRefreshRequestedGeneration, generation);
+            _activeSourceRefreshPending = 1;
+        }
+        _coordinator.MarkNicknameSourceSyncPending(generation, _registry.Profiles.Count);
+    }
+
+    private void MarkActiveSourceRefreshSatisfied(long generation)
+    {
+        var synchronized = false;
+        lock (_sourceRefreshSync)
+        {
+            if (_activeSourceRefreshRequestedGeneration <= generation)
+            {
+                _activeSourceRefreshPending = 0;
+                synchronized = true;
+            }
+        }
+        if (synchronized)
+            _coordinator.MarkNicknameSourceSynchronized(generation, _registry.Profiles.Count);
+    }
+
+    private void QueueActiveSourceRefreshWorker()
+    {
+        if (Interlocked.CompareExchange(ref _activeSourceRefreshWorkerRunning, 1, 0) != 0)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            var passes = 0;
+            var lastAttemptedGeneration = -1L;
+            try
+            {
+                while (passes < MaximumSourceRefreshPasses)
+                {
+                    long requestedGeneration;
+                    lock (_sourceRefreshSync)
+                    {
+                        if (_activeSourceRefreshPending == 0)
+                            break;
+                        requestedGeneration = _activeSourceRefreshRequestedGeneration;
+                    }
+
+                    lastAttemptedGeneration = requestedGeneration;
+                    passes++;
+                    var matchedGeneration = await SynchronizeActiveSourceOnceAsync(CancellationToken.None).ConfigureAwait(false);
+                    if (matchedGeneration is { } matched)
+                        MarkActiveSourceRefreshSatisfied(matched);
+                    else
+                        MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+
+                    lock (_sourceRefreshSync)
+                    {
+                        if (_activeSourceRefreshPending == 0)
+                            break;
+                        if (_activeSourceRefreshRequestedGeneration <= lastAttemptedGeneration && matchedGeneration is null)
+                            break;
+                    }
+                }
+            }
+            catch
+            {
+                // The pending category remains observable; later committed changes can retry.
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _activeSourceRefreshWorkerRunning, 0);
+                bool newerRequestPending;
+                lock (_sourceRefreshSync)
+                    newerRequestPending = _activeSourceRefreshPending != 0 &&
+                        _activeSourceRefreshRequestedGeneration > lastAttemptedGeneration;
+                if (passes < MaximumSourceRefreshPasses && newerRequestPending)
+                    QueueActiveSourceRefreshWorker();
+            }
+        });
     }
 
     public async Task<AccountNicknameImportResult> ImportAsync(string document, CancellationToken cancellationToken = default)
@@ -624,7 +788,7 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
                     continue;
                 }
                 var mutation = await TryApplyNicknameAsync(client, profile, intent.Nickname, before, status, migrationId: null, cancellationToken).ConfigureAwait(false);
-                if (mutation.Conflict)
+                if (mutation.Conflict || mutation.OutcomeUnknown || mutation.ProvenNotApplied)
                     failed++;
                 else
                     applied++;
@@ -632,7 +796,11 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
 
             var final = await ReadNicknamesAsync(client, _registry.Profiles, allowMissing: false, cancellationToken).ConfigureAwait(false);
             if (!ApplyAndVerifyMirrors(_registry.CurrentGeneration, final.ToDictionary(pair => pair.Key, pair => pair.Value.Nickname)))
+            {
                 failed += Math.Max(1, imported.Nicknames.Count - applied);
+                MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+                QueueActiveSourceRefreshWorker();
+            }
             SaveActiveJournal(status, _registry.ReadCommittedSnapshot(), final);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -797,7 +965,7 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
         }
     }
 
-    private static async Task<(bool Conflict, AccountNicknameState? Current)> TryApplyNicknameAsync(
+    private async Task<NicknameApplyResult> TryApplyNicknameAsync(
         IAccountStateShadowClient client,
         ProfileMetadata profile,
         string? desired,
@@ -810,7 +978,7 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
         if (!string.Equals(before.AccountId, accountId, StringComparison.Ordinal))
             throw new AccountStateShadowCompatibilityException();
         if (string.Equals(before.Nickname, desired, StringComparison.Ordinal))
-            return (false, before);
+            return new NicknameApplyResult(false, false, false, before);
 
         var fallback = desired is null ? GetSafeBaseFallback(profile) : "Account";
         var mutation = new AccountNicknameMutation
@@ -820,26 +988,129 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
             SafeFallbackDisplayName = fallback,
             ExpectedRevision = before.Revision
         };
+        NicknameMutationResult response;
         try
         {
-            var result = await client.UpdateNicknameAsync(mutation, status.Epoch, migrationId, cancellationToken).ConfigureAwait(false);
-            if (result.NicknameState.AccountId != accountId || !string.Equals(result.NicknameState.Nickname, desired, StringComparison.Ordinal))
-                throw new AccountStateShadowCompatibilityException();
+            response = await client.UpdateNicknameAsync(mutation, status.Epoch, migrationId, cancellationToken).ConfigureAwait(false);
         }
         catch (AccountStateShadowRpcException exception) when (exception.Category == "revision_conflict")
         {
-            var observed = await client.GetNicknameAsync(accountId, cancellationToken).ConfigureAwait(false);
-            if (string.Equals(observed.Nickname, desired, StringComparison.Ordinal))
-                return (false, observed);
-            return (true, observed);
+            AccountNicknameState? observed = null;
+            try { observed = await client.GetNicknameAsync(accountId, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch { }
+            return new NicknameApplyResult(true, false, false, observed);
+        }
+        catch (AccountStateShadowRpcRequestNotSentException)
+        {
+            return new NicknameApplyResult(false, false, true, before);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            var observed = await TryReadVerifiedNicknameAsync(client, accountId, status, migrationId, cancellationToken).ConfigureAwait(false);
+            if (!observed.AuthorityVerified || observed.State is null)
+                return new NicknameApplyResult(false, true, false, null);
+            if (string.Equals(observed.State.Nickname, desired, StringComparison.Ordinal))
+                return new NicknameApplyResult(false, true, false, observed.State);
+            if (!string.Equals(observed.State.Revision, before.Revision, StringComparison.Ordinal))
+                return new NicknameApplyResult(true, false, false, observed.State);
+            return new NicknameApplyResult(false, false, true, observed.State);
         }
 
-        var readBack = await client.GetNicknameAsync(accountId, cancellationToken).ConfigureAwait(false);
-        if (readBack.AccountId != accountId || !string.Equals(readBack.Nickname, desired, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(readBack.Revision))
-            throw new AccountStateShadowCompatibilityException();
-        return (false, readBack);
+        var responseState = response.NicknameState;
+        if (responseState.AccountId != accountId || !string.Equals(responseState.Nickname, desired, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(responseState.Revision))
+            return new NicknameApplyResult(false, true, false, null);
+
+        var readBackResult = await TryReadVerifiedNicknameAsync(client, accountId, status, migrationId, cancellationToken).ConfigureAwait(false);
+        if (!readBackResult.AuthorityVerified || readBackResult.State is null)
+            return new NicknameApplyResult(false, true, false, null);
+        var readBack = readBackResult.State;
+        if (!string.Equals(readBack.Nickname, desired, StringComparison.Ordinal))
+        {
+            if (!string.Equals(readBack.Revision, before.Revision, StringComparison.Ordinal))
+                return new NicknameApplyResult(true, false, false, readBack);
+            return new NicknameApplyResult(false, true, false, readBack);
+        }
+        if (!string.Equals(readBack.Revision, responseState.Revision, StringComparison.Ordinal))
+            return new NicknameApplyResult(false, true, false, readBack);
+        return new NicknameApplyResult(false, false, false, readBack);
     }
+
+    private async Task<VerifiedNicknameReadback> TryReadVerifiedNicknameAsync(
+        IAccountStateShadowClient currentClient,
+        string accountId,
+        NicknameAuthorityStatus expectedStatus,
+        string? migrationId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ReadVerifiedNicknameOnClientAsync(currentClient, accountId, expectedStatus, migrationId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+        }
+
+        IAccountStateShadowClient? reconnect = null;
+        try
+        {
+            reconnect = await _clientFactory.TryConnectExistingNicknameAuthorityAsync(cancellationToken).ConfigureAwait(false);
+            if (reconnect is null)
+                return new VerifiedNicknameReadback(false, null);
+            return await ReadVerifiedNicknameOnClientAsync(reconnect, accountId, expectedStatus, migrationId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new VerifiedNicknameReadback(false, null);
+        }
+        finally
+        {
+            if (reconnect is not null)
+            {
+                try { await reconnect.DisposeAsync().ConfigureAwait(false); }
+                catch { }
+            }
+        }
+    }
+
+    private static async Task<VerifiedNicknameReadback> ReadVerifiedNicknameOnClientAsync(
+        IAccountStateShadowClient client,
+        string accountId,
+        NicknameAuthorityStatus expectedStatus,
+        string? migrationId,
+        CancellationToken cancellationToken)
+    {
+        var before = await client.GetNicknameAuthorityAsync(cancellationToken).ConfigureAwait(false);
+        if (!SameAuthorityEpoch(expectedStatus, before, migrationId))
+            return new VerifiedNicknameReadback(false, null);
+        var state = await client.GetNicknameAsync(accountId, cancellationToken).ConfigureAwait(false);
+        var after = await client.GetNicknameAuthorityAsync(cancellationToken).ConfigureAwait(false);
+        if (!SameAuthorityEpoch(expectedStatus, after, migrationId) || state.AccountId != accountId || string.IsNullOrWhiteSpace(state.Revision))
+            return new VerifiedNicknameReadback(false, null);
+        return new VerifiedNicknameReadback(true, state);
+    }
+
+    private static bool SameAuthorityEpoch(NicknameAuthorityStatus expected, NicknameAuthorityStatus actual, string? migrationId) =>
+        actual.State == expected.State && actual.Epoch == expected.Epoch &&
+        actual.MigrationId == expected.MigrationId &&
+        (expected.State != NicknameAuthorityStates.Preparing || expected.MigrationId == migrationId) &&
+        actual.ProtocolManifestSha256 == AccountStateShadowRpcClient.ProtocolManifestSha256;
+
+    private sealed record NicknameApplyResult(bool Conflict, bool OutcomeUnknown, bool ProvenNotApplied, AccountNicknameState? Current);
+    private sealed record VerifiedNicknameReadback(bool AuthorityVerified, AccountNicknameState? State);
 
     private static AccountSourceCollection BuildSourceCollection(
         IReadOnlyList<ProfileMetadata> profiles,
@@ -866,7 +1137,7 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
                 },
                 IsActive = profile.IsActive,
                 SortOrder = profile.SortOrder,
-                CreatedAt = profile.CreatedAt.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
+                CreatedAt = profile.CreatedAt.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture),
                 PlanType = profile.PlanType
             };
         }).ToArray();
@@ -1036,16 +1307,15 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
 
     private bool ApplyAndVerifyMirrors(long generation, IReadOnlyDictionary<Guid, string?> mirrors)
     {
-        Interlocked.Exchange(ref _mirrorUpdateInProgress, 1);
         try
         {
             if (!_registry.UpdateNicknameMirrorsIfGeneration(mirrors, generation))
                 return false;
             return _registry.VerifyPersistedNicknameMirrors(mirrors);
         }
-        finally
+        catch (Exception)
         {
-            Interlocked.Exchange(ref _mirrorUpdateInProgress, 0);
+            return false;
         }
     }
 
@@ -1131,9 +1401,21 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
             string.Equals(pair.Value.Nickname, other.Nickname, StringComparison.Ordinal) &&
             string.Equals(pair.Value.Revision, other.Revision, StringComparison.Ordinal));
 
-    private static bool SameInstant(string timestamp, DateTimeOffset expected) =>
-        DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var actual) &&
-        actual == expected.ToUniversalTime();
+    private static bool SameInstant(string timestamp, DateTimeOffset expected)
+    {
+        if (!DateTimeOffset.TryParse(
+                timestamp,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var actual))
+        {
+            return false;
+        }
+
+        var expectedUtc = expected.ToUniversalTime();
+        var expectedAtDaemonPrecision = DateTimeOffset.FromUnixTimeMilliseconds(expectedUtc.ToUnixTimeMilliseconds());
+        return actual == expectedAtDaemonPrecision;
+    }
 
     private static string? NormalizeNickname(string? nickname) => string.IsNullOrWhiteSpace(nickname) ? null : nickname;
 
@@ -1148,6 +1430,7 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
     private static string ClassifyFailure(Exception exception) => exception switch
     {
         AccountStateShadowRpcException { Category: { } category } => category,
+        AccountStateShadowRpcOutcomeUnknownException => "outcome_unknown",
         AccountStateShadowRpcTimeoutException => "timeout",
         AccountStateShadowCompatibilityException or JsonException => "protocol_incompatible",
         AccountStateShadowUnavailableException or IOException => "daemon_unavailable",
@@ -1163,14 +1446,10 @@ internal sealed class AccountNicknameAuthorityService : IAccountNicknameAuthorit
 
     private void OnRegistrySnapshotChanged()
     {
-        if (Volatile.Read(ref _mirrorUpdateInProgress) != 0 || !IsAuthorityActive || Interlocked.Exchange(ref _activeSourceRefreshQueued, 1) != 0)
+        if (!IsAuthorityPotentiallyActive)
             return;
-        _ = Task.Run(async () =>
-        {
-            try { await SynchronizeActiveSourceAsync().ConfigureAwait(false); }
-            catch { }
-            finally { Interlocked.Exchange(ref _activeSourceRefreshQueued, 0); }
-        });
+        MarkActiveSourceRefreshPending(_registry.CurrentGeneration);
+        QueueActiveSourceRefreshWorker();
     }
 
     public void Dispose()

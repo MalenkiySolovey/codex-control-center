@@ -462,13 +462,21 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         }
 
         var profile = _credentials.AddFromAuthJson(authJson, null);
+        (string Title, string Message, InfoBarSeverity Severity)? nicknameWarning = null;
         var nick = await _ui.PromptTextAsync(Loc.NicknameTitle, Loc.NicknamePrompt,
             profile.DetectedDisplayName ?? string.Empty, Loc.Save);
         if (!string.IsNullOrWhiteSpace(nick) && _nicknameAuthority?.IsAuthorityPotentiallyActive == true)
         {
             var result = await _nicknameAuthority.RenameAsync(profile.Id, nick);
-            if (result.Outcome is AccountNicknameMutationOutcome.FailedDiverged or AccountNicknameMutationOutcome.Conflict)
-                ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameAuthorityUnavailableMsg, InfoBarSeverity.Warning);
+            nicknameWarning = result.Outcome switch
+            {
+                AccountNicknameMutationOutcome.Conflict => (Loc.NicknameConflictTitle, Loc.NicknameConflictMsg, InfoBarSeverity.Warning),
+                AccountNicknameMutationOutcome.FailedDiverged => (Loc.NicknameUpdateFailedTitle, Loc.NicknameAuthorityUnavailableMsg, InfoBarSeverity.Warning),
+                AccountNicknameMutationOutcome.ProvenNotApplied => (Loc.NicknameUpdateFailedTitle, Loc.NicknameNotAppliedMsg, InfoBarSeverity.Warning),
+                AccountNicknameMutationOutcome.DaemonAppliedCachePending => (Loc.NicknameUpdateFailedTitle, Loc.NicknameCacheRepairPendingMsg, InfoBarSeverity.Warning),
+                AccountNicknameMutationOutcome.OutcomeUnknown => (Loc.NicknameUpdateFailedTitle, Loc.NicknameOutcomeUnknownMsg, InfoBarSeverity.Warning),
+                _ => null
+            };
         }
         else if (!string.IsNullOrWhiteSpace(nick))
             _registry.Rename(profile.Id, nick);
@@ -478,6 +486,8 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
         Rebuild(_lastActiveTarget, _lastIsRoutingActiveToApi);
         var savedProfile = _registry.Find(profile.Id) ?? profile;
         ShowInfo(Loc.AddedTitle, Loc.AddedMsg(savedProfile.DisplayName), InfoBarSeverity.Success);
+        if (nicknameWarning is { } warning)
+            ShowInfo(warning.Title, warning.Message, warning.Severity);
         _ = _usage.TriggerBackgroundRefreshForProfiles([savedProfile]);
     }
 
@@ -679,6 +689,15 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
                 case AccountNicknameMutationOutcome.FailedDiverged:
                     ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameAuthorityUnavailableMsg, InfoBarSeverity.Warning);
                     break;
+                case AccountNicknameMutationOutcome.ProvenNotApplied:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameNotAppliedMsg, InfoBarSeverity.Warning);
+                    break;
+                case AccountNicknameMutationOutcome.DaemonAppliedCachePending:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameCacheRepairPendingMsg, InfoBarSeverity.Warning);
+                    break;
+                case AccountNicknameMutationOutcome.OutcomeUnknown:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameOutcomeUnknownMsg, InfoBarSeverity.Warning);
+                    break;
             }
         }
         else if (_nicknameMutationService is null)
@@ -698,6 +717,15 @@ public sealed partial class AccountsViewModel : ObservableObject, IDisposable
                     break;
                 case AccountNicknameMutationOutcome.FailedDiverged:
                     ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameUpdateDivergedMsg, InfoBarSeverity.Error);
+                    break;
+                case AccountNicknameMutationOutcome.ProvenNotApplied:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameNotAppliedMsg, InfoBarSeverity.Warning);
+                    break;
+                case AccountNicknameMutationOutcome.DaemonAppliedCachePending:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameCacheRepairPendingMsg, InfoBarSeverity.Warning);
+                    break;
+                case AccountNicknameMutationOutcome.OutcomeUnknown:
+                    ShowInfo(Loc.NicknameUpdateFailedTitle, Loc.NicknameOutcomeUnknownMsg, InfoBarSeverity.Warning);
                     break;
             }
         }

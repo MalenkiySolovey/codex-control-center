@@ -391,6 +391,15 @@ public sealed class Strings
     public string NicknameAuthorityUnavailableMsg => S(
         "A autoridade atual de apelidos não está disponível. As credenciais e a conta foram preservadas; o apelido não foi gravado localmente.",
         "The current nickname authority is unavailable. The account and credentials were preserved; the nickname was not written locally.");
+    public string NicknameCacheRepairPendingMsg => S(
+        "A autoridade salvou o apelido, mas o cache local ainda não foi atualizado. A sincronização será repetida.",
+        "The authority saved the nickname, but the local cache was not updated yet. Synchronization will be retried.");
+    public string NicknameNotAppliedMsg => S(
+        "A alteração do apelido não foi aplicada. Nenhuma alteração local foi feita.",
+        "The nickname change was not applied. No local change was made.");
+    public string NicknameOutcomeUnknownMsg => S(
+        "Não foi possível confirmar o resultado da alteração do apelido. Confira o nome atual antes de tentar novamente.",
+        "The nickname change outcome could not be confirmed. Check the current name before trying again.");
     public string NicknameExportUnavailableMsg => S(
         "Não foi possível verificar os apelidos atuais no daemon. A exportação foi interrompida para não incluir apelidos em cache desatualizados.",
         "Current nicknames could not be verified from the daemon. Export was stopped to avoid including stale cached nicknames.");
