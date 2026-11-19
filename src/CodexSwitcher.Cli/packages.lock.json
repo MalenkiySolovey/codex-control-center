@@ -3,14 +3,31 @@
   "dependencies": {
     "net10.0-windows7.0": {
       "codexswitcher.core": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "ChatGpt.Accounts": "[0.1.0-preview.3, )",
+          "Llm.ProviderKit": "[0.1.0-preview.3, )"
+        }
       },
       "codexswitcher.infra": {
         "type": "Project",
         "dependencies": {
           "CodexSwitcher.Core": "[1.0.0, )",
+          "Llm.ProviderKit": "[0.1.0-preview.3, )",
           "System.Security.Cryptography.ProtectedData": "[9.0.0, )"
         }
+      },
+      "ChatGpt.Accounts": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.0-preview.3, )",
+        "resolved": "0.1.0-preview.3",
+        "contentHash": "Mca99XoZyWpsWuf2spjfP90n16B7HCuhbOR4fuQPS73OCNAZJelj9oeNgZv1o8ROWZUX+MByRiX1HReWd5mTGQ=="
+      },
+      "Llm.ProviderKit": {
+        "type": "CentralTransitive",
+        "requested": "[0.1.0-preview.3, )",
+        "resolved": "0.1.0-preview.3",
+        "contentHash": "kgywBonGvUndwVfdSLP23bDMsnEZDoCzVPKPZYIo6s+aOQQMwdcD6h9pxIUFJ7DT3YDnV+6ujNmJTlSvy68FZA=="
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "CentralTransitive",

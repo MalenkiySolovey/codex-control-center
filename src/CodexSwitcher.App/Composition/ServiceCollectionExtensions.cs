@@ -337,10 +337,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISafeProviderHttpTransport, SafeProviderHttpTransport>();
         services.AddSingleton<IProviderProbeResponseMapper, ProviderProbeResponseMapper>();
         services.AddSingleton<IDeclarativeProviderInspector>(sp => new DeclarativeProviderInspector(
-            sp.GetRequiredService<IProviderProbePlanner>(),
-            sp.GetRequiredService<ISafeProviderHttpTransport>(),
-            sp.GetRequiredService<IProviderProbeResponseMapper>(),
-            sp.GetServices<IGenericProviderBillingStrategy>()));
+            genericBillingStrategies: sp.GetServices<IGenericProviderBillingStrategy>()));
         services.AddSingleton<IProviderModelCache, ProviderModelCache>();
         services.AddSingleton<IProviderInspectionService>(sp => new ProviderInspectionService(
             sp.GetRequiredService<IApiProviderStore>(),

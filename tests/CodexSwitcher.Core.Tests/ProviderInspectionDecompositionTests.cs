@@ -114,7 +114,7 @@ public sealed class ProviderInspectionDecompositionTests
         Assert.False(valid);
         Assert.Null(plan);
         Assert.NotNull(error);
-        Assert.Contains("Security violation", error);
+        Assert.Contains("Only GET and HEAD", error);
         Assert.Contains(method, error);
     }
 
@@ -130,7 +130,7 @@ public sealed class ProviderInspectionDecompositionTests
         Assert.False(valid);
         Assert.Null(plan);
         Assert.NotNull(error);
-        Assert.Contains("Insecure HTTP is prohibited", error);
+        Assert.Contains("loopback", error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -163,7 +163,7 @@ public sealed class ProviderInspectionDecompositionTests
         Assert.False(valid);
         Assert.Null(plan);
         Assert.NotNull(error);
-        Assert.Contains("not in the trustedHosts whitelist", error);
+        Assert.Contains("trustedHosts allowlist", error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -202,7 +202,7 @@ public sealed class ProviderInspectionDecompositionTests
         Assert.NotNull(response.Error);
         // Assert the raw key is NOT present in the error message
         Assert.DoesNotContain(secretKey, response.Error);
-        Assert.Contains("[REDACTED_API_KEY]", response.Error);
+        Assert.Contains("connection failed", response.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public sealed class ProviderInspectionDecompositionTests
 
         Assert.False(response.Success);
         Assert.NotNull(response.Error);
-        Assert.Contains("Security violation: Redirect to untrusted host", response.Error);
+        Assert.Contains("trusted host allowlist", response.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -292,10 +292,8 @@ public sealed class ProviderInspectionDecompositionTests
             }
         };
 
-        var planner = new ProviderProbePlanner();
-        using var transport = new SafeProviderHttpTransport(new HttpClient(mock));
-        var mapper = new ProviderProbeResponseMapper();
-        using var inspector = new DeclarativeProviderInspector(planner, transport, mapper);
+        using var httpClient = new HttpClient(mock);
+        using var inspector = new DeclarativeProviderInspector(httpClient);
 
         var descriptor = CreateTestDescriptor();
         var snapshot = await inspector.InspectAsync(descriptor, "https://api.provider.test/v1", "sk-orchestration-key");
@@ -360,9 +358,8 @@ public sealed class ProviderInspectionDecompositionTests
             Strategy = "unknown",
         };
 
-        var planner = new ProviderProbePlanner();
-        using var transport = new SafeProviderHttpTransport(new HttpClient(mock));
-        using var inspector = new DeclarativeProviderInspector(planner, transport, new ProviderProbeResponseMapper());
+        using var httpClient = new HttpClient(mock);
+        using var inspector = new DeclarativeProviderInspector(httpClient);
 
         var snapshot = await inspector.InspectAsync(descriptor, "https://api.provider.test/v1", "sk-multi-response-key");
 

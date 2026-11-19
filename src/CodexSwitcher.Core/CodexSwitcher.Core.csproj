@@ -6,6 +6,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="ChatGpt.Accounts" />
+    <PackageReference Include="Llm.ProviderKit" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="..\..\catalog\providers.catalog.json" Link="Catalog\providers.catalog.json" />
   </ItemGroup>
 

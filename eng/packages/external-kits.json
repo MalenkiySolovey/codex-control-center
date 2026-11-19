@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "kits": [
+    {
+      "name": "chatgpt-account-kit",
+      "repository": "https://github.com/MalenkiySolovey/chatgpt-account-kit.git",
+      "commit": "bc5597c1a42e3efb83bdeb79b73c85c166a19322",
+      "project": "src/ChatGpt.Accounts/ChatGpt.Accounts.csproj",
+      "packageId": "ChatGpt.Accounts",
+      "version": "0.1.0-preview.3"
+    },
+    {
+      "name": "llm-provider-kit",
+      "repository": "https://github.com/MalenkiySolovey/llm-provider-kit.git",
+      "commit": "7aac2638f75b33667a8fb9b4a856bff32bdc5092",
+      "project": "src/Llm.ProviderKit/Llm.ProviderKit.csproj",
+      "packageId": "Llm.ProviderKit",
+      "version": "0.1.0-preview.3"
+    }
+  ]
+}

@@ -140,76 +140,96 @@ public sealed class ApiProviderModelInventory
         IEnumerable<string>? discoveredSlugs,
         DateTimeOffset? observedAt = null)
     {
-        if (discoveredSlugs == null)
+        var external = new Llm.ProviderKit.Models.ProviderModelInventory
         {
-            return new ModelInventoryMergeResult(0, 0, Models.Count(m => m.DiscoverySource is ModelDiscoverySource.Manual or ModelDiscoverySource.Mixed), 0);
-        }
-
-        var observationTime = observedAt ?? DateTimeOffset.UtcNow;
-        DiscoveryStatus = ModelDiscoveryStatus.Discovered;
-        LastDiscoveryAt = observationTime;
-
-        // Model slugs are exact persisted identifiers. Do not trim, normalize
-        // suffixes, or fuzzy-match (e.g. ":free" is a distinct model).
-        var existingMap = Models
-            .Where(m => !string.IsNullOrEmpty(m.Slug))
-            .GroupBy(m => m.Slug, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
-        var discoveredSet = new HashSet<string>(StringComparer.Ordinal);
-        var added = 0;
-        var updated = 0;
-
-        foreach (var slug in discoveredSlugs)
-        {
-            if (string.IsNullOrWhiteSpace(slug)) continue;
-            discoveredSet.Add(slug);
-
-            if (existingMap.TryGetValue(slug, out var existing))
+            SelectedModelId = SelectedModel,
+            DiscoveryStatus = ToProviderKit(DiscoveryStatus),
+            LastDiscoveryAt = LastDiscoveryAt,
+            Models = Models.Select(model => new Llm.ProviderKit.Models.ProviderModelItem
             {
-                if (existing.Availability != ModelAvailability.Reported)
-                {
-                    updated++;
-                }
-                existing.Availability = ModelAvailability.Reported;
-                existing.LastSeenAt = observationTime;
-                if (existing.DiscoverySource == ModelDiscoverySource.Manual)
-                {
-                    existing.DiscoverySource = ModelDiscoverySource.Mixed;
-                }
-            }
-            else
+                Id = model.Slug,
+                DisplayName = model.DisplayName,
+                Enabled = model.Enabled,
+                DiscoverySource = ToProviderKit(model.DiscoverySource),
+                Availability = ToProviderKit(model.Availability),
+                LastSeenAt = model.LastSeenAt,
+            }).ToList(),
+        };
+
+        var result = external.MergeDiscoveredModels(discoveredSlugs, observedAt);
+        foreach (var externalModel in external.Models)
+        {
+            var existing = Models.FirstOrDefault(model => string.Equals(model.Slug, externalModel.Id, StringComparison.Ordinal));
+            if (existing is null)
             {
                 Models.Add(new ApiProviderModelItem
                 {
-                    Slug = slug,
-                    DisplayName = ModelDisplayName.FromSlug(slug),
-                    Enabled = true,
-                    DiscoverySource = ModelDiscoverySource.Discovered,
-                    Availability = ModelAvailability.Reported,
-                    LastSeenAt = observationTime
+                    Slug = externalModel.Id,
+                    DisplayName = externalModel.DisplayName,
+                    Enabled = externalModel.Enabled,
+                    DiscoverySource = FromProviderKit(externalModel.DiscoverySource),
+                    Availability = FromProviderKit(externalModel.Availability),
+                    LastSeenAt = externalModel.LastSeenAt,
                 });
-                added++;
+                continue;
             }
+
+            existing.DiscoverySource = FromProviderKit(externalModel.DiscoverySource);
+            existing.Availability = FromProviderKit(externalModel.Availability);
+            existing.LastSeenAt = externalModel.LastSeenAt;
         }
 
-        // Preserve manual entries but retain truthful availability evidence:
-        // an exact manual/legacy selected slug that a provider no longer
-        // returns is still usable by explicit user choice, yet it must be
-        // presented as NotReported rather than silently claimed as current.
-        // Previously discovered and mixed entries receive the same stale
-        // evidence without being deleted.
-        foreach (var m in Models)
-        {
-            if (!discoveredSet.Contains(m.Slug))
-            {
-                m.Availability = ModelAvailability.NotReported;
-            }
-        }
-
-        var manualPreserved = Models.Count(m =>
-            m.DiscoverySource is ModelDiscoverySource.Manual or ModelDiscoverySource.Mixed);
-        return new ModelInventoryMergeResult(added, updated, manualPreserved, discoveredSet.Count);
+        DiscoveryStatus = FromProviderKit(external.DiscoveryStatus);
+        LastDiscoveryAt = external.LastDiscoveryAt;
+        return new ModelInventoryMergeResult(result.ModelsAdded, result.ModelsUpdated,
+            result.ManualModelsPreserved, result.ReportedCount);
     }
+
+    private static Llm.ProviderKit.Models.ModelDiscoverySource ToProviderKit(ModelDiscoverySource value) => value switch
+    {
+        ModelDiscoverySource.Discovered => Llm.ProviderKit.Models.ModelDiscoverySource.Discovered,
+        ModelDiscoverySource.Manual => Llm.ProviderKit.Models.ModelDiscoverySource.Manual,
+        ModelDiscoverySource.Mixed => Llm.ProviderKit.Models.ModelDiscoverySource.Mixed,
+        _ => Llm.ProviderKit.Models.ModelDiscoverySource.CatalogKnown,
+    };
+
+    private static ModelDiscoverySource FromProviderKit(Llm.ProviderKit.Models.ModelDiscoverySource value) => value switch
+    {
+        Llm.ProviderKit.Models.ModelDiscoverySource.Discovered => ModelDiscoverySource.Discovered,
+        Llm.ProviderKit.Models.ModelDiscoverySource.Manual => ModelDiscoverySource.Manual,
+        Llm.ProviderKit.Models.ModelDiscoverySource.Mixed => ModelDiscoverySource.Mixed,
+        _ => ModelDiscoverySource.CatalogKnown,
+    };
+
+    private static Llm.ProviderKit.Models.ModelAvailability ToProviderKit(ModelAvailability value) => value switch
+    {
+        ModelAvailability.Reported => Llm.ProviderKit.Models.ModelAvailability.Reported,
+        ModelAvailability.NotReported => Llm.ProviderKit.Models.ModelAvailability.NotReported,
+        _ => Llm.ProviderKit.Models.ModelAvailability.Unknown,
+    };
+
+    private static ModelAvailability FromProviderKit(Llm.ProviderKit.Models.ModelAvailability value) => value switch
+    {
+        Llm.ProviderKit.Models.ModelAvailability.Reported => ModelAvailability.Reported,
+        Llm.ProviderKit.Models.ModelAvailability.NotReported => ModelAvailability.NotReported,
+        _ => ModelAvailability.Unknown,
+    };
+
+    private static Llm.ProviderKit.Models.ModelDiscoveryStatus ToProviderKit(ModelDiscoveryStatus value) => value switch
+    {
+        ModelDiscoveryStatus.Discovered => Llm.ProviderKit.Models.ModelDiscoveryStatus.Discovered,
+        ModelDiscoveryStatus.Manual => Llm.ProviderKit.Models.ModelDiscoveryStatus.Manual,
+        ModelDiscoveryStatus.Mixed => Llm.ProviderKit.Models.ModelDiscoveryStatus.Mixed,
+        _ => Llm.ProviderKit.Models.ModelDiscoveryStatus.Unknown,
+    };
+
+    private static ModelDiscoveryStatus FromProviderKit(Llm.ProviderKit.Models.ModelDiscoveryStatus value) => value switch
+    {
+        Llm.ProviderKit.Models.ModelDiscoveryStatus.Discovered => ModelDiscoveryStatus.Discovered,
+        Llm.ProviderKit.Models.ModelDiscoveryStatus.Manual => ModelDiscoveryStatus.Manual,
+        Llm.ProviderKit.Models.ModelDiscoveryStatus.Mixed => ModelDiscoveryStatus.Mixed,
+        _ => ModelDiscoveryStatus.Unknown,
+    };
 
     /// <summary>
     /// Ensures that the profile's active or selected model exists in the inventory.

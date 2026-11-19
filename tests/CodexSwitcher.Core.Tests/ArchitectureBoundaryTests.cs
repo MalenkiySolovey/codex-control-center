@@ -157,12 +157,13 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
-    public void SafeProviderHttpTransport_MustResideInInfraAssembly_AndCoreMustNotReferenceHttpTransport()
+    public void SafeProviderHttpTransportAdapter_DelegatesToProviderKit_AndCoreMustNotReferenceHttpTransport()
     {
         var infraAssembly = typeof(DeclarativeProviderInspector).Assembly;
         var transportType = infraAssembly.GetType("CodexSwitcher.Infra.Providers.Inspection.SafeProviderHttpTransport");
         Assert.NotNull(transportType);
         Assert.Equal("CodexSwitcher.Infra", transportType.Assembly.GetName().Name);
+        Assert.Contains(infraAssembly.GetReferencedAssemblies(), reference => reference.Name == "Llm.ProviderKit");
 
         var coreAssembly = typeof(IDeclarativeProviderInspector).Assembly;
         var coreTransport = coreAssembly.GetType("CodexSwitcher.Core.Providers.Inspection.SafeProviderHttpTransport");
@@ -215,16 +216,14 @@ public sealed class ArchitectureBoundaryTests
         Assert.Equal(typeof(ISwitchPlanBuilder), primarySwitchCtor.GetParameters()[0].ParameterType);
         Assert.Equal(typeof(ISwitchTransactionExecutor), primarySwitchCtor.GetParameters()[1].ParameterType);
 
-        // DeclarativeProviderInspector also accepts the bounded generic billing-strategy registry.
+        // The product adapter owns only its HTTP client and generic billing strategy bridge.
         var inspectorType = typeof(DeclarativeProviderInspector);
         var inspectorCtors = inspectorType.GetConstructors();
         var primaryInspectorCtor = inspectorCtors.MaxBy(c => c.GetParameters().Length);
         Assert.NotNull(primaryInspectorCtor);
-        Assert.Equal(4, primaryInspectorCtor.GetParameters().Length);
-        Assert.Equal(typeof(IProviderProbePlanner), primaryInspectorCtor.GetParameters()[0].ParameterType);
-        Assert.Equal(typeof(ISafeProviderHttpTransport), primaryInspectorCtor.GetParameters()[1].ParameterType);
-        Assert.Equal(typeof(IProviderProbeResponseMapper), primaryInspectorCtor.GetParameters()[2].ParameterType);
-        Assert.Equal(typeof(IEnumerable<IGenericProviderBillingStrategy>), primaryInspectorCtor.GetParameters()[3].ParameterType);
+        Assert.Equal(2, primaryInspectorCtor.GetParameters().Length);
+        Assert.Equal(typeof(HttpClient), primaryInspectorCtor.GetParameters()[0].ParameterType);
+        Assert.Equal(typeof(IEnumerable<IGenericProviderBillingStrategy>), primaryInspectorCtor.GetParameters()[1].ParameterType);
     }
 
     [Fact]

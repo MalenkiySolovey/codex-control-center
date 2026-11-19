@@ -7,6 +7,10 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$bootstrapScript = Join-Path $repoRoot 'eng\packages\bootstrap-external-kits.ps1'
+$externalKitNuGetConfig = Join-Path $repoRoot 'artifacts\external-kits\NuGet.Config'
+$bootstrapScriptOutput = & powershell -ExecutionPolicy Bypass -File $bootstrapScript
+if ($LASTEXITCODE -ne 0) { throw 'Pinned external package bootstrap failed.' }
 $pinPath = Join-Path $PSScriptRoot 'agent-state-daemon-pin.json'
 $pin = Get-Content $pinPath -Raw | ConvertFrom-Json
 if ($pin.commit -notmatch '^[0-9a-f]{40}$' -or
@@ -51,7 +55,7 @@ try {
     }
 
     $crossRepoProject = Join-Path $repoRoot 'tests\CodexSwitcher.AgentStateShadow.CrossRepoTests\CodexSwitcher.AgentStateShadow.CrossRepoTests.csproj'
-    & dotnet restore $crossRepoProject --locked-mode -p:Configuration=Release -p:NuGetAudit=false
+    & dotnet restore $crossRepoProject --configfile $externalKitNuGetConfig --locked-mode -p:Configuration=Release -p:NuGetAudit=false
     if ($LASTEXITCODE -ne 0) { throw 'Cross-repo test locked restore failed.' }
 
     $previousOptIn = $env:CODEX_CONTROL_CENTER_AGENT_STATE_SHADOW

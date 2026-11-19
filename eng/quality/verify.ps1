@@ -16,6 +16,8 @@ $GlobalJsonPath = Join-Path $RepoRoot "global.json"
 $DependencyAuditScript = Join-Path $RepoRoot "eng\quality\Invoke-DependencyAudit.ps1"
 $ProtocolVerifyScript = Join-Path $RepoRoot "eng\protocol\verify-agent-state-protocol.ps1"
 $BuildReleaseScript = Join-Path $RepoRoot "scripts\build-release.ps1"
+$ExternalKitBootstrapScript = Join-Path $RepoRoot "eng\packages\bootstrap-external-kits.ps1"
+$ExternalKitNuGetConfig = Join-Path $RepoRoot "artifacts\external-kits\NuGet.Config"
 
 Write-Host "====================================================================" -ForegroundColor Cyan
 Write-Host " Codex Switchboard - Repository-Wide Quality Gates Verification" -ForegroundColor Cyan
@@ -63,10 +65,14 @@ Run-Gate "SDK Toolchain Verification (global.json)" {
 
 # --- GATE 2: Locked Dependency Restore ---
 Run-Gate "Locked Dependency Restore (--locked-mode)" {
+    & powershell -ExecutionPolicy Bypass -File $ExternalKitBootstrapScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Pinned external package bootstrap failed with exit code $LASTEXITCODE."
+    }
     # Restore with the same configuration used by the release build. The app enables
     # PublishReadyToRun in Release, which requires the Crossgen2 runtime package to
     # be present before the subsequent --no-restore build runs in a clean CI cache.
-    & dotnet restore $SolutionPath --locked-mode -p:Configuration=Release -p:NuGetAudit=false
+    & dotnet restore $SolutionPath --configfile $ExternalKitNuGetConfig --locked-mode -p:Configuration=Release -p:NuGetAudit=false
     if ($LASTEXITCODE -ne 0) {
         throw "Locked restore failed with exit code $LASTEXITCODE."
     }

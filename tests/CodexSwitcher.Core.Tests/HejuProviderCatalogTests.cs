@@ -139,7 +139,7 @@ public sealed class HejuProviderCatalogTests
 
         Assert.False(response.Success);
         Assert.Equal(HttpStatusCode.Redirect, (HttpStatusCode)response.StatusCode);
-        Assert.Contains("untrusted host", response.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("trusted host allowlist", response.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, handler.RequestCount);
         Assert.Equal("www.hejuapi.com", handler.OnlyRequestedHost);
         Assert.DoesNotContain("synthetic-heju-secret", response.Error, StringComparison.Ordinal);

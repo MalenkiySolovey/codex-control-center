@@ -177,7 +177,7 @@ public sealed class DeclarativeProviderInspectorTests
         var snapshot = await inspector.InspectAsync(descriptor, "https://api.provider.test/v1", "test-key");
 
         Assert.NotNull(snapshot.Error);
-        Assert.Contains("Security violation", snapshot.Error);
+        Assert.Contains("Only GET and HEAD", snapshot.Error);
         Assert.Contains("POST", snapshot.Error);
         // Verify no request was actually sent
         Assert.Null(mock.LastRequest);
@@ -217,7 +217,7 @@ public sealed class DeclarativeProviderInspectorTests
         var snapshot = await inspector.InspectAsync(descriptor, "https://api.provider.test/v1", "sk-sensitive-token");
 
         Assert.NotNull(snapshot.Error);
-        Assert.Contains("Redirect to untrusted host", snapshot.Error);
+        Assert.Contains("trusted host allowlist", snapshot.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("blocked", snapshot.Error);
     }
 
@@ -269,7 +269,7 @@ public sealed class DeclarativeProviderInspectorTests
         var snapshot = await inspector.InspectAsync(descriptor, "https://api.provider.test/v1", "test-token");
 
         Assert.NotNull(snapshot.Error);
-        Assert.Contains("exceeded maximum allowed size", snapshot.Error);
+        Assert.Contains("size limit", snapshot.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -309,7 +309,7 @@ public sealed class DeclarativeProviderInspectorTests
         var snapshot = await inspector.InspectAsync(descriptor, "https://api.provider.test/v1", "test-token");
 
         Assert.NotNull(snapshot.Error);
-        Assert.Contains("Malformed JSON", snapshot.Error);
+        Assert.Contains("malformed JSON", snapshot.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -356,12 +356,9 @@ public sealed class DeclarativeProviderInspectorTests
             }
         };
 
-        var planner = new ProviderProbePlanner();
-        using var transport = new SafeProviderHttpTransport(new HttpClient(mock));
+        using var httpClient = new HttpClient(mock);
         using var inspector = new DeclarativeProviderInspector(
-            planner,
-            transport,
-            new ProviderProbeResponseMapper(),
+            httpClient,
             [new DocumentedGenericUsageStrategy()]);
 
         var snapshot = await inspector.InspectGenericUnknownAsync("https://custom-proxy.internal/v1", "sk-custom-key");

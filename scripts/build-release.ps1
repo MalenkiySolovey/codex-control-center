@@ -12,11 +12,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+$ExternalKitBootstrapScript = Join-Path $RepoRoot "eng\packages\bootstrap-external-kits.ps1"
+$ExternalKitNuGetConfig = Join-Path $RepoRoot "artifacts\external-kits\NuGet.Config"
+& powershell -ExecutionPolicy Bypass -File $ExternalKitBootstrapScript
+if ($LASTEXITCODE -ne 0) { throw "Pinned external package bootstrap failed." }
+
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
     throw "Version '$Version' is not a valid release version."
 }
 
-$RepoRoot = Split-Path -Parent $PSScriptRoot
 $DistDir = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     Join-Path $RepoRoot "dist"
 } else {
@@ -72,7 +77,7 @@ New-Item -Path $StagingDir -ItemType Directory -Force | Out-Null
 
 # 2. Restore and build solution
 Write-Host "[2/8] Restoring and building CodexSwitcher.slnx in Release mode..." -ForegroundColor Yellow
-dotnet restore "$RepoRoot\CodexSwitcher.slnx" --locked-mode -p:Configuration=Release -p:NuGetAudit=false
+dotnet restore "$RepoRoot\CodexSwitcher.slnx" --configfile $ExternalKitNuGetConfig --locked-mode -p:Configuration=Release -p:NuGetAudit=false
 if ($LASTEXITCODE -ne 0) { throw "Locked restore failed with exit code $LASTEXITCODE" }
 
 & powershell -ExecutionPolicy Bypass -File $DependencyAuditScript -SolutionPath "$RepoRoot\CodexSwitcher.slnx"

@@ -466,65 +466,22 @@ public sealed class ProviderCatalogLoader
 
     public static bool ValidateCatalogSemantics(ProviderCatalog catalog, out string? error)
     {
-        error = null;
-        if (catalog.Providers == null || catalog.Providers.Count == 0)
-        {
-            error = "Catalog contains no providers.";
-            return false;
-        }
-
-        foreach (var p in catalog.Providers)
-        {
-            if (!ValidateProviderDescriptor(p, out error))
-                return false;
-        }
-
-        return true;
+        ArgumentNullException.ThrowIfNull(catalog);
+        var json = JsonSerializer.SerializeToUtf8Bytes(catalog, SerializerOptions);
+        var validation = Llm.ProviderKit.Catalog.ProviderCatalogValidator.ParseAndValidate(json);
+        error = validation.Error;
+        return validation.IsValid;
     }
 
     public static bool ValidateProviderDescriptor(ProviderDescriptor p, out string? error)
     {
-        error = null;
-        if (string.IsNullOrWhiteSpace(p.Id))
-        {
-            error = "Provider ID cannot be empty.";
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(p.DisplayName))
-        {
-            error = $"Provider '{p.Id}' has empty display name.";
-            return false;
-        }
-
-        if (p.Match?.ExactHosts == null || p.Match.ExactHosts.Count == 0)
-        {
-            error = $"Provider '{p.Id}' must define at least one exactHost in match criteria.";
-            return false;
-        }
-
-        if (p.TrustedHosts == null || p.TrustedHosts.Count == 0)
-        {
-            error = $"Provider '{p.Id}' must define at least one trustedHost.";
-            return false;
-        }
-
-        if (p.Routes == null || p.Routes.Count == 0)
-        {
-            error = $"Provider '{p.Id}' must define at least one route.";
-            return false;
-        }
-
-        foreach (var route in p.Routes)
-        {
-            if (string.IsNullOrWhiteSpace(route.Id) || string.IsNullOrWhiteSpace(route.BaseUrl))
-            {
-                error = $"Provider '{p.Id}' has an invalid route with missing ID or BaseUrl.";
-                return false;
-            }
-        }
-
-        return true;
+        ArgumentNullException.ThrowIfNull(p);
+        var json = JsonSerializer.SerializeToUtf8Bytes(p, SerializerOptions);
+        var provider = JsonSerializer.Deserialize<Llm.ProviderKit.Catalog.ProviderDescriptor>(json, SerializerOptions);
+        error = provider is null
+            ? "Provider descriptor could not be mapped to ProviderKit."
+            : Llm.ProviderKit.Catalog.ProviderCatalogValidator.Validate(provider);
+        return error is null;
     }
 
     public static bool IsAppVersionTooOld(string? requiredMinVersion, string currentAppVersion)

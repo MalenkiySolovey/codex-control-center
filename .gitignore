@@ -19,6 +19,8 @@ scratch/
 *.snupkg
 .nuget/
 packages/
+!/eng/packages/
+!/eng/packages/**
 project.lock.json
 project.assets.json
 *.nuget.props
@@ -64,6 +66,10 @@ Desktop.ini
 $RECYCLE.BIN/
 *.log
 *.tmp
+
+# ---------- bootstrapped external source/packages ----------
+/artifacts/external-kits/
+/artifacts/local-packages/
 
 # ---------- App runtime data (never commit secrets) ----------
 # The encrypted vault lives in %LOCALAPPDATA%\CodexSwitcher, not in the repo,
