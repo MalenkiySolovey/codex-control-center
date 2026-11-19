@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot '..\packages\Use-IsolatedNuGetCache.ps1')
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $bootstrapScript = Join-Path $repoRoot 'eng\packages\bootstrap-external-kits.ps1'

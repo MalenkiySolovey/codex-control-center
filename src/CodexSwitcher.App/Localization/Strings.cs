@@ -699,6 +699,21 @@ public sealed class Strings
     public string ApiKeyKeepCurrentHint => S("Deixe em branco para manter a chave atual.", "Leave blank to keep the current key.");
     public string NameLabel => S("Nome / Rótulo", "Name / Label");
     public string ModelLabel => S("Modelo", "Model");
+    public string SelectingApiModel => S("Aplicando modelo…", "Applying model…");
+    public string SelectingApiModelFor(string provider) => S($"Aplicando modelo em {provider}…", $"Applying model on {provider}…");
+    public string NoSelectableApiModels => S("Nenhum modelo disponível", "No selectable models");
+    public string ModelUnavailable => S("indisponível", "unavailable");
+    public string ApiModelQuickSelectTooltip => S(
+        "Seleciona um modelo habilitado deste provedor. Em provedores inativos, isso só salva a seleção; no provedor ativo, atualiza a rota do Codex.",
+        "Selects an enabled model for this provider. For inactive providers this only saves the selection; for the active provider it updates the Codex route.");
+    public string ApiModelSelectedTitle => S("Modelo selecionado", "Model selected");
+    public string ApiModelSelectionFailedTitle => S("Falha ao selecionar modelo", "Model selection failed");
+    public string InactiveApiModelSelectedMessage(string model, string provider) => S(
+        $"O modelo '{model}' foi salvo em {provider}. A rota ativa do Codex não foi alterada.",
+        $"Model '{model}' was saved for {provider}. The active Codex route was not changed.");
+    public string ActiveApiModelSelectedMessage(string model, string provider) => S(
+        $"O modelo '{model}' está ativo em {provider}.",
+        $"Model '{model}' is now active on {provider}.");
     public string BaseUrlLabel => S("URL Base", "Base URL");
     public string SaveAndSwitch => S("Salvar e alternar", "Save and switch");
     public string SaveOnly => S("Salvar", "Save");

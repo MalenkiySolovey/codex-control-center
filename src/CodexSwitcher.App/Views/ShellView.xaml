@@ -1097,12 +1097,35 @@
                                             BorderThickness="1" CornerRadius="6" Padding="12,6">
                                         <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="16" VerticalAlignment="Center">
                                             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                                <TextBlock Text="Model:" FontSize="12" FontWeight="SemiBold" Opacity="0.7" />
-                                                <TextBlock Text="{x:Bind SelectedModel, Mode=OneWay}" FontSize="12" FontWeight="Medium" />
+                                                <TextBlock Text="{x:Bind ModelLabel}" FontSize="12" FontWeight="SemiBold" Opacity="0.7" />
+                                                <TextBlock Text="{x:Bind DisplayedSelectedModel, Mode=OneWay}"
+                                                           FontSize="12" FontWeight="Medium"
+                                                           Visibility="{x:Bind ShowDisplayedSelectedModel, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                                                <ComboBox ItemsSource="{x:Bind QuickSelectableModels, Mode=OneWay}"
+                                                          SelectedValuePath="Slug"
+                                                          SelectedValue="{x:Bind SelectedModel, Mode=OneWay}"
+                                                          SelectionChanged="OnApiProviderModelSelectionChanged"
+                                                          IsEnabled="{x:Bind CanSelectModel, Mode=OneWay}"
+                                                          MinWidth="190" MaxWidth="300" Height="32" Padding="8,0"
+                                                          Visibility="{x:Bind HasSelectableModels, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                                                          ToolTipService.ToolTip="{x:Bind ModelSelectionTooltip}">
+                                                    <ComboBox.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:ApiProviderQuickModelChoice">
+                                                            <TextBlock Text="{x:Bind DisplayText}"
+                                                                       ToolTipService.ToolTip="{x:Bind Slug}" />
+                                                        </DataTemplate>
+                                                    </ComboBox.ItemTemplate>
+                                                </ComboBox>
                                             </StackPanel>
 
                                             <!-- Refresh models button or model status -->
                                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                                <ProgressRing IsActive="{x:Bind IsSelectingModel, Mode=OneWay}"
+                                                              IsIndeterminate="True" Width="14" Height="14"
+                                                              Visibility="{x:Bind IsSelectingModel, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                                                <TextBlock Text="{x:Bind ModelSelectionProgressLabel}"
+                                                           FontSize="11" Opacity="0.8" VerticalAlignment="Center"
+                                                           Visibility="{x:Bind IsSelectingModel, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
                                                 <Button Click="OnDiscoverModelsClick"
                                                         IsEnabled="{x:Bind HasSecret}"
                                                         ToolTipService.ToolTip="Models reported by this API via GET /models. No inference request / does not consume model inference tokens."

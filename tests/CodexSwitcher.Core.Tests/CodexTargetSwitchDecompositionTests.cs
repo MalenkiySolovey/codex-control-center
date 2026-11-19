@@ -40,7 +40,7 @@ public sealed class CodexTargetSwitchDecompositionTests
         public CodexTargetSwitchService Facade { get; }
         public List<ProfileMetadata> ChatGptProfiles => Registry.Profiles.ToList();
 
-        public DecompositionTestEnv()
+        public DecompositionTestEnv(bool allowGlobalProcessControl = false)
         {
             Fs = new FaultInjectingFileSystem(new PhysicalFileSystem());
             var brokerExe = TestKeyBrokerLocator.FindKeyBrokerBinary();
@@ -60,7 +60,17 @@ public sealed class CodexTargetSwitchDecompositionTests
 
             ChatGptSwitch = new SwitchService(Vault, Registry, Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
             PlanBuilder = new SwitchPlanBuilder(ApiStore, SecretStore, BrokerInstaller, RoutingStore, Paths.Codex);
-            Executor = new SwitchTransactionExecutor(ChatGptSwitch, RoutingStore, ApiStore, Proc, Fs, Clock, Audit, Paths.Codex, modelCatalogService: CatalogService);
+            Executor = new SwitchTransactionExecutor(
+                ChatGptSwitch,
+                RoutingStore,
+                ApiStore,
+                Proc,
+                Fs,
+                Clock,
+                Audit,
+                Paths.Codex,
+                modelCatalogService: CatalogService,
+                allowGlobalProcessControlOverride: allowGlobalProcessControl);
             Facade = new CodexTargetSwitchService(PlanBuilder, Executor);
         }
 
@@ -281,7 +291,7 @@ public sealed class CodexTargetSwitchDecompositionTests
     }
 
     [Fact]
-    public async Task SwitchToApiProvider_WhenCatalogIntroduced_ForcesProcessRestartEvenWithDoNothingMode()
+    public async Task SwitchToApiProvider_WhenCatalogIntroducedWithIsolatedHome_LeavesGlobalCodexProcessesRunning()
     {
         using var env = new DecompositionTestEnv();
         var auth = "{\"auth_mode\":\"chatgpt\"}"u8.ToArray();
@@ -309,8 +319,9 @@ public sealed class CodexTargetSwitchDecompositionTests
         var result = await env.Facade.SwitchToApiProviderAsync(id, DoNothingOpts);
 
         Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
-        Assert.True(env.Proc.CloseCalled, "Running process must be closed when model catalog is introduced.");
-        Assert.Contains(env.Proc.Relaunched, p => p.Pid == 101);
+        Assert.False(env.Proc.CloseCalled, "An isolated Codex home must not close processes discovered globally in the Windows session.");
+        Assert.Contains(runningApp, env.Proc.Running);
+        Assert.Empty(env.Proc.Relaunched);
 
         var finalRouting = env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath);
         Assert.NotNull(finalRouting.ModelCatalogJson);
@@ -324,7 +335,7 @@ public sealed class CodexTargetSwitchDecompositionTests
     }
 
     [Fact]
-    public async Task SwitchToApiProvider_WhenCatalogChangedBetweenModels_ForcesProcessRestartAndUpdatesMetadata()
+    public async Task SwitchToApiProvider_WhenCatalogChangedBetweenModelsWithIsolatedHome_LeavesGlobalCodexProcessesRunning()
     {
         using var env = new DecompositionTestEnv();
         var auth = "{\"auth_mode\":\"chatgpt\"}"u8.ToArray();
@@ -370,8 +381,9 @@ public sealed class CodexTargetSwitchDecompositionTests
         var result = await env.Facade.SwitchToApiProviderAsync(id420, DoNothingOpts);
 
         Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
-        Assert.True(env.Proc.CloseCalled, "Running process must be closed when model catalog path/content changes.");
-        Assert.Contains(env.Proc.Relaunched, p => p.Pid == 202);
+        Assert.False(env.Proc.CloseCalled, "An isolated Codex home must not close processes discovered globally in the Windows session.");
+        Assert.Contains(runningApp, env.Proc.Running);
+        Assert.Empty(env.Proc.Relaunched);
 
         var finalRouting = env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath);
         Assert.NotNull(finalRouting.ModelCatalogJson);
@@ -386,7 +398,7 @@ public sealed class CodexTargetSwitchDecompositionTests
     [Fact]
     public async Task SwitchToChatGpt_WhenReturningFromCatalogProvider_ForcesProcessRestartAndRemovesCatalog()
     {
-        using var env = new DecompositionTestEnv();
+        using var env = new DecompositionTestEnv(allowGlobalProcessControl: true);
         var aBytes = Sample.AuthJson(accountId: "acct_chatgpt");
         var chatGptProfile = env.AddChatGptProfile("ChatGPT Main", aBytes, active: true);
         env.SetActiveSlot(aBytes);
@@ -466,7 +478,7 @@ public sealed class CodexTargetSwitchDecompositionTests
     }
 
     [Fact]
-    public async Task SwitchToApiProvider_WhenCliRemnantDetected_AbortsAndRestoresConfiguration()
+    public async Task SwitchToApiProvider_WithIsolatedHome_DoesNotInspectOrCloseGlobalProcessRemnants()
     {
         using var env = new DecompositionTestEnv();
         var auth = "{\"auth_mode\":\"chatgpt\"}"u8.ToArray();
@@ -476,7 +488,7 @@ public sealed class CodexTargetSwitchDecompositionTests
 
         var runningApp = new CodexProcessInfo(505, "Codex", @"C:\Apps\Codex\Codex.exe", null, CodexProcessKind.DesktopApp);
         env.Proc.Running = [runningApp];
-        env.Proc.RemnantAfterClose = true; // Simulates CLI remnant refusing to die
+        env.Proc.RemnantAfterClose = true; // Would be relevant only if this transaction owned the process scope.
 
         var id = Guid.NewGuid();
         var profile = new ApiProviderProfile
@@ -494,8 +506,10 @@ public sealed class CodexTargetSwitchDecompositionTests
 
         var result = await env.Facade.SwitchToApiProviderAsync(id, DoNothingOpts);
 
-        Assert.Equal(TargetSwitchOutcome.AbortedProcessRemnant, result.Outcome);
-        Assert.Equal(originalConfig, File.ReadAllText(env.Paths.Codex.ConfigTomlPath));
-        Assert.Contains(env.Proc.Relaunched, p => p.Pid == 505);
+        Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
+        Assert.NotEqual(originalConfig, File.ReadAllText(env.Paths.Codex.ConfigTomlPath));
+        Assert.False(env.Proc.CloseCalled);
+        Assert.Contains(runningApp, env.Proc.Running);
+        Assert.Empty(env.Proc.Relaunched);
     }
 }

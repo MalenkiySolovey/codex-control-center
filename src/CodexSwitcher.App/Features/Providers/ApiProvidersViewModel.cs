@@ -469,8 +469,21 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
     [RelayCommand]
     public async Task EditApiProviderAsync(ApiProviderItemViewModel? item)
     {
-        if (item is null) return;
+        if (item is null || item.IsSelectingModel || item.IsEditingProvider) return;
 
+        item.IsEditingProvider = true;
+        try
+        {
+            await EditApiProviderCoreAsync(item);
+        }
+        finally
+        {
+            item.IsEditingProvider = false;
+        }
+    }
+
+    private async Task EditApiProviderCoreAsync(ApiProviderItemViewModel item)
+    {
         var previousProfile = CloneProviderProfile(item.Profile);
         var result = await _ui.PromptEditApiProviderAsync(item.Profile, item.Descriptor);
         if (result is null) return;
@@ -808,6 +821,81 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         });
 
         TargetStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    public async Task SelectModelAsync(ApiProviderModelSelectionRequest? request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.ModelSlug)) return;
+
+        var item = request.Item;
+        if (item.IsSelectingModel || item.IsEditingProvider) return;
+
+        item.IsSelectingModel = true;
+        ApiProviderModelSelectionResult? result = null;
+        try
+        {
+            await RunBusyAsync(Loc.SelectingApiModelFor(item.DisplayName), async () =>
+            {
+                result = await _modelRefreshService.SelectModelAsync(
+                    item.Id,
+                    request.ModelSlug,
+                    SwitchExecutionOptions.From(_settings),
+                    _cts.Token);
+            });
+
+            if (result is null) return;
+
+            if (result.Outcome == ApiProviderModelSelectionOutcome.Superseded ||
+                result.Outcome == ApiProviderModelSelectionOutcome.NoOp)
+            {
+                return;
+            }
+
+            if (result.Outcome == ApiProviderModelSelectionOutcome.Selected)
+            {
+                var warning = result.SwitchResult?.Outcome == TargetSwitchOutcome.SuccessWithReopenWarning;
+                var message = result.WasActiveTarget
+                    ? Loc.ActiveApiModelSelectedMessage(request.ModelSlug, item.DisplayName)
+                    : Loc.InactiveApiModelSelectedMessage(request.ModelSlug, item.DisplayName);
+                if (warning && !string.IsNullOrWhiteSpace(result.Message))
+                {
+                    message += $"\n{result.Message}";
+                }
+
+                ShowInfo(Loc.ApiModelSelectedTitle, message, warning ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
+            }
+            else
+            {
+                ShowInfo(
+                    Loc.ApiModelSelectionFailedTitle,
+                    string.IsNullOrWhiteSpace(result.Message) ? Loc.ModelRefreshFailedMessage : result.Message,
+                    result.Persisted ? InfoBarSeverity.Warning : InfoBarSeverity.Error);
+            }
+        }
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+        {
+            // Application shutdown cancels outstanding provider operations.
+        }
+        catch
+        {
+            ShowInfo(Loc.ApiModelSelectionFailedTitle, Loc.ModelRefreshFailedMessage, InfoBarSeverity.Error);
+        }
+        finally
+        {
+            if (_apiProviderStore.GetById(item.Id) is { } persisted)
+            {
+                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive);
+            }
+
+            item.IsSelectingModel = false;
+            ApplySearchFilter();
+            // Active model selection can rewrite config.toml through the
+            // routing transaction. Refresh the shared routing summary after
+            // both success and rollback so the toolbar and launch profiles
+            // reflect the authoritative config immediately.
+            TargetStateChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     [RelayCommand]

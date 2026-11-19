@@ -17,6 +17,14 @@ public interface ISwitchPlanBuilder
     CodexSwitchPlan BuildApiProviderPlan(Guid apiProfileId, SwitchExecutionOptions options);
 
     /// <summary>
+    /// Builds a serialized selection plan for an exact enabled model in an API provider.
+    /// </summary>
+    CodexSwitchPlan BuildApiProviderModelSelectionPlan(
+        Guid apiProfileId,
+        string modelSlug,
+        SwitchExecutionOptions options);
+
+    /// <summary>
     /// Builds a plan to switch to a ChatGPT profile or toggle routing back to OpenAI.
     /// </summary>
     CodexSwitchPlan BuildChatGptPlan(Guid? targetProfileId, List<ProfileMetadata> allChatGptProfiles, SwitchExecutionOptions options);

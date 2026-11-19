@@ -3,6 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'Use-IsolatedNuGetCache.ps1')
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $pinPath = Join-Path $PSScriptRoot 'external-kits.json'
@@ -32,6 +33,14 @@ Get-ChildItem -LiteralPath $feedRoot -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in '.nupkg', '.snupkg' } |
     Remove-Item -Force
 
+Push-Location $repoRoot
+try {
+$expectedSdk = (Get-Content -LiteralPath (Join-Path $repoRoot 'global.json') -Raw | ConvertFrom-Json).sdk.version
+$actualSdk = (& dotnet --version).Trim()
+if ($LASTEXITCODE -ne 0 -or $actualSdk -cne $expectedSdk) {
+    throw "External packages require the pinned .NET SDK $expectedSdk; found '$actualSdk'."
+}
+
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 foreach ($kit in $pins.kits) {
     if ($kit.commit -notmatch '^[0-9a-f]{40}$' -or
@@ -57,12 +66,27 @@ foreach ($kit in $pins.kits) {
 
     $project = Join-Path $checkout ($kit.project -replace '/', '\')
     if (-not (Test-Path -LiteralPath $project -PathType Leaf)) { throw "Package project is missing for $($kit.name)." }
+    Assert-WithinRoot $checkout $sourceRoot
+    $projectDirectory = Split-Path -Parent $project
+    foreach ($outputName in @('bin', 'obj')) {
+        $buildOutput = Join-Path $projectDirectory $outputName
+        if (Test-Path -LiteralPath $buildOutput) {
+            $outputItem = Get-Item -LiteralPath $buildOutput -Force
+            if (($outputItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Refusing to clean reparse-point build output for $($kit.name)."
+            }
+            Assert-WithinRoot $buildOutput $checkout
+            Remove-Item -LiteralPath $buildOutput -Recurse -Force
+        }
+    }
     $packArgs = @(
         $project,
         '--configuration', 'Release',
         '--output', $feedRoot,
         "-p:PackageVersion=$($kit.version)",
-        '-p:ContinuousIntegrationBuild=true'
+        '-p:ContinuousIntegrationBuild=true',
+        '-p:Deterministic=true',
+        '-p:DeterministicTimestamp=2020-01-01T00:00:00Z'
     )
     & dotnet pack @packArgs
     if ($LASTEXITCODE -ne 0) { throw "Package build failed for $($kit.name)." }
@@ -97,3 +121,7 @@ $configText = @"
 Set-Content -LiteralPath $nugetConfig -Value $configText -Encoding utf8
 Write-Host "LOCAL_NUGET_FEED=$feedRoot"
 Write-Host "NUGET_CONFIG=$nugetConfig"
+}
+finally {
+    Pop-Location
+}

@@ -79,6 +79,90 @@ public sealed class SwitchPlanBuilder : ISwitchPlanBuilder
         return new ApiProviderSwitchPlan(targetProfile, brokerPath, options, toolPolicy);
     }
 
+    public CodexSwitchPlan BuildApiProviderModelSelectionPlan(
+        Guid apiProfileId,
+        string modelSlug,
+        SwitchExecutionOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.IsNullOrWhiteSpace(modelSlug))
+        {
+            return new InvalidSwitchPlan(
+                new ActiveTarget.Unknown(),
+                ErrorCategory.Unknown,
+                "Select an enabled API model.");
+        }
+
+        var profile = _apiProviderStore.GetById(apiProfileId);
+        if (profile is null)
+        {
+            return new InvalidSwitchPlan(
+                new ActiveTarget.Unknown(),
+                ErrorCategory.Unknown,
+                $"API provider profile {apiProfileId} not found.");
+        }
+
+        if (!IsSelectableModel(profile, modelSlug))
+        {
+            return InvalidModelSelection(profile, modelSlug);
+        }
+
+        var routing = _routingConfig.ReadRoutingState(_paths.ConfigTomlPath);
+        var isActiveTarget = string.Equals(
+            routing.ModelProvider,
+            profile.StableCodexProviderId,
+            StringComparison.OrdinalIgnoreCase);
+        var previousSelectedModel = profile.GetEffectiveSelectedModel();
+        var isNoOp = string.Equals(previousSelectedModel, modelSlug, StringComparison.Ordinal) &&
+            (!isActiveTarget || string.Equals(routing.Model, modelSlug, StringComparison.Ordinal));
+
+        if (!isActiveTarget || isNoOp)
+        {
+            return new ApiProviderModelSelectionPlan(
+                profile,
+                modelSlug,
+                previousSelectedModel,
+                isActiveTarget,
+                isNoOp);
+        }
+
+        // Build the existing active-provider transaction while the target
+        // switch service owns its serialization lock. The selection is applied
+        // by the transaction executor only after plan validation succeeds.
+        var activePlan = BuildApiProviderPlan(apiProfileId, options);
+        if (activePlan is not ApiProviderSwitchPlan activeSwitchPlan)
+        {
+            return activePlan;
+        }
+
+        profile = activeSwitchPlan.TargetProfile;
+        if (!IsSelectableModel(profile, modelSlug))
+        {
+            return InvalidModelSelection(profile, modelSlug);
+        }
+
+        return new ApiProviderModelSelectionPlan(
+            profile,
+            modelSlug,
+            profile.GetEffectiveSelectedModel(),
+            IsActiveTarget: true,
+            IsNoOp: false,
+            ActiveSwitchPlan: activeSwitchPlan);
+    }
+
+    private static bool IsSelectableModel(ApiProviderProfile profile, string modelSlug) =>
+        profile.ModelInventory?.Models.Any(model =>
+            string.Equals(model.Slug, modelSlug, StringComparison.Ordinal) &&
+            model.Enabled &&
+            model.Availability != ModelAvailability.NotReported) == true;
+
+    private static InvalidSwitchPlan InvalidModelSelection(ApiProviderProfile profile, string modelSlug) =>
+        new(
+            new ActiveTarget.Api(profile),
+            ErrorCategory.Unknown,
+            $"Model '{modelSlug}' is not enabled and available for this API provider.");
+
     private static RouteCapabilities DeriveRouteCapabilities(ApiProviderProfile targetProfile)
     {
         if (targetProfile.LastProbeReport is { } report)

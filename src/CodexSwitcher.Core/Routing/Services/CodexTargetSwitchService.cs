@@ -117,6 +117,27 @@ public sealed class CodexTargetSwitchService : ICodexTargetSwitchService, IDispo
         }
     }
 
+    public async Task<TargetSwitchResult> SelectApiProviderModelAsync(
+        Guid apiProfileId,
+        string modelSlug,
+        SwitchExecutionOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelSlug);
+        ArgumentNullException.ThrowIfNull(options);
+
+        await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var plan = _planBuilder.BuildApiProviderModelSelectionPlan(apiProfileId, modelSlug, options);
+            return await _executor.ExecuteAsync(plan, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task<TargetSwitchResult> SwitchToChatGptAsync(
         Guid? targetChatGptProfileId,
         List<ProfileMetadata> allChatGptProfiles,

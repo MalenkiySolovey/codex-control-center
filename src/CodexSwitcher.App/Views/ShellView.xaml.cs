@@ -505,6 +505,24 @@ public sealed partial class ShellView : UserControl
         if (ApiItemOf(sender) is { } item) ViewModel.ApiProviders.DiscoverModelsCommand.Execute(item);
     }
 
+    private void OnApiProviderModelSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is not ComboBox combo ||
+            ApiItemOf(sender) is not { } item ||
+            combo.SelectedItem is not ApiProviderQuickModelChoice choice ||
+            string.Equals(choice.Slug, item.SelectedModel, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // Keep the authoritative persisted selection visible until the async
+        // operation succeeds. The OneWay binding will project the new slug
+        // from the refreshed profile after persistence/runtime verification.
+        combo.SelectedValue = item.SelectedModel;
+        ViewModel.ApiProviders.SelectModelCommand.Execute(
+            new ApiProviderModelSelectionRequest(item, choice.Slug));
+    }
+
     private void QueueProviderMenuAction(object sender, Action<ApiProviderItemViewModel> action)
     {
         if (ApiItemOf(sender) is not { } item)

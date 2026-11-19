@@ -35,6 +35,7 @@ public sealed class FakeProcessManager : IProcessManager
     public bool RemnantAfterClose { get; set; }
     public bool ThrowOnRelaunch { get; set; }
     public bool CloseCalled { get; set; }
+    public int FindRunningCalls { get; private set; }
     public bool CloseDesktopGracefullyResult { get; set; } = true;
     public bool TryLaunchDesktopCalled { get; set; }
     public bool TryLaunchDesktopResult { get; set; } = true;
@@ -47,6 +48,7 @@ public sealed class FakeProcessManager : IProcessManager
     public void Reset()
     {
         CloseCalled = false;
+        FindRunningCalls = 0;
         _closed = false;
         TryLaunchDesktopCalled = false;
         TryOpenThreadDeepLinkCalled = false;
@@ -55,7 +57,11 @@ public sealed class FakeProcessManager : IProcessManager
         Running.Clear();
     }
 
-    public IReadOnlyList<CodexProcessInfo> FindRunningCodexProcesses() => Running;
+    public IReadOnlyList<CodexProcessInfo> FindRunningCodexProcesses()
+    {
+        FindRunningCalls++;
+        return Running;
+    }
 
     public bool AnyCodexCliRunning() =>
         _closed ? RemnantAfterClose : Running.Any(p => p.Kind == CodexProcessKind.Cli);

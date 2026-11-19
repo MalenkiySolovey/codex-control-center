@@ -44,11 +44,12 @@ public sealed class ApiProviderSwitchingRegressionTests
         public KeyBrokerInstaller BrokerInstaller { get; }
         public CodexModelCatalogService CatalogService { get; }
         public SwitchService ChatGptSwitch { get; }
+        public RecordingRuntimeModelCatalogVerifier RuntimeVerifier { get; } = new();
         public SwitchPlanBuilder PlanBuilder { get; }
         public SwitchTransactionExecutor Executor { get; }
         public CodexTargetSwitchService Facade { get; }
 
-        public TestEnvironment()
+        public TestEnvironment(bool includeRuntimeVerifier = true)
         {
             Fs = new FaultInjectingFileSystem(new PhysicalFileSystem());
             var brokerExe = TestKeyBrokerLocator.FindKeyBrokerBinary();
@@ -67,7 +68,17 @@ public sealed class ApiProviderSwitchingRegressionTests
 
             ChatGptSwitch = new SwitchService(Vault, TestAccountRegistry.CreateLoaded(ProfileStore, Clock, Audit), Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
             PlanBuilder = new SwitchPlanBuilder(ApiStore, SecretStore, BrokerInstaller, RoutingStore, Paths.Codex);
-            Executor = new SwitchTransactionExecutor(ChatGptSwitch, RoutingStore, ApiStore, Proc, Fs, Clock, Audit, Paths.Codex, modelCatalogService: CatalogService);
+            Executor = new SwitchTransactionExecutor(
+                ChatGptSwitch,
+                RoutingStore,
+                ApiStore,
+                Proc,
+                Fs,
+                Clock,
+                Audit,
+                Paths.Codex,
+                modelCatalogService: CatalogService,
+                runtimeModelCatalogVerifier: includeRuntimeVerifier ? RuntimeVerifier : null);
             Facade = new CodexTargetSwitchService(PlanBuilder, Executor);
         }
 
@@ -82,6 +93,283 @@ public sealed class ApiProviderSwitchingRegressionTests
 
     private static SwitchExecutionOptions DefaultOpts =>
         new(CloseReopenMode.DoNothing, TimeSpan.FromSeconds(1), BackupsToKeep: 10);
+
+    private sealed class RecordingRuntimeModelCatalogVerifier : ICodexRuntimeModelCatalogVerifier
+    {
+        public int VerificationCalls { get; private set; }
+        public bool Succeed { get; set; } = true;
+        public string? LastExpectedProvider { get; private set; }
+        public string? LastExpectedModel { get; private set; }
+        public IReadOnlyCollection<string> LastExpectedModels { get; private set; } = [];
+        public TaskCompletionSource<bool>? VerificationEntered { get; set; }
+        public TaskCompletionSource<bool>? ContinueVerification { get; set; }
+
+        public async Task<CodexRuntimeModelCatalogVerification> VerifyAsync(
+            string expectedProvider,
+            string expectedSelectedModel,
+            IReadOnlyCollection<string> expectedEnabledModels,
+            CancellationToken cancellationToken = default)
+        {
+            VerificationCalls++;
+            LastExpectedProvider = expectedProvider;
+            LastExpectedModel = expectedSelectedModel;
+            LastExpectedModels = expectedEnabledModels.ToArray();
+            if (VerificationEntered is not null && ContinueVerification is not null)
+            {
+                VerificationEntered.TrySetResult(true);
+                await ContinueVerification.Task.ConfigureAwait(false);
+            }
+
+            return new CodexRuntimeModelCatalogVerification(
+                Succeed,
+                expectedEnabledModels.ToArray(),
+                Succeed ? null : "Injected model/list verification failure.");
+        }
+
+        public Task<CodexRuntimeModelCatalogVerification> VerifyAtHomeAsync(
+            string codexHome,
+            string expectedProvider,
+            string expectedSelectedModel,
+            IReadOnlyCollection<string> expectedEnabledModels,
+            CancellationToken cancellationToken = default) =>
+            VerifyAsync(expectedProvider, expectedSelectedModel, expectedEnabledModels, cancellationToken);
+    }
+
+    private static ApiProviderProfile CreateSelectableProfile()
+    {
+        var id = Guid.NewGuid();
+        return new ApiProviderProfile
+        {
+            Id = id,
+            EndpointId = Guid.NewGuid(),
+            CatalogProviderId = "xai",
+            StableCodexProviderId = ApiProviderProfile.GenerateStableCodexProviderId(id),
+            Nickname = "Quick model test",
+            BaseUrl = "https://api.example.test/v1",
+            SelectedModel = "model-a",
+            ModelInventory = new ApiProviderModelInventory
+            {
+                SelectedModel = "model-a",
+                Models =
+                [
+                    new ApiProviderModelItem { Slug = "model-a", Enabled = true, Availability = ModelAvailability.Reported },
+                    new ApiProviderModelItem { Slug = "model-b", Enabled = true, Availability = ModelAvailability.Reported },
+                    new ApiProviderModelItem { Slug = "model-b:free", Enabled = true, Availability = ModelAvailability.Unknown, DiscoverySource = ModelDiscoverySource.Manual },
+                    new ApiProviderModelItem { Slug = "model-disabled", Enabled = false, Availability = ModelAvailability.Reported },
+                    new ApiProviderModelItem { Slug = "model-stale", Enabled = true, Availability = ModelAvailability.NotReported },
+                ],
+            },
+        };
+    }
+
+    [Fact]
+    public async Task QuickModelSelection_InactiveProviderPersistsExactSlugWithoutChangingActiveConfiguration()
+    {
+        using var env = new TestEnvironment();
+        env.SetInitialConfig("openai", "gpt-5.6-sol");
+        var profile = CreateSelectableProfile();
+        env.ApiStore.Save(profile);
+        var originalConfig = env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath);
+        var originalRouting = env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath);
+
+        var result = await env.Facade.SelectApiProviderModelAsync(profile.Id, "model-b:free", DefaultOpts);
+
+        Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
+        Assert.False(result.ModelSelectionWasActiveTarget);
+        var persisted = env.ApiStore.GetById(profile.Id)!;
+        Assert.Equal("model-b:free", persisted.ModelInventory!.SelectedModel);
+        Assert.Equal("model-b:free", persisted.GetEffectiveSelectedModel());
+        Assert.Equal(originalConfig, env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath));
+        var routingAfter = env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath);
+        Assert.Equal(originalRouting.ModelProvider, routingAfter.ModelProvider);
+        Assert.Equal(originalRouting.Model, routingAfter.Model);
+        Assert.Equal(0, env.RuntimeVerifier.VerificationCalls);
+        Assert.Equal(profile.Id, env.ApiStore.GetAll().Single().Id);
+    }
+
+    [Fact]
+    public async Task QuickModelSelection_ActiveProviderAppliesExactModelAndVerifiesRuntime()
+    {
+        using var env = new TestEnvironment();
+        env.SetInitialConfig("openai", "gpt-5.6-sol");
+        var profile = CreateSelectableProfile();
+        env.ApiStore.Save(profile);
+        env.SecretStore.SaveApiKey(profile.EndpointId!.Value, "synthetic-test-key");
+        var activated = await env.Facade.SwitchToApiProviderAsync(profile.Id, DefaultOpts);
+        Assert.Equal(TargetSwitchOutcome.Success, activated.Outcome);
+        var endpointId = env.ApiStore.GetById(profile.Id)!.EndpointId;
+        var verificationCountBeforeSelection = env.RuntimeVerifier.VerificationCalls;
+
+        var result = await env.Facade.SelectApiProviderModelAsync(profile.Id, "model-b:free", DefaultOpts);
+
+        Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
+        Assert.True(result.ModelSelectionWasActiveTarget);
+        Assert.NotNull(result.DiagnosticTrace);
+        Assert.True(result.DiagnosticTrace!.ActiveModelListVerified);
+        Assert.Equal(profile.StableCodexProviderId, env.RuntimeVerifier.LastExpectedProvider);
+        Assert.Equal("model-b:free", env.RuntimeVerifier.LastExpectedModel);
+        Assert.Collection(
+            env.RuntimeVerifier.LastExpectedModels.OrderBy(model => model, StringComparer.Ordinal),
+            model => Assert.Equal("model-a", model),
+            model => Assert.Equal("model-b", model),
+            model => Assert.Equal("model-b:free", model),
+            model => Assert.Equal("model-stale", model));
+        Assert.True(env.RuntimeVerifier.VerificationCalls > verificationCountBeforeSelection);
+        Assert.Contains("model = \"model-b:free\"", env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath), StringComparison.Ordinal);
+        var activeRouting = env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath);
+        Assert.Equal(profile.StableCodexProviderId, activeRouting.ModelProvider);
+        Assert.Equal("model-b:free", activeRouting.Model);
+        Assert.False(string.IsNullOrWhiteSpace(activeRouting.ModelCatalogJson));
+        Assert.True(File.Exists(activeRouting.ModelCatalogJson));
+        Assert.Contains("model-b:free", File.ReadAllText(activeRouting.ModelCatalogJson!), StringComparison.Ordinal);
+        var persisted = env.ApiStore.GetById(profile.Id)!;
+        Assert.Equal("model-b:free", persisted.ModelInventory!.SelectedModel);
+        Assert.Equal("model-b:free", persisted.GetEffectiveSelectedModel());
+        Assert.Equal(endpointId, persisted.EndpointId);
+        Assert.True(env.SecretStore.HasApiKey(endpointId!.Value));
+        Assert.Single(env.ApiStore.GetAll());
+    }
+
+    [Fact]
+    public async Task QuickModelSelection_WithIsolatedCodexHomeLeavesUnrelatedCodexProcessesRunning()
+    {
+        using var env = new TestEnvironment();
+        env.SetInitialConfig("openai", "gpt-5.6-sol");
+        var profile = CreateSelectableProfile();
+        env.ApiStore.Save(profile);
+        env.SecretStore.SaveApiKey(profile.EndpointId!.Value, "synthetic-test-key");
+        var unrelatedCodex = new CodexProcessInfo(
+            4242,
+            "ChatGPT",
+            @"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__test\app\ChatGPT.exe",
+            null,
+            CodexProcessKind.DesktopApp);
+        env.Proc.Running.Add(unrelatedCodex);
+
+        Assert.Equal(TargetSwitchOutcome.Success, (await env.Facade.SwitchToApiProviderAsync(profile.Id, DefaultOpts)).Outcome);
+
+        var result = await env.Facade.SelectApiProviderModelAsync(profile.Id, "model-b", DefaultOpts);
+
+        Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
+        Assert.True(result.ModelSelectionWasActiveTarget);
+        Assert.Equal(0, env.Proc.FindRunningCalls);
+        Assert.False(env.Proc.CloseCalled);
+        Assert.Single(env.Proc.Running);
+        Assert.Equal(unrelatedCodex, env.Proc.Running[0]);
+        Assert.Equal("model-b", env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath).Model);
+        Assert.True(env.RuntimeVerifier.VerificationCalls > 0);
+    }
+
+    [Fact]
+    public async Task QuickModelSelection_SameActiveModelIsNoOpWithoutRuntimeVerification()
+    {
+        using var env = new TestEnvironment();
+        env.SetInitialConfig("openai", "gpt-5.6-sol");
+        var profile = CreateSelectableProfile();
+        env.ApiStore.Save(profile);
+        env.SecretStore.SaveApiKey(profile.EndpointId!.Value, "synthetic-test-key");
+        Assert.Equal(TargetSwitchOutcome.Success, (await env.Facade.SwitchToApiProviderAsync(profile.Id, DefaultOpts)).Outcome);
+        var originalConfig = env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath);
+        var verificationCalls = env.RuntimeVerifier.VerificationCalls;
+
+        var result = await env.Facade.SelectApiProviderModelAsync(profile.Id, "model-a", DefaultOpts);
+
+        Assert.Equal(TargetSwitchOutcome.NoOp, result.Outcome);
+        Assert.True(result.ModelSelectionWasActiveTarget);
+        Assert.Equal(verificationCalls, env.RuntimeVerifier.VerificationCalls);
+        Assert.Equal(originalConfig, env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath));
+    }
+
+    [Fact]
+    public async Task QuickModelSelection_RuntimeVerificationFailureRestoresPersistedModelAndRouting()
+    {
+        using var env = new TestEnvironment();
+        env.SetInitialConfig("openai", "gpt-5.6-sol");
+        var profile = CreateSelectableProfile();
+        env.ApiStore.Save(profile);
+        env.SecretStore.SaveApiKey(profile.EndpointId!.Value, "synthetic-test-key");
+        Assert.Equal(TargetSwitchOutcome.Success, (await env.Facade.SwitchToApiProviderAsync(profile.Id, DefaultOpts)).Outcome);
+        var originalConfig = env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath);
+        env.RuntimeVerifier.Succeed = false;
+
+        var result = await env.Facade.SelectApiProviderModelAsync(profile.Id, "model-b", DefaultOpts);
+
+        Assert.Equal(TargetSwitchOutcome.RolledBack, result.Outcome);
+        Assert.True(result.ModelSelectionWasActiveTarget);
+        var persisted = env.ApiStore.GetById(profile.Id)!;
+        Assert.Equal("model-a", persisted.ModelInventory!.SelectedModel);
+        Assert.Equal("model-a", persisted.GetEffectiveSelectedModel());
+        Assert.Equal(originalConfig, env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath));
+        Assert.Equal("model-a", env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath).Model);
+    }
+
+    [Fact]
+    public async Task QuickModelSelection_WithoutRuntimeVerifierFailsBeforeMutatingActiveSelection()
+    {
+        using var env = new TestEnvironment(includeRuntimeVerifier: false);
+        env.SetInitialConfig("openai", "gpt-5.6-sol");
+        var profile = CreateSelectableProfile();
+        env.ApiStore.Save(profile);
+        env.SecretStore.SaveApiKey(profile.EndpointId!.Value, "synthetic-test-key");
+        Assert.Equal(TargetSwitchOutcome.Success, (await env.Facade.SwitchToApiProviderAsync(profile.Id, DefaultOpts)).Outcome);
+        var originalConfig = env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath);
+
+        var result = await env.Facade.SelectApiProviderModelAsync(profile.Id, "model-b", DefaultOpts);
+
+        Assert.Equal(TargetSwitchOutcome.Failed, result.Outcome);
+        Assert.True(result.ModelSelectionWasActiveTarget);
+        Assert.Equal("model-a", env.ApiStore.GetById(profile.Id)!.GetEffectiveSelectedModel());
+        Assert.Equal(originalConfig, env.Fs.ReadAllText(env.Paths.Codex.ConfigTomlPath));
+    }
+
+    [Fact]
+    public async Task QuickModelSelectionAndProviderSwitch_ShareTheRoutingTransactionLock()
+    {
+        using var env = new TestEnvironment();
+        env.SetInitialConfig("openai", "gpt-5.6-sol");
+        var profileA = CreateSelectableProfile();
+        var profileB = CreateSelectableProfile();
+        profileB.Nickname = "Second provider";
+        env.ApiStore.Save(profileA);
+        env.ApiStore.Save(profileB);
+        env.SecretStore.SaveApiKey(profileA.EndpointId!.Value, "synthetic-key-a");
+        env.SecretStore.SaveApiKey(profileB.EndpointId!.Value, "synthetic-key-b");
+        Assert.Equal(TargetSwitchOutcome.Success, (await env.Facade.SwitchToApiProviderAsync(profileA.Id, DefaultOpts)).Outcome);
+
+        env.RuntimeVerifier.VerificationEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        env.RuntimeVerifier.ContinueVerification = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var selectionTask = env.Facade.SelectApiProviderModelAsync(profileA.Id, "model-b", DefaultOpts);
+        await env.RuntimeVerifier.VerificationEntered.Task;
+        var switchTask = env.Facade.SwitchToApiProviderAsync(profileB.Id, DefaultOpts);
+
+        Assert.False(switchTask.IsCompleted);
+        env.RuntimeVerifier.ContinueVerification.TrySetResult(true);
+        var selectionResult = await selectionTask;
+        var switchResult = await switchTask;
+
+        Assert.Equal(TargetSwitchOutcome.Success, selectionResult.Outcome);
+        Assert.True(selectionResult.ModelSelectionWasActiveTarget);
+        Assert.Equal(TargetSwitchOutcome.Success, switchResult.Outcome);
+        var finalRouting = env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath);
+        Assert.Equal(profileB.StableCodexProviderId, finalRouting.ModelProvider);
+        Assert.Equal("model-a", finalRouting.Model);
+        Assert.Equal("model-b", env.ApiStore.GetById(profileA.Id)!.GetEffectiveSelectedModel());
+    }
+
+    [Fact]
+    public void QuickModelSelection_RejectsDisabledUnlistedAndStaleModels()
+    {
+        using var env = new TestEnvironment();
+        env.SetInitialConfig("openai", "gpt-5.6-sol");
+        var profile = CreateSelectableProfile();
+        env.ApiStore.Save(profile);
+
+        foreach (var slug in new[] { "model-disabled", "model-stale", "unknown-model", "MODEL-A" })
+        {
+            var plan = env.PlanBuilder.BuildApiProviderModelSelectionPlan(profile.Id, slug, DefaultOpts);
+            Assert.IsType<InvalidSwitchPlan>(plan);
+        }
+    }
 
     [Fact]
     public async Task NewlyCreatedEndpointModel_SwitchActuallyChangesActiveTarget()
@@ -506,7 +794,7 @@ public sealed class ApiProviderSwitchingRegressionTests
     }
 
     [Fact]
-    public async Task CatalogHashChange_RequiresRuntimeRestart()
+    public async Task CatalogHashChange_WithIsolatedHome_RequiresRuntimeReloadWithoutClosingUnrelatedProcesses()
     {
         using var env = new TestEnvironment();
         env.SetInitialConfig("openai", "gpt-5.6-sol");
@@ -536,7 +824,35 @@ public sealed class ApiProviderSwitchingRegressionTests
         Assert.NotNull(result.DiagnosticTrace);
         Assert.True(result.DiagnosticTrace.CatalogChanged);
         Assert.True(result.DiagnosticTrace.RuntimeRestartRequired);
-        Assert.True(env.Proc.CloseCalled);
+        Assert.False(env.Proc.CloseCalled);
+        Assert.Equal(0, env.Proc.FindRunningCalls);
+        Assert.Contains(runningApp, env.Proc.Running);
+    }
+
+    [Fact]
+    public async Task ReturnToChatGpt_WithIsolatedCodexHomeLeavesUnrelatedCodexProcessesRunning()
+    {
+        using var env = new TestEnvironment();
+        env.SetInitialConfig("synthetic-provider", "model-a");
+
+        var unrelatedCodex = new CodexProcessInfo(
+            4243,
+            "ChatGPT",
+            @"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__test\app\ChatGPT.exe",
+            null,
+            CodexProcessKind.DesktopApp);
+        env.Proc.Running.Add(unrelatedCodex);
+
+        var result = await env.Facade.SwitchToChatGptAsync(
+            targetChatGptProfileId: null,
+            allChatGptProfiles: [],
+            options: new SwitchExecutionOptions(CloseReopenMode.Automatic, TimeSpan.FromSeconds(1), BackupsToKeep: 10));
+
+        Assert.Equal(TargetSwitchOutcome.Success, result.Outcome);
+        Assert.Equal("openai", env.RoutingStore.ReadRoutingState(env.Paths.Codex.ConfigTomlPath).ModelProvider);
+        Assert.Equal(0, env.Proc.FindRunningCalls);
+        Assert.False(env.Proc.CloseCalled);
+        Assert.Contains(unrelatedCodex, env.Proc.Running);
     }
 
     [Fact]

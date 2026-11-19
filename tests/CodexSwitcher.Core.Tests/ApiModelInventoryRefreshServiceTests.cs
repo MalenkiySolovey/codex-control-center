@@ -226,7 +226,10 @@ public sealed class ApiModelInventoryRefreshServiceTests
         }
 
         public int ApiSwitchCalls { get; private set; }
+        public int ModelSelectionCalls { get; private set; }
+        public string? LastSelectedModel { get; private set; }
         public bool ReturnFailure { get; set; }
+        public Func<Guid, string, SwitchExecutionOptions, CancellationToken, Task<TargetSwitchResult>>? SelectModelOverride { get; set; }
 
         public Task<TargetSwitchResult> SwitchToApiProviderAsync(
             Guid apiProfileId,
@@ -266,6 +269,75 @@ public sealed class ApiModelInventoryRefreshServiceTests
                 }));
         }
 
+        public async Task<TargetSwitchResult> SelectApiProviderModelAsync(
+            Guid apiProfileId,
+            string modelSlug,
+            SwitchExecutionOptions options,
+            CancellationToken cancellationToken = default)
+        {
+            ModelSelectionCalls++;
+            LastSelectedModel = modelSlug;
+            if (SelectModelOverride is not null)
+            {
+                return await SelectModelOverride(apiProfileId, modelSlug, options, cancellationToken);
+            }
+
+            var profile = _profiles.GetById(apiProfileId)
+                ?? throw new InvalidOperationException("Test profile was not persisted.");
+            var isActive = string.Equals(
+                _routing.State.ModelProvider,
+                profile.StableCodexProviderId,
+                StringComparison.OrdinalIgnoreCase);
+
+            if (profile.ModelInventory?.Models.Any(model =>
+                    string.Equals(model.Slug, modelSlug, StringComparison.Ordinal) &&
+                    model.Enabled &&
+                    model.Availability != ModelAvailability.NotReported) != true)
+            {
+                return new TargetSwitchResult(
+                    TargetSwitchOutcome.Failed,
+                    "The exact model is not enabled and selectable in the current inventory.",
+                    new ActiveTarget.Api(profile),
+                    ModelSelectionWasActiveTarget: isActive);
+            }
+
+            if (!isActive)
+            {
+                profile.SetSelectedModel(modelSlug);
+                _profiles.Save(profile);
+                return new TargetSwitchResult(
+                    TargetSwitchOutcome.Success,
+                    "Inactive model persisted.",
+                    new ActiveTarget.Api(profile),
+                    ModelSelectionWasActiveTarget: false);
+            }
+
+            if (ReturnFailure)
+            {
+                return new TargetSwitchResult(
+                    TargetSwitchOutcome.Failed,
+                    "Injected active model switch failure.",
+                    new ActiveTarget.Api(profile),
+                    ModelSelectionWasActiveTarget: true);
+            }
+
+            profile.SetSelectedModel(modelSlug);
+            _profiles.Save(profile);
+            var catalogPath = _catalogs.EnsureProfileModelCatalog(profile);
+            _routing.State = _routing.State with
+            {
+                ModelProvider = profile.StableCodexProviderId,
+                Model = modelSlug,
+                ModelCatalogJson = catalogPath,
+            };
+            return new TargetSwitchResult(
+                TargetSwitchOutcome.Success,
+                "Active model verified.",
+                new ActiveTarget.Api(profile),
+                DiagnosticTrace: new SwitchDiagnosticTrace { ActiveModelListVerified = true },
+                ModelSelectionWasActiveTarget: true);
+        }
+
         public Task<TargetSwitchResult> SwitchToChatGptAsync(
             Guid? targetChatGptProfileId,
             List<ProfileMetadata> allChatGptProfiles,
@@ -280,6 +352,145 @@ public sealed class ApiModelInventoryRefreshServiceTests
             SwitchExecutionOptions options,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task SelectModelAsync_InactiveManualExactSlugPersistsAcrossStoreReloadAndLeavesOtherProviderUntouched()
+    {
+        var profile = CreateProfile("model-a");
+        profile.ModelInventory = new ApiProviderModelInventory
+        {
+            SelectedModel = "model-a",
+            Models =
+            [
+                new ApiProviderModelItem { Slug = "model-a", Enabled = true, Availability = ModelAvailability.Reported },
+                new ApiProviderModelItem { Slug = "model-b:free", Enabled = true, Availability = ModelAvailability.Unknown, DiscoverySource = ModelDiscoverySource.Manual },
+                new ApiProviderModelItem { Slug = "disabled", Enabled = false, Availability = ModelAvailability.Reported },
+            ],
+        };
+        var otherProvider = CreateProfile("other-model");
+        otherProvider.ModelInventory = new ApiProviderModelInventory
+        {
+            SelectedModel = "other-model",
+            Models = [new ApiProviderModelItem { Slug = "other-model", Enabled = true }],
+        };
+        var store = new JsonProfileStore();
+        store.Save(profile);
+        store.Save(otherProvider);
+        var inspection = new ScriptedInspectionService();
+        var (service, _, routing, catalogs, switches) = CreateService(store, inspection);
+        var routingBefore = routing.State;
+
+        var result = await service.SelectModelAsync(profile.Id, "model-b:free");
+
+        Assert.Equal(ApiProviderModelSelectionOutcome.Selected, result.Outcome);
+        Assert.False(result.WasActiveTarget);
+        Assert.True(result.Persisted);
+        Assert.Equal("model-b:free", result.RequestedModel);
+        Assert.Equal("model-b:free", store.Reopen().GetById(profile.Id)!.ModelInventory!.SelectedModel);
+        Assert.Equal("other-model", store.Reopen().GetById(otherProvider.Id)!.ModelInventory!.SelectedModel);
+        Assert.Equal(routingBefore.ModelProvider, routing.State.ModelProvider);
+        Assert.Equal(routingBefore.Model, routing.State.Model);
+        Assert.Equal(0, catalogs.ProfileCatalogCalls);
+        Assert.Equal(1, switches.ModelSelectionCalls);
+        Assert.Equal("model-b:free", switches.LastSelectedModel);
+    }
+
+    [Fact]
+    public async Task SelectModelAsync_RapidSelectionsReportOlderRequestSupersededAndKeepLatestPersisted()
+    {
+        var profile = CreateProfile("model-original");
+        profile.ModelInventory = new ApiProviderModelInventory
+        {
+            SelectedModel = "model-original",
+            Models =
+            [
+                new ApiProviderModelItem { Slug = "model-original", Enabled = true, Availability = ModelAvailability.Reported },
+                new ApiProviderModelItem { Slug = "model-a", Enabled = true, Availability = ModelAvailability.Reported },
+                new ApiProviderModelItem { Slug = "model-b", Enabled = true, Availability = ModelAvailability.Reported },
+            ],
+        };
+        var store = new JsonProfileStore();
+        store.Save(profile);
+        var inspection = new ScriptedInspectionService();
+        var (service, _, _, _, switches) = CreateService(store, inspection);
+        var firstEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        switches.SelectModelOverride = async (profileId, modelSlug, _, _) =>
+        {
+            if (modelSlug == "model-a")
+            {
+                firstEntered.TrySetResult(true);
+                await releaseFirst.Task;
+            }
+
+            var persisted = store.GetById(profileId)!;
+            persisted.SetSelectedModel(modelSlug);
+            store.Save(persisted);
+            return new TargetSwitchResult(
+                TargetSwitchOutcome.Success,
+                "Synthetic selection completed.",
+                new ActiveTarget.Api(persisted),
+                ModelSelectionWasActiveTarget: false);
+        };
+
+        var first = service.SelectModelAsync(profile.Id, "model-a");
+        await firstEntered.Task;
+        var second = service.SelectModelAsync(profile.Id, "model-b");
+        releaseFirst.TrySetResult(true);
+        var firstResult = await first;
+        var secondResult = await second;
+
+        Assert.Equal(ApiProviderModelSelectionOutcome.Superseded, firstResult.Outcome);
+        Assert.Equal(ApiProviderModelSelectionOutcome.Selected, secondResult.Outcome);
+        Assert.Equal("model-b", store.Reopen().GetById(profile.Id)!.GetEffectiveSelectedModel());
+    }
+
+    [Fact]
+    public async Task RefreshAndSelectionRace_RefreshInvalidatesRemovedModelBeforeSelectionValidation()
+    {
+        var profile = CreateProfile("model-stale");
+        profile.ModelInventory = new ApiProviderModelInventory
+        {
+            SelectedModel = "model-stale",
+            Models =
+            [
+                new ApiProviderModelItem
+                {
+                    Slug = "model-stale",
+                    Enabled = true,
+                    Availability = ModelAvailability.Reported,
+                    DiscoverySource = ModelDiscoverySource.Discovered,
+                },
+            ],
+        };
+        var store = new JsonProfileStore();
+        store.Save(profile);
+        var inspection = new ScriptedInspectionService();
+        var refreshEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRefresh = new TaskCompletionSource<ApiProviderSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        inspection.Enqueue(async _ =>
+        {
+            refreshEntered.TrySetResult(true);
+            return await releaseRefresh.Task;
+        });
+        var (service, _, routing, _, switches) = CreateService(store, inspection);
+
+        var refreshTask = service.RefreshAsync(profile.Id);
+        await refreshEntered.Task;
+        var selectionTask = service.SelectModelAsync(profile.Id, "model-stale");
+        releaseRefresh.TrySetResult(Snapshot("model-current"));
+        var refreshResult = await refreshTask;
+        var selectionResult = await selectionTask;
+
+        Assert.True(refreshResult.Succeeded);
+        Assert.Equal(ApiProviderModelSelectionOutcome.Failed, selectionResult.Outcome);
+        Assert.Contains("not enabled and selectable", selectionResult.Message, StringComparison.Ordinal);
+        var persisted = store.Reopen().GetById(profile.Id)!;
+        Assert.Equal("model-stale", persisted.GetEffectiveSelectedModel());
+        Assert.Contains(persisted.ModelInventory!.Models, model => model.Slug == "model-stale" && model.Availability == ModelAvailability.NotReported);
+        Assert.Equal(1, switches.ModelSelectionCalls);
+        Assert.Null(routing.State.ModelProvider);
     }
 
     [Fact]

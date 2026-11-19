@@ -339,9 +339,19 @@ public sealed class CodexTargetSwitchServiceTests
             CatalogService = new CodexModelCatalogService(Fs, Paths);
 
             ChatGptSwitch = new SwitchService(Vault, Registry, Fs, Proc, Config, Clock, Audit, Paths.Codex, Paths.BackupsDir);
-            TargetSwitch = new CodexTargetSwitchService(
-                ChatGptSwitch, RoutingStore, ApiStore, SecretStore, BrokerInstaller,
-                Proc, Fs, Clock, Audit, Paths.Codex, CatalogService);
+            var planBuilder = new SwitchPlanBuilder(ApiStore, SecretStore, BrokerInstaller, RoutingStore, Paths.Codex);
+            var executor = new SwitchTransactionExecutor(
+                ChatGptSwitch,
+                RoutingStore,
+                ApiStore,
+                Proc,
+                Fs,
+                Clock,
+                Audit,
+                Paths.Codex,
+                modelCatalogService: CatalogService,
+                allowGlobalProcessControlOverride: true);
+            TargetSwitch = new CodexTargetSwitchService(planBuilder, executor);
         }
 
         public ProfileMetadata AddChatGptProfile(string nick, byte[] authBytes, bool active)

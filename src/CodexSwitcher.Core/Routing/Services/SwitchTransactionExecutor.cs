@@ -36,6 +36,7 @@ public sealed class SwitchTransactionExecutor : ISwitchTransactionExecutor
     private readonly Func<ISwitchCompensationCoordinator>? _coordinatorFactory;
     private readonly ICodexModelCatalogService? _modelCatalogService;
     private readonly ICodexRuntimeModelCatalogVerifier? _runtimeModelCatalogVerifier;
+    private readonly bool? _allowGlobalProcessControlOverride;
 
     // Kept as a concrete overload for binary compatibility with already
     // compiled presentation/plugin assemblies from preview.18. New callers
@@ -63,7 +64,8 @@ public sealed class SwitchTransactionExecutor : ISwitchTransactionExecutor
             paths,
             coordinatorFactory,
             modelCatalogService,
-            runtimeModelCatalogVerifier: null)
+            runtimeModelCatalogVerifier: null,
+            allowGlobalProcessControlOverride: null)
     {
     }
 
@@ -78,7 +80,8 @@ public sealed class SwitchTransactionExecutor : ISwitchTransactionExecutor
         CodexPaths paths,
         Func<ISwitchCompensationCoordinator>? coordinatorFactory = null,
         ICodexModelCatalogService? modelCatalogService = null,
-        ICodexRuntimeModelCatalogVerifier? runtimeModelCatalogVerifier = null)
+        ICodexRuntimeModelCatalogVerifier? runtimeModelCatalogVerifier = null,
+        bool? allowGlobalProcessControlOverride = null)
     {
         _chatGptSwitchService = chatGptSwitchService ?? throw new ArgumentNullException(nameof(chatGptSwitchService));
         _routingConfig = routingConfig ?? throw new ArgumentNullException(nameof(routingConfig));
@@ -91,12 +94,36 @@ public sealed class SwitchTransactionExecutor : ISwitchTransactionExecutor
         _coordinatorFactory = coordinatorFactory;
         _modelCatalogService = modelCatalogService;
         _runtimeModelCatalogVerifier = runtimeModelCatalogVerifier;
+        _allowGlobalProcessControlOverride = allowGlobalProcessControlOverride;
     }
 
     private ISwitchCompensationCoordinator CreateCompensationCoordinator() =>
         _coordinatorFactory != null
             ? _coordinatorFactory()
             : new SwitchCompensationCoordinator(_routingConfig, _processes, _audit, _paths);
+
+    private bool UsesDefaultCodexHome()
+    {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(userProfile))
+        {
+            return false;
+        }
+
+        try
+        {
+            var configuredHome = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_paths.CodexHome));
+            var defaultHome = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(userProfile, ".codex")));
+            return string.Equals(configuredHome, defaultHome, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            // A path that cannot be canonicalized is never safe for global process control.
+            return false;
+        }
+    }
+
+    private bool AllowsGlobalProcessControl() => _allowGlobalProcessControlOverride ?? UsesDefaultCodexHome();
 
     public async Task<TargetSwitchResult> ExecuteAsync(CodexSwitchPlan plan, CancellationToken cancellationToken = default)
     {
@@ -106,12 +133,139 @@ public sealed class SwitchTransactionExecutor : ISwitchTransactionExecutor
         {
             InvalidSwitchPlan invalidPlan => ExecuteInvalidPlan(invalidPlan),
             ChatGptNoOpSwitchPlan noOpPlan => ExecuteChatGptNoOp(noOpPlan),
+            ApiProviderModelSelectionPlan selectionPlan => await ExecuteApiProviderModelSelectionAsync(selectionPlan, cancellationToken).ConfigureAwait(false),
             ApiRouteSwitchPlan routePlan => ExecuteApiRouteSwitch(routePlan),
             ApiProviderSwitchPlan apiPlan => await ExecuteApiProviderSwitchAsync(apiPlan, cancellationToken).ConfigureAwait(false),
             ChatGptAccountSwitchPlan accountPlan => await ExecuteChatGptAccountSwitchAsync(accountPlan, cancellationToken).ConfigureAwait(false),
             ChatGptReturnRoutingSwitchPlan returnPlan => await ExecuteChatGptReturnRoutingAsync(returnPlan, cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException($"Unsupported switch plan type '{plan.GetType().Name}'.")
         };
+    }
+
+    private async Task<TargetSwitchResult> ExecuteApiProviderModelSelectionAsync(
+        ApiProviderModelSelectionPlan plan,
+        CancellationToken cancellationToken)
+    {
+        var profile = plan.Profile;
+        var target = new ActiveTarget.Api(profile);
+
+        if (plan.IsNoOp)
+        {
+            return new TargetSwitchResult(
+                TargetSwitchOutcome.NoOp,
+                $"Model '{plan.SelectedModel}' is already selected.",
+                target,
+                ModelSelectionWasActiveTarget: plan.IsActiveTarget);
+        }
+
+        if (!plan.IsActiveTarget)
+        {
+            profile.SetSelectedModel(plan.SelectedModel);
+            try
+            {
+                _apiProviderStore.Save(profile);
+                _audit.Record(
+                    "api-model-selection",
+                    "saved-inactive",
+                    $"PROFILE_ID={profile.Id:D} MODEL={plan.SelectedModel} ACTIVE_ROUTE_CHANGED=false");
+                return new TargetSwitchResult(
+                    TargetSwitchOutcome.Success,
+                    $"Selected '{plan.SelectedModel}' for {profile.DisplayName}. The active Codex route was not changed.",
+                    target,
+                    ModelSelectionWasActiveTarget: false);
+            }
+            catch (Exception ex)
+            {
+                profile.SetSelectedModel(plan.PreviousSelectedModel);
+                try
+                {
+                    _apiProviderStore.Save(profile);
+                }
+                catch (Exception rollbackException)
+                {
+                    var persisted = _apiProviderStore.GetById(profile.Id)?.GetEffectiveSelectedModel();
+                    return new TargetSwitchResult(
+                        TargetSwitchOutcome.Failed,
+                        $"Could not save model '{plan.SelectedModel}' for the inactive provider. The profile currently stores '{persisted ?? "no model"}'. Active Codex routing was not changed. Recovery save failed: {rollbackException.Message}",
+                        target,
+                        ErrorInfo.Create(ErrorCategory.Unknown, ex.Message, _clock.UtcNow),
+                        ModelSelectionWasActiveTarget: false);
+                }
+
+                return new TargetSwitchResult(
+                    TargetSwitchOutcome.Failed,
+                    $"Could not save model '{plan.SelectedModel}' for the inactive provider. Active Codex routing was not changed.",
+                    target,
+                    ErrorInfo.Create(ErrorCategory.Unknown, ex.Message, _clock.UtcNow),
+                    ModelSelectionWasActiveTarget: false);
+            }
+        }
+
+        if (plan.ActiveSwitchPlan is null)
+        {
+            return new TargetSwitchResult(
+                TargetSwitchOutcome.Failed,
+                "The active provider model switch was not prepared.",
+                target,
+                ErrorInfo.Create(ErrorCategory.Unknown, "Active model switch plan missing", _clock.UtcNow),
+                ModelSelectionWasActiveTarget: true);
+        }
+
+        if (_runtimeModelCatalogVerifier is null)
+        {
+            return new TargetSwitchResult(
+                TargetSwitchOutcome.Failed,
+                "The active API model cannot be changed because runtime model verification is unavailable. The selected model and active route were not changed.",
+                target,
+                ErrorInfo.Create(ErrorCategory.Unknown, "Runtime model catalog verifier is unavailable", _clock.UtcNow),
+                ModelSelectionWasActiveTarget: true);
+        }
+
+        profile.SetSelectedModel(plan.SelectedModel);
+        TargetSwitchResult activeResult;
+        try
+        {
+            activeResult = await ExecuteApiProviderSwitchAsync(
+                plan.ActiveSwitchPlan with { TargetProfile = profile },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            activeResult = new TargetSwitchResult(
+                TargetSwitchOutcome.Failed,
+                $"Failed to apply model '{plan.SelectedModel}' to the active provider: {ex.Message}",
+                target,
+                ErrorInfo.Create(ErrorCategory.Unknown, ex.Message, _clock.UtcNow));
+        }
+
+        if (activeResult.Outcome is TargetSwitchOutcome.Success or TargetSwitchOutcome.SuccessWithReopenWarning or TargetSwitchOutcome.NoOp)
+        {
+            _audit.Record(
+                "api-model-selection",
+                activeResult.Outcome == TargetSwitchOutcome.Success ? "applied-active" : "applied-active-with-warning",
+                $"PROFILE_ID={profile.Id:D} MODEL={plan.SelectedModel} RUNTIME_VERIFIED={activeResult.DiagnosticTrace?.ActiveModelListVerified == true}");
+            return activeResult with { ModelSelectionWasActiveTarget = true };
+        }
+
+        profile.SetSelectedModel(plan.PreviousSelectedModel);
+        try
+        {
+            _apiProviderStore.Save(profile);
+            return activeResult with { ModelSelectionWasActiveTarget = true };
+        }
+        catch (Exception rollbackException)
+        {
+            var persisted = _apiProviderStore.GetById(profile.Id)?.GetEffectiveSelectedModel();
+            return new TargetSwitchResult(
+                TargetSwitchOutcome.Failed,
+                $"{activeResult.Message} The previous selected model could not be restored; the profile currently stores '{persisted ?? "no model"}'.",
+                activeResult.Target,
+                ErrorInfo.Create(ErrorCategory.Unknown, rollbackException.Message, _clock.UtcNow),
+                activeResult.ClosedProcesses,
+                activeResult.ReopenFailures,
+                activeResult.DiagnosticTrace,
+                ModelSelectionWasActiveTarget: true);
+        }
     }
 
     private TargetSwitchResult ExecuteInvalidPlan(InvalidSwitchPlan invalidPlan)
@@ -263,8 +417,11 @@ public sealed class SwitchTransactionExecutor : ISwitchTransactionExecutor
             trace.CatalogChanged = catalogChanged;
             trace.RuntimeRestartRequired = closeApps;
 
-            // 3. Capture & close Codex processes if catalog changed or automatic close requested
-            if (closeApps)
+            // Process discovery is global to the Windows session; it cannot tell which CODEX_HOME
+            // a running process uses. Only close those processes when this transaction targets the
+            // user's default .codex home. For an isolated/custom home, the runtime verifier below
+            // validates that home without touching unrelated Codex applications.
+            if (closeApps && AllowsGlobalProcessControl())
             {
                 options.Progress?.Report("Restarting Codex...");
                 captured = _processes.FindRunningCodexProcesses().Where(p => p.IsClosable).ToList();
@@ -569,7 +726,9 @@ public sealed class SwitchTransactionExecutor : ISwitchTransactionExecutor
         var options = returnPlan.Options;
         var currentRouting = _routingConfig.ReadRoutingState(_paths.ConfigTomlPath);
         var catalogChanged = !string.IsNullOrWhiteSpace(currentRouting.ModelCatalogJson);
-        var closeApps = options.CloseReopenMode == CloseReopenMode.Automatic || catalogChanged;
+        // Process discovery is global to the Windows session, so a routing-only
+        // return from an isolated/custom CODEX_HOME must never close unrelated Codex apps.
+        var closeApps = (options.CloseReopenMode == CloseReopenMode.Automatic || catalogChanged) && AllowsGlobalProcessControl();
 
         var compensator = CreateCompensationCoordinator();
         IReadOnlyList<CodexProcessInfo> captured = [];

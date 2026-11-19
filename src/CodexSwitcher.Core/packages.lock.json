@@ -6,13 +6,13 @@
         "type": "Direct",
         "requested": "[0.1.0-preview.3, )",
         "resolved": "0.1.0-preview.3",
-        "contentHash": "Mca99XoZyWpsWuf2spjfP90n16B7HCuhbOR4fuQPS73OCNAZJelj9oeNgZv1o8ROWZUX+MByRiX1HReWd5mTGQ=="
+        "contentHash": "YjU/cTAjDnXMzqbe8wf3UQzTfREugSJIpwKlgjp8v7cfVeLQoMJ0aWfGTdO7gvGqm/xybomUn3eWBUBvZEzm6Q=="
       },
       "Llm.ProviderKit": {
         "type": "Direct",
         "requested": "[0.1.0-preview.3, )",
         "resolved": "0.1.0-preview.3",
-        "contentHash": "kgywBonGvUndwVfdSLP23bDMsnEZDoCzVPKPZYIo6s+aOQQMwdcD6h9pxIUFJ7DT3YDnV+6ujNmJTlSvy68FZA=="
+        "contentHash": "URNdtC5pBMeSChJijKOzfvoCMjpNZkUyRRzUS7bdRXclpbG14yZzhA68+jsb6rorObOOlyAhaB5bFS7970P49g=="
       }
     }
   }

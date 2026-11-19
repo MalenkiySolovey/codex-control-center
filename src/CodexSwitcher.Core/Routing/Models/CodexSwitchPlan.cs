@@ -42,6 +42,20 @@ public sealed record ApiProviderSwitchPlan(
 ) : CodexSwitchPlan;
 
 /// <summary>
+/// Selects a persisted API-provider model while sharing the target-switch
+/// transaction lock. Inactive selections only persist profile state; active
+/// selections run the supplied provider transaction before committing.
+/// </summary>
+public sealed record ApiProviderModelSelectionPlan(
+    ApiProviderProfile Profile,
+    string SelectedModel,
+    string? PreviousSelectedModel,
+    bool IsActiveTarget,
+    bool IsNoOp,
+    ApiProviderSwitchPlan? ActiveSwitchPlan = null
+) : CodexSwitchPlan;
+
+/// <summary>
 /// Plan to switch active inference target to a different ChatGPT account.
 /// </summary>
 public sealed record ChatGptAccountSwitchPlan(

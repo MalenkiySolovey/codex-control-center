@@ -50,6 +50,7 @@ using CodexSwitcher.Core.Routing.Models;
 using CodexSwitcher.Core.Providers.Catalog;
 using CodexSwitcher.App.Localization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using System.Collections.ObjectModel;
 
 namespace CodexSwitcher.App.ViewModels;
 
@@ -63,6 +64,16 @@ public enum ApiProviderCardVisualState
     /// <summary>Normal inactive provider card.</summary>
     Normal,
 }
+
+/// <summary>A card-level model choice; Slug is the exact value persisted and routed.</summary>
+public sealed record ApiProviderQuickModelChoice(string Slug, string DisplayName)
+{
+    public string DisplayText => string.Equals(DisplayName, Slug, StringComparison.Ordinal)
+        ? Slug
+        : $"{DisplayName} · {Slug}";
+}
+
+public sealed record ApiProviderModelSelectionRequest(ApiProviderItemViewModel Item, string ModelSlug);
 
 /// <summary>
 /// Presentation ViewModel for an API Provider card in the UI.
@@ -119,7 +130,16 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
     public partial string SelectedRoute { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayedSelectedModel))]
+    [NotifyPropertyChangedFor(nameof(ShowDisplayedSelectedModel))]
     public partial string SelectedModel { get; set; }
+
+    public string DisplayedSelectedModel => string.IsNullOrWhiteSpace(SelectedModel)
+        ? Loc.NoSelectableApiModels
+        : HasSelectableModels && !QuickSelectableModels.Any(model =>
+            string.Equals(model.Slug, SelectedModel, StringComparison.Ordinal))
+            ? $"{SelectedModel} ({Loc.ModelUnavailable})"
+            : SelectedModel;
 
     [ObservableProperty]
     public partial string KeyPreview { get; set; }
@@ -128,7 +148,22 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
     public partial ApiProviderProfileStatus Status { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSelectModel))]
     public partial bool IsLoadingModels { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSelectModel))]
+    public partial bool IsSelectingModel { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSelectModel))]
+    public partial bool IsEditingProvider { get; set; }
+
+    public ObservableCollection<ApiProviderQuickModelChoice> QuickSelectableModels { get; } = [];
+    public bool HasSelectableModels => QuickSelectableModels.Count > 0;
+    public bool ShowDisplayedSelectedModel => !HasSelectableModels || !QuickSelectableModels.Any(model =>
+        string.Equals(model.Slug, SelectedModel, StringComparison.Ordinal));
+    public bool CanSelectModel => HasSelectableModels && !IsLoadingModels && !IsSelectingModel && !IsEditingProvider;
 
     [ObservableProperty]
     public partial string ModelsStatusMessage { get; set; } = string.Empty;
@@ -220,6 +255,9 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
     public string RemoveLabel => Loc.RemoveCredential;
     public string MoveUpLabel => Loc.MoveUp;
     public string MoveDownLabel => Loc.MoveDown;
+    public string ModelLabel => Loc.ModelLabel;
+    public string ModelSelectionProgressLabel => Loc.SelectingApiModel;
+    public string ModelSelectionTooltip => Loc.ApiModelQuickSelectTooltip;
 
     public ApiProviderItemViewModel(
         ApiProviderProfile profile,
@@ -258,7 +296,6 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
 
         DisplayName = updated.DisplayName;
         BaseUrl = updated.BaseUrl;
-        SelectedModel = updated.GetEffectiveSelectedModel() ?? string.Empty;
         KeyPreview = updated.KeyPreview;
         Status = updated.Status;
         RoutePoolLabel = updated.RoutePoolLabel;
@@ -270,6 +307,15 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
 
         ApplyTruthfulCapabilityFacts(descriptor);
         RefreshInventoryPresentation(updated);
+        // The ComboBox binds SelectedValue against QuickSelectableModels.
+        // Refresh its items first so the new persisted slug can be matched
+        // after an inventory refresh or model selection.
+        SelectedModel = updated.GetEffectiveSelectedModel() ?? string.Empty;
+        // RefreshInventoryPresentation clears and repopulates the bound item
+        // collection. WinUI may clear the ComboBox selection during that
+        // update; if the persisted slug did not change, the generated setter
+        // raises no notification, so re-publish it after the choices exist.
+        OnPropertyChanged(nameof(SelectedModel));
         ApplyBillingSnapshot(updated.LastBillingSnapshot, fromCache: true);
     }
 
@@ -389,6 +435,27 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
     private void RefreshInventoryPresentation(ApiProviderProfile profile)
     {
         var inventory = profile.ModelInventory;
+        QuickSelectableModels.Clear();
+        if (inventory is not null)
+        {
+            foreach (var model in inventory.Models.Where(model =>
+                         model is not null &&
+                         model.Enabled &&
+                         model.Availability != ModelAvailability.NotReported &&
+                         !string.IsNullOrWhiteSpace(model.Slug)))
+            {
+                QuickSelectableModels.Add(new ApiProviderQuickModelChoice(
+                    model.Slug,
+                    string.IsNullOrWhiteSpace(model.DisplayName)
+                        ? ModelDisplayName.FromSlug(model.Slug)
+                        : model.DisplayName!));
+            }
+        }
+
+        OnPropertyChanged(nameof(HasSelectableModels));
+        OnPropertyChanged(nameof(ShowDisplayedSelectedModel));
+        OnPropertyChanged(nameof(DisplayedSelectedModel));
+        OnPropertyChanged(nameof(CanSelectModel));
         ModelsEnabledCount = inventory?.GetEnabledModels().Count() ?? 0;
         ModelsReportedCount = inventory?.Models.Count(item => item.Availability == ModelAvailability.Reported)
             ?? profile.DiscoveredModels?.Count

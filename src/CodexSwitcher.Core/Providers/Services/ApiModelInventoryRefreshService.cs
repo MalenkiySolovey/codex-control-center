@@ -30,6 +30,7 @@ public sealed class ApiModelInventoryRefreshService : IApiModelInventoryRefreshS
         public object GenerationLock { get; } = new();
         public long LatestStarted;
         public long LatestPublished;
+        public long LatestSelectionStarted;
     }
 
     private readonly IApiProviderStore _profiles;
@@ -109,6 +110,162 @@ public sealed class ApiModelInventoryRefreshService : IApiModelInventoryRefreshS
             gate.Serial.Release();
         }
     }
+
+    public async Task<ApiProviderModelSelectionResult> SelectModelAsync(
+        Guid profileId,
+        string modelSlug,
+        SwitchExecutionOptions? switchOptions = null,
+        CancellationToken cancellationToken = default)
+    {
+        var gate = _gates.GetOrAdd(profileId, static _ => new ProfileRefreshGate());
+        long generation;
+        lock (gate.GenerationLock)
+        {
+            generation = Interlocked.Increment(ref gate.LatestSelectionStarted);
+        }
+
+        if (string.IsNullOrWhiteSpace(modelSlug))
+        {
+            return new ApiProviderModelSelectionResult(
+                profileId,
+                generation,
+                modelSlug ?? string.Empty,
+                ApiProviderModelSelectionOutcome.Failed,
+                "Select an enabled API model.",
+                WasActiveTarget: false,
+                Persisted: false,
+                RuntimeVerified: false,
+                RuntimeRestarted: false);
+        }
+
+        await gate.Serial.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // A newer refresh or model choice that arrived while this request
+            // waited owns the next operation for this profile.
+            if (generation != Volatile.Read(ref gate.LatestSelectionStarted))
+            {
+                return SupersededModelSelection(profileId, generation, modelSlug);
+            }
+
+            if (_profiles.GetById(profileId) is null)
+            {
+                return new ApiProviderModelSelectionResult(
+                    profileId,
+                    generation,
+                    modelSlug,
+                    ApiProviderModelSelectionOutcome.Failed,
+                    "API provider profile was not found.",
+                    WasActiveTarget: false,
+                    Persisted: false,
+                    RuntimeVerified: false,
+                    RuntimeRestarted: false);
+            }
+
+            var options = switchOptions ?? new SwitchExecutionOptions(
+                CloseReopenMode.Automatic,
+                TimeSpan.FromSeconds(10),
+                BackupsToKeep: 10);
+            var switchResult = await _switches.SelectApiProviderModelAsync(
+                profileId,
+                modelSlug,
+                options,
+                cancellationToken).ConfigureAwait(false);
+
+            var persistedProfile = _profiles.GetById(profileId);
+            var persisted = persistedProfile is not null &&
+                string.Equals(persistedProfile.ModelInventory?.SelectedModel, modelSlug, StringComparison.Ordinal) &&
+                string.Equals(persistedProfile.GetEffectiveSelectedModel(), modelSlug, StringComparison.Ordinal);
+            var wasActive = switchResult.ModelSelectionWasActiveTarget
+                ?? (switchResult.DiagnosticTrace is not null);
+            var runtimeVerified = switchResult.DiagnosticTrace?.ActiveModelListVerified == true;
+            var runtimeRestarted = switchResult.DiagnosticTrace is { RuntimeRestartRequired: true, RuntimeRestartCompleted: true };
+            var succeeded = switchResult.Outcome is TargetSwitchOutcome.Success or TargetSwitchOutcome.SuccessWithReopenWarning or TargetSwitchOutcome.NoOp;
+
+            if (generation != Volatile.Read(ref gate.LatestSelectionStarted))
+            {
+                return new ApiProviderModelSelectionResult(
+                    profileId,
+                    generation,
+                    modelSlug,
+                    ApiProviderModelSelectionOutcome.Superseded,
+                    $"A newer model or inventory operation superseded this selection. The earlier transaction ended as {switchResult.Outcome}.",
+                    wasActive,
+                    persisted,
+                    runtimeVerified,
+                    runtimeRestarted,
+                    switchResult);
+            }
+
+            if (succeeded && !persisted)
+            {
+                return new ApiProviderModelSelectionResult(
+                    profileId,
+                    generation,
+                    modelSlug,
+                    ApiProviderModelSelectionOutcome.Failed,
+                    $"The operation returned {switchResult.Outcome}, but the provider inventory does not persist '{modelSlug}'.",
+                    wasActive,
+                    Persisted: false,
+                    RuntimeVerified: runtimeVerified,
+                    RuntimeRestarted: runtimeRestarted,
+                    SwitchResult: switchResult);
+            }
+
+            if (succeeded && wasActive && switchResult.Outcome != TargetSwitchOutcome.NoOp && !runtimeVerified)
+            {
+                return new ApiProviderModelSelectionResult(
+                    profileId,
+                    generation,
+                    modelSlug,
+                    ApiProviderModelSelectionOutcome.Failed,
+                    "The selected model was saved and routing was updated, but the current runtime model list could not be verified.",
+                    WasActiveTarget: true,
+                    Persisted: true,
+                    RuntimeVerified: false,
+                    RuntimeRestarted: runtimeRestarted,
+                    SwitchResult: switchResult);
+            }
+
+            var outcome = switchResult.Outcome switch
+            {
+                TargetSwitchOutcome.NoOp => ApiProviderModelSelectionOutcome.NoOp,
+                TargetSwitchOutcome.Success or TargetSwitchOutcome.SuccessWithReopenWarning => ApiProviderModelSelectionOutcome.Selected,
+                _ => ApiProviderModelSelectionOutcome.Failed,
+            };
+
+            return new ApiProviderModelSelectionResult(
+                profileId,
+                generation,
+                modelSlug,
+                outcome,
+                switchResult.Message,
+                wasActive,
+                persisted,
+                runtimeVerified,
+                runtimeRestarted,
+                switchResult);
+        }
+        finally
+        {
+            gate.Serial.Release();
+        }
+    }
+
+    private static ApiProviderModelSelectionResult SupersededModelSelection(
+        Guid profileId,
+        long generation,
+        string modelSlug) =>
+        new(
+            profileId,
+            generation,
+            modelSlug,
+            ApiProviderModelSelectionOutcome.Superseded,
+            "A newer model or inventory operation superseded this selection.",
+            WasActiveTarget: false,
+            Persisted: false,
+            RuntimeVerified: false,
+            RuntimeRestarted: false);
 
     private async Task<ModelInventoryRefreshResult> RefreshSerializedAsync(
         Guid profileId,

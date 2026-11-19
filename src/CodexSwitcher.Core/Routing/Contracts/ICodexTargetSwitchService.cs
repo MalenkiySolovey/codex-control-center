@@ -45,6 +45,12 @@ public interface ICodexTargetSwitchService
         SwitchExecutionOptions options,
         CancellationToken cancellationToken = default);
 
+    Task<TargetSwitchResult> SelectApiProviderModelAsync(
+        Guid apiProfileId,
+        string modelSlug,
+        SwitchExecutionOptions options,
+        CancellationToken cancellationToken = default);
+
     Task<TargetSwitchResult> SwitchToChatGptAsync(
         Guid? targetChatGptProfileId,
         List<ProfileMetadata> allChatGptProfiles,

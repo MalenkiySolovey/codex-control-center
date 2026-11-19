@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "..\eng\packages\Use-IsolatedNuGetCache.ps1")
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ExternalKitBootstrapScript = Join-Path $RepoRoot "eng\packages\bootstrap-external-kits.ps1"

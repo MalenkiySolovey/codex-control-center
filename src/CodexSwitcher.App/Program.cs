@@ -48,6 +48,8 @@ using CodexSwitcher.Infra.Security.Dpapi;
 using CodexSwitcher.Infra.Security.Hardening;
 using CodexSwitcher.Infra.Security.Totp;
 using CodexSwitcher.Infra.Settings;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.UI.Dispatching;
 using Microsoft.Windows.AppLifecycle;
 using WinRT;
@@ -61,6 +63,33 @@ public static class Program
 {
     public const string SingleInstanceKey = "CodexSwitchboard.SingleInstance";
     public static string[] CommandLineArgs { get; private set; } = [];
+
+    public static string ResolveSingleInstanceKey(string? configuredAppHome, string defaultAppHome)
+    {
+        if (string.IsNullOrWhiteSpace(configuredAppHome))
+        {
+            return SingleInstanceKey;
+        }
+
+        try
+        {
+            var configuredHome = Path.TrimEndingDirectorySeparator(Path.GetFullPath(configuredAppHome));
+            var normalizedDefaultHome = Path.TrimEndingDirectorySeparator(Path.GetFullPath(defaultAppHome));
+            if (string.Equals(configuredHome, normalizedDefaultHome, StringComparison.OrdinalIgnoreCase))
+            {
+                return SingleInstanceKey;
+            }
+
+            var identity = Encoding.UTF8.GetBytes(configuredHome.ToUpperInvariant());
+            var digest = SHA256.HashData(identity);
+            return $"{SingleInstanceKey}.{Convert.ToHexString(digest.AsSpan(0, 12))}";
+        }
+        catch
+        {
+            // An invalid custom data path must not create an unbounded or colliding key.
+            return SingleInstanceKey;
+        }
+    }
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
     private static extern bool AttachConsole(int dwProcessId);
@@ -99,7 +128,10 @@ public static class Program
     {
         var currentInstance = AppInstance.GetCurrent();
         var args = currentInstance.GetActivatedEventArgs();
-        var keyInstance = AppInstance.FindOrRegisterForKey(SingleInstanceKey);
+        var instanceKey = ResolveSingleInstanceKey(
+            Environment.GetEnvironmentVariable("CODEXSWITCHBOARD_HOME"),
+            AppPaths.DefaultRoot);
+        var keyInstance = AppInstance.FindOrRegisterForKey(instanceKey);
 
         if (!keyInstance.IsCurrent)
         {

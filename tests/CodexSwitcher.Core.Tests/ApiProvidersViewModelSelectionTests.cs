@@ -126,13 +126,185 @@ public sealed class ApiProvidersViewModelSelectionTests
         Assert.Equal(config, fs.ReadAllText(paths.Codex.ConfigTomlPath));
     }
 
+    [Fact]
+    public void ProviderCardQuickModelChoices_UsePersistedEnabledInventoryAndKeepExactSlugs()
+    {
+        var profile = CreateProfile();
+        profile.ModelInventory!.Models.AddRange(
+        [
+            new ApiProviderModelItem
+            {
+                Slug = "gpt-6-luna:free",
+                DisplayName = "GPT 6 Luna Free",
+                Enabled = true,
+                DiscoverySource = ModelDiscoverySource.Manual,
+                Availability = ModelAvailability.Unknown,
+            },
+            new ApiProviderModelItem
+            {
+                Slug = "disabled-model",
+                Enabled = false,
+                Availability = ModelAvailability.Reported,
+            },
+            new ApiProviderModelItem
+            {
+                Slug = "stale-model",
+                Enabled = true,
+                Availability = ModelAvailability.NotReported,
+            },
+        ]);
+        profile.SetSelectedModel("stale-model");
+
+        var card = new ApiProviderItemViewModel(profile, descriptor: null, hasSecret: true);
+
+        Assert.Collection(
+            card.QuickSelectableModels.Select(model => model.Slug),
+            slug => Assert.Equal("gpt-5.6-sol", slug),
+            slug => Assert.Equal("gpt-6-luna", slug),
+            slug => Assert.Equal("gpt-6-luna:free", slug));
+        Assert.DoesNotContain(card.QuickSelectableModels, model => model.Slug == "disabled-model");
+        Assert.DoesNotContain(card.QuickSelectableModels, model => model.Slug == "stale-model");
+        Assert.Equal("GPT 6 Luna Free", card.QuickSelectableModels.Single(model => model.Slug == "gpt-6-luna:free").DisplayName);
+        Assert.True(card.CanSelectModel);
+        Assert.True(card.ShowDisplayedSelectedModel);
+        Assert.StartsWith("stale-model (", card.DisplayedSelectedModel, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProviderCardUpdate_RefreshesChoicesBeforePublishingThePersistedSelection()
+    {
+        var profile = CreateProfile();
+        var card = new ApiProviderItemViewModel(profile, descriptor: null, hasSecret: true);
+        var updated = CreateProfile(profile.Id);
+        updated.ModelInventory!.Models.Add(new ApiProviderModelItem
+        {
+            Slug = "model-a",
+            DisplayName = "Model A",
+            Enabled = true,
+            DiscoverySource = ModelDiscoverySource.Manual,
+            Availability = ModelAvailability.Unknown,
+        });
+        updated.SetSelectedModel("model-a");
+
+        var selectedChoiceWasAlreadyAvailable = false;
+        card.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ApiProviderItemViewModel.SelectedModel))
+            {
+                selectedChoiceWasAlreadyAvailable = card.QuickSelectableModels.Any(model => model.Slug == "model-a");
+            }
+        };
+
+        card.UpdateProfile(updated, descriptor: null, hasSecret: true, isTargetActive: false);
+
+        Assert.True(selectedChoiceWasAlreadyAvailable);
+        Assert.Equal("model-a", card.SelectedModel);
+        Assert.False(card.ShowDisplayedSelectedModel);
+    }
+
+    [Fact]
+    public void ProviderCardUpdate_RepublishesUnchangedSelectionAfterRefreshingChoices()
+    {
+        var profile = CreateProfile();
+        var card = new ApiProviderItemViewModel(profile, descriptor: null, hasSecret: true);
+        var updated = CreateProfile(profile.Id);
+        var selectedChoiceWasAlreadyAvailable = false;
+        var selectedModelNotifications = 0;
+        card.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ApiProviderItemViewModel.SelectedModel))
+            {
+                selectedModelNotifications++;
+                selectedChoiceWasAlreadyAvailable = card.QuickSelectableModels.Any(model =>
+                    model.Slug == updated.GetEffectiveSelectedModel());
+            }
+        };
+
+        card.UpdateProfile(updated, descriptor: null, hasSecret: true, isTargetActive: true);
+
+        Assert.Equal(profile.GetEffectiveSelectedModel(), card.SelectedModel);
+        Assert.True(selectedModelNotifications > 0);
+        Assert.True(selectedChoiceWasAlreadyAvailable);
+        Assert.False(card.ShowDisplayedSelectedModel);
+    }
+
+    [Fact]
+    public async Task QuickModelSelectionCommand_RefreshesCardFromPersistedStateWithoutSwitchingInactiveProvider()
+    {
+        using var temp = new TempDir();
+        var fs = new PhysicalFileSystem();
+        var paths = new AppPaths(temp.Root, Path.Combine(temp.Root, ".codex"));
+        paths.EnsureDirectories();
+        const string config = "model_provider = \"openai\"\nmodel = \"gpt-5.6-sol\"\n";
+        fs.WriteAllTextAtomic(paths.Codex.ConfigTomlPath, config);
+        var providerStore = new ApiProviderStore(fs, paths.ApiProvidersPath);
+        var profile = CreateProfile();
+        providerStore.Save(profile);
+        var modelService = new RecordingModelSelectionService(providerStore, isActive: false);
+        var switchService = new RecordingTargetSwitchService(providerStore);
+        using var viewModel = CreateViewModel(temp.Root, fs, paths, providerStore, new FakeProviderDialogService(), switchService, modelService);
+        var card = new ApiProviderItemViewModel(profile, descriptor: null, hasSecret: true, isTargetActive: false);
+        viewModel.Items.Add(card);
+        var routingRefreshes = 0;
+        viewModel.TargetStateChanged += (_, _) => routingRefreshes++;
+
+        await viewModel.SelectModelAsync(new ApiProviderModelSelectionRequest(card, "gpt-6-luna"));
+
+        Assert.Equal(1, modelService.SelectionCalls);
+        Assert.Equal(profile.Id, modelService.LastProfileId);
+        Assert.Equal("gpt-6-luna", modelService.LastModelSlug);
+        Assert.Equal("gpt-6-luna", card.SelectedModel);
+        Assert.Equal("gpt-6-luna", providerStore.GetById(profile.Id)!.ModelInventory!.SelectedModel);
+        Assert.Equal(config, fs.ReadAllText(paths.Codex.ConfigTomlPath));
+        Assert.Equal(0, switchService.CallCount);
+        Assert.False(card.IsSelectingModel);
+        Assert.Equal(1, routingRefreshes);
+    }
+
+    [Fact]
+    public async Task ProviderEditorAndQuickSelection_CannotMutateSameProfileConcurrently()
+    {
+        using var temp = new TempDir();
+        var fs = new PhysicalFileSystem();
+        var paths = new AppPaths(temp.Root, Path.Combine(temp.Root, ".codex"));
+        paths.EnsureDirectories();
+        var providerStore = new ApiProviderStore(fs, paths.ApiProvidersPath);
+        var profile = CreateProfile();
+        providerStore.Save(profile);
+        var promptEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePrompt = new TaskCompletionSource<EditApiProviderResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dialog = new FakeProviderDialogService
+        {
+            EditPromptEntered = promptEntered,
+            EditPromptCompletion = releasePrompt,
+        };
+        var modelService = new RecordingModelSelectionService(providerStore, isActive: false);
+        var switchService = new RecordingTargetSwitchService(providerStore);
+        using var viewModel = CreateViewModel(temp.Root, fs, paths, providerStore, dialog, switchService, modelService);
+        var card = new ApiProviderItemViewModel(profile, descriptor: null, hasSecret: true);
+        viewModel.Items.Add(card);
+
+        var editTask = viewModel.EditApiProviderAsync(card);
+        await promptEntered.Task;
+        Assert.True(card.IsEditingProvider);
+        Assert.False(card.CanSelectModel);
+        await viewModel.SelectModelAsync(new ApiProviderModelSelectionRequest(card, "gpt-6-luna"));
+        Assert.Equal(0, modelService.SelectionCalls);
+
+        releasePrompt.TrySetResult(null);
+        await editTask;
+        Assert.False(card.IsEditingProvider);
+        Assert.True(card.CanSelectModel);
+    }
+
     private static ApiProvidersViewModel CreateViewModel(
         string root,
         IFileSystem fs,
         AppPaths paths,
         IApiProviderStore providerStore,
         IProviderDialogService dialog,
-        ICodexTargetSwitchService switchService)
+        ICodexTargetSwitchService switchService,
+        IApiModelInventoryRefreshService? modelRefreshService = null)
     {
         var clock = new FakeClock();
         var apiKeyStore = new FakeApiKeySecretStore();
@@ -141,7 +313,7 @@ public sealed class ApiProvidersViewModelSelectionTests
 
         return new ApiProvidersViewModel(
             providerStore,
-            new NoopModelRefreshService(),
+            modelRefreshService ?? new NoopModelRefreshService(),
             apiKeyStore,
             switchService,
             new NoopThreadHandoffService(),
@@ -156,9 +328,9 @@ public sealed class ApiProvidersViewModelSelectionTests
             dispatcher: ImmediateUiDispatcher.Instance);
     }
 
-    private static ApiProviderProfile CreateProfile()
+    private static ApiProviderProfile CreateProfile(Guid? profileId = null)
     {
-        var id = Guid.NewGuid();
+        var id = profileId ?? Guid.NewGuid();
         return new ApiProviderProfile
         {
             Id = id,
@@ -234,6 +406,53 @@ public sealed class ApiProvidersViewModelSelectionTests
         public ModelInventoryRefreshResult? GetLatestResult(Guid profileId) => null;
         public Task<ModelInventoryRefreshResult> RefreshAsync(Guid profileId, RefreshModelsOptions? options = null, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+        public Task<ApiProviderModelSelectionResult> SelectModelAsync(Guid profileId, string modelSlug, SwitchExecutionOptions? switchOptions = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingModelSelectionService(IApiProviderStore profiles, bool isActive) : IApiModelInventoryRefreshService
+    {
+        public int SelectionCalls { get; private set; }
+        public Guid? LastProfileId { get; private set; }
+        public string? LastModelSlug { get; private set; }
+
+        public event EventHandler<ModelInventoryRefreshResult>? RefreshStateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public ModelInventoryRefreshResult? GetLatestResult(Guid profileId) => null;
+        public Task<ModelInventoryRefreshResult> RefreshAsync(Guid profileId, RefreshModelsOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<ApiProviderModelSelectionResult> SelectModelAsync(Guid profileId, string modelSlug, SwitchExecutionOptions? switchOptions = null, CancellationToken cancellationToken = default)
+        {
+            SelectionCalls++;
+            LastProfileId = profileId;
+            LastModelSlug = modelSlug;
+            var profile = profiles.GetById(profileId)!;
+            profile.SetSelectedModel(modelSlug);
+            profiles.Save(profile);
+            var target = new ActiveTarget.Api(profile);
+            var switchResult = new TargetSwitchResult(
+                TargetSwitchOutcome.Success,
+                "Synthetic selection completed.",
+                target,
+                DiagnosticTrace: isActive ? new SwitchDiagnosticTrace { ActiveModelListVerified = true } : null,
+                ModelSelectionWasActiveTarget: isActive);
+            return Task.FromResult(new ApiProviderModelSelectionResult(
+                profileId,
+                SelectionCalls,
+                modelSlug,
+                ApiProviderModelSelectionOutcome.Selected,
+                switchResult.Message,
+                isActive,
+                Persisted: true,
+                RuntimeVerified: isActive,
+                RuntimeRestarted: false,
+                SwitchResult: switchResult));
+        }
     }
 
     private sealed class RecordingTargetSwitchService(IApiProviderStore profiles) : ICodexTargetSwitchService
@@ -250,6 +469,18 @@ public sealed class ApiProvidersViewModelSelectionTests
             ModelAtSwitch = profiles.GetById(apiProfileId)?.GetEffectiveSelectedModel();
             var profile = profiles.GetById(apiProfileId)!;
             return Task.FromResult(new TargetSwitchResult(Outcome, "switch result", new ActiveTarget.Api(profile)));
+        }
+
+        public Task<TargetSwitchResult> SelectApiProviderModelAsync(Guid apiProfileId, string modelSlug, SwitchExecutionOptions options, CancellationToken cancellationToken = default)
+        {
+            var profile = profiles.GetById(apiProfileId)!;
+            profile.SetSelectedModel(modelSlug);
+            profiles.Save(profile);
+            return Task.FromResult(new TargetSwitchResult(
+                Outcome,
+                "model selection result",
+                new ActiveTarget.Api(profile),
+                ModelSelectionWasActiveTarget: false));
         }
 
         public Task<TargetSwitchResult> SwitchToChatGptAsync(Guid? targetChatGptProfileId, List<ProfileMetadata> allChatGptProfiles, SwitchExecutionOptions options, CancellationToken cancellationToken = default) =>
@@ -285,11 +516,17 @@ public sealed class ApiProvidersViewModelSelectionTests
     private sealed class FakeProviderDialogService : IProviderDialogService
     {
         public EditApiProviderResult? EditResult { get; init; }
+        public TaskCompletionSource<bool>? EditPromptEntered { get; init; }
+        public TaskCompletionSource<EditApiProviderResult?>? EditPromptCompletion { get; init; }
         public Task<bool> ConfirmAsync(string title, string message, string okText, bool destructive = false) => Task.FromResult(true);
         public Task<string?> PromptTextAsync(string title, string prompt, string initialValue, string okText) => Task.FromResult<string?>(null);
         public Task ShowMessageAsync(string title, string message) => Task.CompletedTask;
         public Task<AddApiProviderResult?> PromptAddApiProviderAsync(IReadOnlyList<ProviderDescriptor> descriptors) => Task.FromResult<AddApiProviderResult?>(null);
-        public Task<EditApiProviderResult?> PromptEditApiProviderAsync(ApiProviderProfile profile, ProviderDescriptor? descriptor) => Task.FromResult(EditResult);
+        public async Task<EditApiProviderResult?> PromptEditApiProviderAsync(ApiProviderProfile profile, ProviderDescriptor? descriptor)
+        {
+            EditPromptEntered?.TrySetResult(true);
+            return EditPromptCompletion is null ? EditResult : await EditPromptCompletion.Task;
+        }
         public Task<string?> PromptRotateApiKeyAsync(string providerDisplayName) => Task.FromResult<string?>(null);
         public Task<CodexThreadSummary?> PromptContinueOnThreadAsync(IReadOnlyList<CodexThreadSummary> threads, string targetProviderName, string targetModel) => Task.FromResult<CodexThreadSummary?>(null);
         public Task<bool> PromptFreshThreadChoiceAsync(string threadTitle, IReadOnlyList<string> incompatibleFeatures, string targetProviderName, string targetModel) => Task.FromResult(false);

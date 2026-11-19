@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "..\packages\Use-IsolatedNuGetCache.ps1")
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $SolutionPath = Join-Path $RepoRoot "CodexSwitcher.slnx"
