@@ -464,7 +464,7 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
         if (!string.IsNullOrWhiteSpace(runtimeExe) && File.Exists(runtimeExe))
         {
             // Primary authority: "debug models --bundled" from the production runtime
-            var result = RunProcessDeadlockSafe(runtimeExe, "debug models --bundled");
+            var result = RunBundledModelsProbe(runtimeExe, "debug models --bundled");
             if (!result.TimedOut && result.ExitCode == 0 && TryParseModels(result.StandardOutput, out var bundledModels))
             {
                 _cachedBundledModels = bundledModels;
@@ -472,7 +472,7 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
             }
 
             // Fallback for runtimes where --bundled is not recognized
-            result = RunProcessDeadlockSafe(runtimeExe, "debug models");
+            result = RunBundledModelsProbe(runtimeExe, "debug models");
             if (!result.TimedOut && result.ExitCode == 0 && TryParseModels(result.StandardOutput, out bundledModels))
             {
                 _cachedBundledModels = bundledModels;
@@ -492,6 +492,27 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
 
         _cachedBundledModels = GetDefaultBundledModels();
         return _cachedBundledModels;
+    }
+
+    private static ProcessRunResult RunBundledModelsProbe(string runtimeExe, string arguments)
+    {
+        var isolatedCodexHome = Path.Combine(Path.GetTempPath(), "codex-model-catalog-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(isolatedCodexHome);
+        try
+        {
+            var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CODEX_HOME"] = isolatedCodexHome,
+                ["CODEX_SQLITE_HOME"] = null,
+                ["OPENAI_API_KEY"] = null,
+                ["CODEX_API_KEY"] = null,
+            };
+            return RunProcessDeadlockSafe(runtimeExe, arguments, environment: environment);
+        }
+        finally
+        {
+            TempCleanup.TryForceDelete(isolatedCodexHome);
+        }
     }
 
     private static bool TryParseModels(string rawOutput, out List<Dictionary<string, object?>> models)
@@ -637,7 +658,13 @@ public sealed class CodexModelCatalogService : ICodexModelCatalogService
         try
         {
             Directory.CreateDirectory(tempValidationHome);
-            var env = new Dictionary<string, string?> { ["CODEX_HOME"] = tempValidationHome };
+            var env = new Dictionary<string, string?>
+            {
+                ["CODEX_HOME"] = tempValidationHome,
+                ["CODEX_SQLITE_HOME"] = null,
+                ["OPENAI_API_KEY"] = null,
+                ["CODEX_API_KEY"] = null,
+            };
             var arguments = $"-c model_catalog_json=\"{catalogPath.Replace('\\', '/')}\" debug models";
             var result = RunProcessDeadlockSafe(runtimeExe, arguments, timeoutMs: 10000, environment: env);
 

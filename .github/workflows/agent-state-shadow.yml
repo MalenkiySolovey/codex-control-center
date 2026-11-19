@@ -7,7 +7,16 @@ on:
     paths:
       - ".github/workflows/agent-state-shadow.yml"
       - "eng/shadow/**"
+      - "eng/packages/**"
+      - "Directory.Packages.props"
+      - "src/CodexSwitcher.Core/CodexSwitcher.Core.csproj"
       - "src/CodexSwitcher.Core/Accounts/Services/AccountRegistry.cs"
+      - "src/CodexSwitcher.Core/Routing/**"
+      - "src/CodexSwitcher.Infra/Codex/Runtime/**"
+      - "src/CodexSwitcher.Infra/Codex/Threads/CodexAppServerClient.cs"
+      - "src/CodexSwitcher.Infra/CodexSwitcher.Infra.csproj"
+      - "tests/CodexSwitcher.Core.Tests/CodexRuntimeCapabilityTests.cs"
+      - "tests/CodexSwitcher.Core.Tests/ProductionRuntimePrecedenceRegressionTests.cs"
       - "src/CodexSwitcher.Infra/AgentState/Shadow/**"
       - "tests/CodexSwitcher.AgentStateShadow.CrossRepoTests/**"
   pull_request:
@@ -15,7 +24,16 @@ on:
     paths:
       - ".github/workflows/agent-state-shadow.yml"
       - "eng/shadow/**"
+      - "eng/packages/**"
+      - "Directory.Packages.props"
+      - "src/CodexSwitcher.Core/CodexSwitcher.Core.csproj"
       - "src/CodexSwitcher.Core/Accounts/Services/AccountRegistry.cs"
+      - "src/CodexSwitcher.Core/Routing/**"
+      - "src/CodexSwitcher.Infra/Codex/Runtime/**"
+      - "src/CodexSwitcher.Infra/Codex/Threads/CodexAppServerClient.cs"
+      - "src/CodexSwitcher.Infra/CodexSwitcher.Infra.csproj"
+      - "tests/CodexSwitcher.Core.Tests/CodexRuntimeCapabilityTests.cs"
+      - "tests/CodexSwitcher.Core.Tests/ProductionRuntimePrecedenceRegressionTests.cs"
       - "src/CodexSwitcher.Infra/AgentState/Shadow/**"
       - "tests/CodexSwitcher.AgentStateShadow.CrossRepoTests/**"
 

@@ -1,524 +1,159 @@
-using CodexSwitcher.Core.Accounts.Contracts;
-using CodexSwitcher.Core.Accounts.Formatting;
-using CodexSwitcher.Core.Accounts.Models;
-using CodexSwitcher.Core.Accounts.Services;
-using CodexSwitcher.Core.Common.Dispatcher;
-using CodexSwitcher.Core.Common.Enums;
-using CodexSwitcher.Core.Common.Environment;
-using CodexSwitcher.Core.Common.Errors;
-using CodexSwitcher.Core.Common.Lifecycle;
-using CodexSwitcher.Core.Common.Logging;
-using CodexSwitcher.Core.Common.Storage;
-using CodexSwitcher.Core.Common.Time;
-using CodexSwitcher.Core.Providers.Catalog;
-using CodexSwitcher.Core.Providers.Contracts;
-using CodexSwitcher.Core.Providers.Models;
-using CodexSwitcher.Core.Providers.Services;
-using CodexSwitcher.Core.Security.Secrets;
-using CodexSwitcher.Core.Security.Totp;
-using CodexSwitcher.Core.Security.Verification;
-using CodexSwitcher.Core.Settings.Contracts;
-using CodexSwitcher.Core.Settings.Models;
-using CodexSwitcher.Core.Threads.Contracts;
-using CodexSwitcher.Core.Threads.Models;
-using CodexSwitcher.Core.Transfer.Contracts;
-using CodexSwitcher.Core.Transfer.Models;
-using CodexSwitcher.Core.Transfer.Services;
-using CodexSwitcher.Core.Usage.Contracts;
-using CodexSwitcher.Core.Usage.Formatting;
-using CodexSwitcher.Core.Usage.Models;
-using CodexSwitcher.Core.Usage.Services;
-using CodexSwitcher.Infra.Accounts.Storage;
-using CodexSwitcher.Infra.Codex.Routing;
-using CodexSwitcher.Infra.Codex.Runtime;
-using CodexSwitcher.Infra.Codex.Threads;
-using CodexSwitcher.Infra.Codex.Usage;
-using CodexSwitcher.Infra.Common.Logging;
-using CodexSwitcher.Infra.Common.Paths;
-using CodexSwitcher.Infra.Common.Storage;
-using CodexSwitcher.Infra.Common.Time;
-using CodexSwitcher.Infra.Providers.Inspection;
-using CodexSwitcher.Infra.Providers.Secrets;
-using CodexSwitcher.Infra.Providers.Storage;
-using CodexSwitcher.Infra.Scheduling;
-using CodexSwitcher.Infra.Security.Dpapi;
-using CodexSwitcher.Infra.Security.Hardening;
-using CodexSwitcher.Infra.Security.Totp;
-using CodexSwitcher.Infra.Settings;
+using Codex.RuntimeKit.Contracts;
+using Codex.RuntimeKit.Discovery;
 using CodexSwitcher.Core.Routing.Contracts;
 using CodexSwitcher.Core.Routing.Models;
 using CodexSwitcher.Core.Routing.Services;
-using System.Diagnostics;
-using System.Text.RegularExpressions;
+using KitCapabilityStatus = Codex.RuntimeKit.Capabilities.CapabilityStatus;
+using KitRuntimeCapabilities = Codex.RuntimeKit.Capabilities.RuntimeCapabilities;
+using KitRuntimeCandidate = Codex.RuntimeKit.Discovery.RuntimeCandidate;
+using KitRuntimeCandidateSource = Codex.RuntimeKit.Discovery.RuntimeCandidateSource;
+using KitRuntimeResolver = Codex.RuntimeKit.Discovery.CodexRuntimeResolver;
+using ProductRuntimeCandidateSource = CodexSwitcher.Core.Routing.Models.RuntimeCandidateSource;
 
 namespace CodexSwitcher.Infra.Codex.Runtime;
 
-/// <summary>
-/// Resolves the active Codex runtime executable, enumerates candidates deterministically,
-/// and detects capabilities via schema generation or RPC probe caching.
-/// </summary>
+/// <summary>Maps the reusable RuntimeKit discovery engine to the existing Control Center contracts.</summary>
 public sealed class CodexRuntimeResolver : ICodexRuntimeResolver
 {
-    private static readonly Regex VersionPattern = new(@"(\d+\.\d+\.\d+(?:-[a-zA-Z0-9\.]+)?)", RegexOptions.Compiled);
-
-    private readonly ICodexCapabilityCache _capabilityCache;
-    private readonly Func<string, (string? Version, bool? IsSupported)>? _probeInspector;
-    private readonly string? _baseBinDirectory;
+    private readonly KitRuntimeResolver _runtimeKit;
 
     public CodexRuntimeResolver(
         ICodexCapabilityCache? capabilityCache = null,
         Func<string, (string? Version, bool? IsSupported)>? probeInspector = null)
+        : this(capabilityCache, probeInspector, baseBinDirectory: null)
     {
-        _capabilityCache = capabilityCache ?? new CodexSwitcher.Core.Routing.Services.CodexCapabilityCache();
-        _probeInspector = probeInspector;
     }
 
     public CodexRuntimeResolver(
         string? baseBinDirectory,
         Func<string, (string? Version, bool? IsSupported)>? probeInspector = null,
         ICodexCapabilityCache? capabilityCache = null)
-        : this(capabilityCache, probeInspector)
+        : this(capabilityCache, probeInspector, baseBinDirectory)
     {
-        _baseBinDirectory = baseBinDirectory;
+    }
+
+    private CodexRuntimeResolver(
+        ICodexCapabilityCache? capabilityCache,
+        Func<string, (string? Version, bool? IsSupported)>? probeInspector,
+        string? baseBinDirectory)
+    {
+        var productCache = capabilityCache ?? new CodexCapabilityCache();
+        IRuntimeCapabilityCache runtimeCache = probeInspector is null
+            ? new CapabilityCacheAdapter(productCache)
+            : new NoOpCapabilityCache();
+        IRuntimeInspector? inspector = probeInspector is null
+            ? null
+            : new DelegateRuntimeInspector(probeInspector);
+
+        _runtimeKit = new KitRuntimeResolver(
+            runtimeCache,
+            inspector,
+            new RuntimeDiscoveryOptions { InstallBinDirectory = baseBinDirectory });
     }
 
     public CodexRuntimeInfo ResolveCurrentRuntime(string? overridePath = null)
     {
-        // Precedence 1: Explicit custom override path (if specified and valid)
-        if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(overridePath))
-        {
-            var (ver, isSupp) = InspectCandidate(overridePath);
-            var caps = BuildCapabilities(isSupp);
-            var fi = new FileInfo(overridePath);
-            var identity = CodexRuntimeInfo.ComputeIdentity(overridePath, fi.Length, fi.LastWriteTimeUtc, ver);
-            return new CodexRuntimeInfo(overridePath, ver ?? "unknown", identity, caps);
-        }
-
-        // Precedence 2: Versioned official binaries under %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe
-        var hashedCandidates = EnumerateHashedCandidates();
-        if (hashedCandidates.Count > 0)
-        {
-            var best = hashedCandidates[0];
-            var (_, isSupp) = InspectCandidate(best.Path);
-            var caps = BuildCapabilities(isSupp);
-            var identity = CodexRuntimeInfo.ComputeIdentity(best.Path, best.FileSize, best.LastWriteTimeUtc, best.Version);
-            return new CodexRuntimeInfo(best.Path, best.Version ?? "unknown", identity, caps);
-        }
-
-        // Precedence 3: Well-known official installer path %LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe
-        var wellKnown = GetWellKnownInstallerPath();
-        if (!string.IsNullOrWhiteSpace(wellKnown) && File.Exists(wellKnown))
-        {
-            var (ver, isSupp) = InspectCandidate(wellKnown);
-            var caps = BuildCapabilities(isSupp);
-            var fi = new FileInfo(wellKnown);
-            var identity = CodexRuntimeInfo.ComputeIdentity(wellKnown, fi.Length, fi.LastWriteTimeUtc, ver);
-            return new CodexRuntimeInfo(wellKnown, ver ?? "unknown", identity, caps);
-        }
-
-        // Precedence 4: PATH entries
-        var pathCandidate = FindExecutableOnPath();
-        if (!string.IsNullOrWhiteSpace(pathCandidate))
-        {
-            var (ver, isSupp) = InspectCandidate(pathCandidate);
-            var caps = BuildCapabilities(isSupp);
-            var fi = new FileInfo(pathCandidate);
-            var identity = CodexRuntimeInfo.ComputeIdentity(pathCandidate, fi.Length, fi.LastWriteTimeUtc, ver);
-            return new CodexRuntimeInfo(pathCandidate, ver ?? "unknown", identity, caps);
-        }
-
-        // Fallback when nothing found
+        var runtime = _runtimeKit.ResolveCurrentRuntime(overridePath);
         return new CodexRuntimeInfo(
-            string.Empty,
-            "not_found",
-            null,
-            new CodexRuntimeCapabilities(CapabilityStatus.Unsupported, CapabilityStatus.Unsupported, CapabilityStatus.Unsupported, CapabilityStatus.Unsupported));
+            runtime.ExecutablePath,
+            runtime.Version,
+            runtime.FileIdentity,
+            FromRuntimeKit(runtime.Capabilities));
     }
 
-    public IReadOnlyList<CodexRuntimeCandidate> EnumerateCandidates()
-    {
-        var candidates = new List<CodexRuntimeCandidate>();
-        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // 1. Hashed subdirectories
-        foreach (var candidate in EnumerateHashedCandidates())
-        {
-            if (seenPaths.Add(candidate.Path))
-                candidates.Add(candidate);
-        }
-
-        // 2. Well-known installer path
-        var wellKnown = GetWellKnownInstallerPath();
-        if (!string.IsNullOrWhiteSpace(wellKnown) && File.Exists(wellKnown) && seenPaths.Add(wellKnown))
-        {
-            var (ver, isSupp) = InspectCandidate(wellKnown);
-            var fi = new FileInfo(wellKnown);
-            candidates.Add(new CodexRuntimeCandidate(
-                wellKnown,
-                ver,
-                fi.Length,
-                fi.LastWriteTimeUtc,
-                true,
-                RuntimeCandidateSource.OfficialWellKnown));
-        }
-
-        // 3. PATH
-        var pathExecutables = FindAllExecutablesOnPath();
-        foreach (var p in pathExecutables)
-        {
-            if (seenPaths.Add(p))
-            {
-                var (ver, isSupp) = InspectCandidate(p);
-                var fi = new FileInfo(p);
-                candidates.Add(new CodexRuntimeCandidate(
-                    p,
-                    ver,
-                    fi.Length,
-                    fi.LastWriteTimeUtc,
-                    true,
-                    RuntimeCandidateSource.Path));
-            }
-        }
-
-        return candidates;
-    }
+    public IReadOnlyList<CodexRuntimeCandidate> EnumerateCandidates() =>
+        _runtimeKit.EnumerateCandidates().Select(ToProductCandidate).ToArray();
 
     public bool ValidateExecutable(string path, out string? version, out string? errorMessage)
     {
-        version = null;
-        errorMessage = null;
-
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            errorMessage = "Path is empty or null.";
-            return false;
-        }
-
-        if (!File.Exists(path))
-        {
-            errorMessage = $"File not found: {path}";
-            return false;
-        }
-
-        try
-        {
-            var (ver, _) = InspectCandidate(path);
-            if (string.IsNullOrWhiteSpace(ver) || ver == "unknown")
-            {
-                errorMessage = "Could not extract Codex version from executable.";
-                return false;
-            }
-
-            version = ver;
-            return true;
-        }
-        catch (Exception ex)
-        {
-            errorMessage = ex.Message;
-            return false;
-        }
+        var result = _runtimeKit.ValidateExecutable(path);
+        version = result.Version;
+        errorMessage = result.ErrorMessage;
+        return result.IsValid;
     }
 
-    private List<CodexRuntimeCandidate> EnumerateHashedCandidates()
+    public static string ProbeVersion(string exePath) => KitRuntimeResolver.ProbeVersion(exePath);
+
+    public static string GetExecutableIdentity(string path) => KitRuntimeResolver.GetExecutableIdentity(path);
+
+    private static CodexRuntimeCandidate ToProductCandidate(KitRuntimeCandidate candidate) => new(
+        candidate.Path,
+        candidate.Version,
+        candidate.FileSize,
+        candidate.LastWriteTimeUtc,
+        candidate.IsAvailable,
+        candidate.Source switch
+        {
+            KitRuntimeCandidateSource.CustomOverride => ProductRuntimeCandidateSource.CustomOverride,
+            KitRuntimeCandidateSource.OfficialHashDirectory => ProductRuntimeCandidateSource.OfficialHashDirectory,
+            KitRuntimeCandidateSource.OfficialWellKnown => ProductRuntimeCandidateSource.OfficialWellKnown,
+            KitRuntimeCandidateSource.Path => ProductRuntimeCandidateSource.Path,
+            _ => ProductRuntimeCandidateSource.Path,
+        },
+        candidate.Error);
+
+    private static CodexRuntimeCapabilities FromRuntimeKit(KitRuntimeCapabilities capabilities) => new(
+        FromRuntimeKit(capabilities.AccountRead),
+        FromRuntimeKit(capabilities.RateLimitsRead),
+        FromRuntimeKit(capabilities.AccountUsageRead),
+        FromRuntimeKit(capabilities.RateLimitNotifications),
+        FromRuntimeKit(capabilities.DetailedResetCredits),
+        FromRuntimeKit(capabilities.RateLimitsModernParams));
+
+    private static KitRuntimeCapabilities ToRuntimeKit(CodexRuntimeCapabilities capabilities) => new(
+        ToRuntimeKit(capabilities.AccountRead),
+        ToRuntimeKit(capabilities.RateLimitsRead),
+        ToRuntimeKit(capabilities.AccountUsageRead),
+        ToRuntimeKit(capabilities.RateLimitNotifications),
+        ToRuntimeKit(capabilities.DetailedResetCredits),
+        ToRuntimeKit(capabilities.RateLimitsModernParams));
+
+    private static CapabilityStatus FromRuntimeKit(KitCapabilityStatus status) => status switch
     {
-        var list = new List<CodexRuntimeCandidate>();
-        try
+        KitCapabilityStatus.Supported => CapabilityStatus.Supported,
+        KitCapabilityStatus.Unsupported => CapabilityStatus.Unsupported,
+        _ => CapabilityStatus.Unknown,
+    };
+
+    private static KitCapabilityStatus ToRuntimeKit(CapabilityStatus status) => status switch
+    {
+        CapabilityStatus.Supported => KitCapabilityStatus.Supported,
+        CapabilityStatus.Unsupported => KitCapabilityStatus.Unsupported,
+        _ => KitCapabilityStatus.Unknown,
+    };
+
+    private sealed class CapabilityCacheAdapter(ICodexCapabilityCache cache) : IRuntimeCapabilityCache
+    {
+        public KitRuntimeCapabilities? GetCapabilities(string executableIdentity)
         {
-            var binDir = _baseBinDirectory ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OpenAI", "Codex", "bin");
-            if (!Directory.Exists(binDir))
-                return list;
-
-            var subdirs = Directory.GetDirectories(binDir);
-            foreach (var sub in subdirs)
-            {
-                var exe = Path.Combine(sub, "codex.exe");
-                if (File.Exists(exe))
-                {
-                    var (ver, isSupp) = InspectCandidate(exe);
-                    var fi = new FileInfo(exe);
-                    list.Add(new CodexRuntimeCandidate(
-                        exe,
-                        ver,
-                        fi.Length,
-                        fi.LastWriteTimeUtc,
-                        true,
-                        RuntimeCandidateSource.OfficialHashDirectory));
-                }
-            }
-
-            // Sort descending: highest version first, then newest write time
-            list.Sort((a, b) =>
-            {
-                var va = TryParseSemVer(a.Version);
-                var vb = TryParseSemVer(b.Version);
-                if (va != null && vb != null)
-                {
-                    int cmp = vb.CompareTo(va);
-                    if (cmp != 0) return cmp;
-                }
-                else if (va != null) return -1;
-                else if (vb != null) return 1;
-
-                return b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc);
-            });
-        }
-        catch
-        {
-            // Never crash if directories don't exist or access is denied
+            var capabilities = cache.GetCapabilities(executableIdentity);
+            return capabilities is null ? null : ToRuntimeKit(capabilities);
         }
 
-        return list;
+        public void SetCapabilities(string executableIdentity, KitRuntimeCapabilities capabilities) =>
+            cache.SetCapabilities(executableIdentity, FromRuntimeKit(capabilities));
+
+        public void Invalidate(string executableIdentity) => cache.Invalidate(executableIdentity);
+
+        public void Clear() => cache.Clear();
     }
 
-    private string? GetWellKnownInstallerPath()
+    private sealed class NoOpCapabilityCache : IRuntimeCapabilityCache
     {
-        try
-        {
-            var binDir = _baseBinDirectory ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OpenAI", "Codex", "bin");
-            return Path.Combine(binDir, "codex.exe");
-        }
-        catch
-        {
-            return null;
-        }
+        public KitRuntimeCapabilities? GetCapabilities(string executableIdentity) => null;
+        public void SetCapabilities(string executableIdentity, KitRuntimeCapabilities capabilities) { }
+        public void Invalidate(string executableIdentity) { }
+        public void Clear() { }
     }
 
-    private static string? FindExecutableOnPath()
+    private sealed class DelegateRuntimeInspector(Func<string, (string? Version, bool? IsSupported)> inspector) : IRuntimeInspector
     {
-        var all = FindAllExecutablesOnPath();
-        return all.Count > 0 ? all[0] : null;
-    }
-
-    private static List<string> FindAllExecutablesOnPath()
-    {
-        var results = new List<string>();
-        try
+        public RuntimeInspection Inspect(string executablePath, bool probeCapabilities)
         {
-            var pathVar = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            var dirs = pathVar.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            string[] names = ["codex.exe", "codex.cmd", "codex.bat", "codex.ps1", "codex"];
-
-            foreach (var dir in dirs)
-            {
-                foreach (var name in names)
-                {
-                    try
-                    {
-                        var full = Path.Combine(dir, name);
-                        if (File.Exists(full))
-                        {
-                            results.Add(full);
-                        }
-                    }
-                    catch { }
-                }
-            }
+            var (version, isSupported) = inspector(executablePath);
+            return new RuntimeInspection(
+                version,
+                isSupported == true ? KitCapabilityStatus.Supported : KitCapabilityStatus.Unsupported);
         }
-        catch { }
-
-        return results;
-    }
-
-    private (string? Version, bool IsSupported) InspectCandidate(string exePath)
-    {
-        if (_probeInspector != null)
-        {
-            var (customVer, customSupp) = _probeInspector(exePath);
-            return (customVer, customSupp ?? false);
-        }
-
-        var identity = GetExecutableIdentity(exePath);
-        var cached = _capabilityCache.GetCapabilities(identity);
-
-        string? version = null;
-        bool isSupported = false;
-
-        if (cached != null)
-        {
-            isSupported = cached.AccountUsageRead == CapabilityStatus.Supported;
-        }
-
-        // Try extracting version
-        version = ProbeVersion(exePath);
-
-        if (cached == null)
-        {
-            isSupported = ProbeSchemaSupport(exePath, version);
-            _capabilityCache.SetCapabilities(identity, BuildCapabilities(isSupported));
-        }
-
-        return (version, isSupported);
-    }
-
-    public static string ProbeVersion(string exePath)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = exePath,
-                Arguments = "--version",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null) return "unknown";
-
-            if (!process.WaitForExit(3000))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                return "unknown";
-            }
-
-            var output = process.StandardOutput.ReadToEnd();
-            var match = VersionPattern.Match(output);
-            if (match.Success)
-                return match.Groups[1].Value;
-        }
-        catch { }
-
-        // Fallback to FileVersionInfo if available
-        try
-        {
-            var fvi = FileVersionInfo.GetVersionInfo(exePath);
-            if (!string.IsNullOrWhiteSpace(fvi.ProductVersion))
-            {
-                var match = VersionPattern.Match(fvi.ProductVersion);
-                if (match.Success)
-                    return match.Groups[1].Value;
-                return fvi.ProductVersion;
-            }
-        }
-        catch { }
-
-        return "unknown";
-    }
-
-    private static bool ProbeSchemaSupport(string exePath, string? version)
-    {
-        // Strategy 2: Schema generation
-        string tempDir = Path.Combine(Path.GetTempPath(), "codex_schema_" + Guid.NewGuid().ToString("N"));
-        Process? schemaProcess = null;
-        try
-        {
-            Directory.CreateDirectory(tempDir);
-            var psi = new ProcessStartInfo
-            {
-                FileName = exePath,
-                Arguments = $"app-server generate-json-schema --out \"{tempDir}\"",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            schemaProcess = Process.Start(psi);
-            if (schemaProcess is not null && schemaProcess.WaitForExit(4000) && schemaProcess.ExitCode == 0)
-            {
-                var files = Directory.GetFiles(tempDir, "*.json", SearchOption.AllDirectories);
-                if (files.Length > 0)
-                {
-                    foreach (var f in files)
-                    {
-                        var text = File.ReadAllText(f);
-                        if (text.Contains("account/usage/read", StringComparison.OrdinalIgnoreCase))
-                            return true;
-                    }
-                    // Schema generated cleanly and does not mention account/usage/read
-                    return false;
-                }
-            }
-            else if (schemaProcess is not null && !schemaProcess.HasExited)
-            {
-                // The schema probe owns this process; do not leave it writing into a temp folder
-                // that crash recovery may remove on a later launch.
-                TryStopOwnedProbe(schemaProcess);
-            }
-        }
-        catch { }
-        finally
-        {
-            if (schemaProcess is not null)
-            {
-                if (!schemaProcess.HasExited)
-                {
-                    TryStopOwnedProbe(schemaProcess);
-                }
-                schemaProcess.Dispose();
-            }
-
-            try
-            {
-                if (Directory.Exists(tempDir))
-                    TempCleanup.TryForceDelete(tempDir);
-            }
-            catch { }
-        }
-
-        // Fallback: heuristic version check if schema generation unavailable
-        if (!string.IsNullOrWhiteSpace(version))
-        {
-            var semver = TryParseSemVer(version);
-            if (semver != null)
-            {
-                return semver >= new Version(0, 140, 0);
-            }
-        }
-
-        return false;
-    }
-
-    private static void TryStopOwnedProbe(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(1_000);
-            }
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            // Only the child process created by this schema probe is addressed here.
-        }
-    }
-
-    private static CodexRuntimeCapabilities BuildCapabilities(bool isActivitySupported) =>
-        isActivitySupported
-            ? CodexRuntimeCapabilities.ModernFull
-            : CodexRuntimeCapabilities.LegacyUnsupportedUsage;
-
-    public static string GetExecutableIdentity(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                var fi = new FileInfo(path);
-                return $"{path}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}";
-            }
-        }
-        catch { }
-
-        return $"{path}|unknown";
-    }
-
-    private static Version? TryParseSemVer(string? versionStr)
-    {
-        if (string.IsNullOrWhiteSpace(versionStr)) return null;
-        var clean = versionStr.TrimStart('v');
-        var dash = clean.IndexOf('-');
-        if (dash > 0)
-            clean = clean[..dash];
-
-        return Version.TryParse(clean, out var v) ? v : null;
     }
 }

@@ -16,6 +16,14 @@
       "project": "src/Llm.ProviderKit/Llm.ProviderKit.csproj",
       "packageId": "Llm.ProviderKit",
       "version": "0.1.0-preview.3"
+    },
+    {
+      "name": "codex-runtime-kit",
+      "repository": "https://github.com/MalenkiySolovey/codex-runtime-kit.git",
+      "commit": "2529c57d03dc55b18a405327d8f6af6ab1bc0dc8",
+      "project": "src/Codex.RuntimeKit/Codex.RuntimeKit.csproj",
+      "packageId": "Codex.RuntimeKit",
+      "version": "0.1.0-preview.1"
     }
   ]
 }
