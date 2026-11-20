@@ -443,7 +443,10 @@ public static class ServiceCollectionExtensions
         services.AddTransient<LaunchProfilesViewModel>();
         services.AddTransient<ShellViewModel>();
         services.AddTransient<SettingsViewModel>();
-        services.AddTransient<MainWindow>();
+        if (CodexSwitcher.Core.Common.Lifecycle.StartupTracer.IsDiagnosticCaptureEnabled)
+            services.AddTransient<MainWindow>(MainWindowActivationFactory.CreateWithDiagnostics);
+        else
+            services.AddTransient<MainWindow>();
 
         services.AddSingleton<Func<SettingsViewModel>>(sp => () => sp.GetRequiredService<SettingsViewModel>());
 

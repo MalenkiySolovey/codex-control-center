@@ -5,6 +5,7 @@ using CodexSwitcher.App.Shell.State;
 using CodexSwitcher.Core.Accounts.Contracts;
 using CodexSwitcher.Core.Accounts.Services;
 using CodexSwitcher.Core.Common.Dispatcher;
+using CodexSwitcher.Core.Common.Errors;
 using CodexSwitcher.Core.Providers.Contracts;
 using CodexSwitcher.Core.Providers.Models;
 using CodexSwitcher.Core.Routing.Contracts;
@@ -102,7 +103,6 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
 
         _launchService.SessionsChanged += OnSessionsChanged;
         _launchService.WarningRaised += OnWarningRaised;
-        Refresh();
     }
 
     partial void OnSelectedTargetKindIndexChanged(int value)
@@ -122,9 +122,17 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
     {
         if (SelectedTargetKindIndex == 1 && !_editingId.HasValue)
         {
-            Model = value is { } profileId
-                ? _providerStore.GetById(profileId)?.GetEffectiveSelectedModel() ?? string.Empty
-                : string.Empty;
+            try
+            {
+                Model = value is { } profileId
+                    ? _providerStore.GetById(profileId)?.GetEffectiveSelectedModel() ?? string.Empty
+                    : string.Empty;
+            }
+            catch (CorruptApiProviderIndexException)
+            {
+                Model = string.Empty;
+                ApiProviderIndexRecoveryNotice.Show(_notifications);
+            }
         }
     }
 
@@ -145,7 +153,21 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
             .Select(account => (Account: account, Parsed: Guid.TryParse(account.AccountId, out var id) ? id : (Guid?)null))
             .Where(item => item.Parsed.HasValue)
             .ToDictionary(item => item.Parsed!.Value, item => item.Account.DisplayName);
-        var providerNames = _providerStore.GetAll().ToDictionary(profile => profile.Id, profile => profile.DisplayName);
+        IReadOnlyList<ApiProviderProfile> providerProfiles;
+        var providerIndexUnavailable = false;
+        try
+        {
+            providerProfiles = _providerStore.GetAll();
+            ApiProviderIndexRecoveryNotice.Clear(_notifications);
+        }
+        catch (CorruptApiProviderIndexException)
+        {
+            providerProfiles = Array.Empty<ApiProviderProfile>();
+            providerIndexUnavailable = true;
+            ApiProviderIndexRecoveryNotice.Show(_notifications);
+        }
+
+        var providerNames = providerProfiles.ToDictionary(profile => profile.Id, profile => profile.DisplayName);
         Profiles.Clear();
         foreach (var profile in _settings.CodexLaunchProfiles.OrderBy(profile => profile.Name, StringComparer.CurrentCultureIgnoreCase))
         {
@@ -153,6 +175,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
             {
                 CodexLaunchTargetKind.ChatGptAccount when accountNames.TryGetValue(profile.CredentialProfileId, out var accountName) => accountName,
                 CodexLaunchTargetKind.ApiProvider when providerNames.TryGetValue(profile.CredentialProfileId, out var providerName) => providerName,
+                CodexLaunchTargetKind.ApiProvider when providerIndexUnavailable => Loc.ApiProviderIndexUnavailableLabel,
                 _ => "Missing credential profile",
             };
             Profiles.Add(new CodexLaunchProfileItemViewModel(
@@ -164,7 +187,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
         OnPropertyChanged(nameof(HasProfiles));
         OnPropertyChanged(nameof(HasRunningSessions));
         ApplyFilter();
-        RefreshTargetChoices();
+        RefreshTargetChoices(providerProfiles, providerIndexUnavailable);
     }
 
     private void ApplyFilter()
@@ -485,7 +508,11 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
         _notifications.ShowInformation("Launch profile removed", "Its isolated Codex home and conversation history were kept on disk.");
     }
 
-    private void RefreshTargetChoices()
+    private void RefreshTargetChoices() => RefreshTargetChoices(providerProfiles: null, providerIndexUnavailable: false);
+
+    private void RefreshTargetChoices(
+        IReadOnlyList<ApiProviderProfile>? providerProfiles,
+        bool providerIndexUnavailable)
     {
         if (TargetChoices is null)
         {
@@ -496,10 +523,31 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
         TargetChoices.Clear();
         if (SelectedTargetKindIndex == 1)
         {
-            foreach (var provider in _providerStore.GetAll().Where(provider => provider.Status == ApiProviderProfileStatus.Active))
+            if (!providerIndexUnavailable && providerProfiles is null)
             {
-                TargetChoices.Add(new LaunchTargetChoice(provider.Id, provider.DisplayName,
-                    provider.GetEffectiveSelectedModel() ?? "No selected model"));
+                try
+                {
+                    providerProfiles = _providerStore.GetAll();
+                    ApiProviderIndexRecoveryNotice.Clear(_notifications);
+                }
+                catch (CorruptApiProviderIndexException)
+                {
+                    providerIndexUnavailable = true;
+                    ApiProviderIndexRecoveryNotice.Show(_notifications);
+                }
+            }
+
+            if (providerIndexUnavailable)
+            {
+                ApiProviderIndexRecoveryNotice.Show(_notifications);
+            }
+            else
+            {
+                foreach (var provider in providerProfiles!.Where(provider => provider.Status == ApiProviderProfileStatus.Active))
+                {
+                    TargetChoices.Add(new LaunchTargetChoice(provider.Id, provider.DisplayName,
+                        provider.GetEffectiveSelectedModel() ?? "No selected model"));
+                }
             }
         }
         else

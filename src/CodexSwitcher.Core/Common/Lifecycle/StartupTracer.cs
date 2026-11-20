@@ -32,8 +32,14 @@ public sealed class StartupTracer
     private static readonly long s_processStartTimestamp = Stopwatch.GetTimestamp();
     private static readonly StartupTracer s_instance = new(s_processStartTimestamp);
     private static readonly JsonSerializerOptions s_jsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions s_diagnosticJsonOptions = new();
+    private static readonly object s_diagnosticWriteLock = new();
+    private const long MaximumDiagnosticBytes = 128 * 1024;
 
     public static StartupTracer Instance => s_instance;
+    public static bool IsDiagnosticCaptureEnabled =>
+        string.Equals(System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_STARTUP_DIAGNOSTICS"),
+            "1", StringComparison.OrdinalIgnoreCase);
 
     private readonly long _startTimestamp;
     private readonly List<StartupMilestoneTiming> _milestones = [];
@@ -63,11 +69,45 @@ public sealed class StartupTracer
             _milestones.Add(new StartupMilestoneTiming(name, timestamp, elapsedMs));
         }
 
+        WriteDiagnosticEvent("milestone", name, subject: null, exceptionType: null, stackFrames: null);
+
         if (name.Equals("T12:UIInteractive", StringComparison.OrdinalIgnoreCase))
         {
             _interactiveReached.TrySetResult();
         }
 
+    }
+
+    public void RecordDiagnosticEvent(string eventName, string? subject = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
+        WriteDiagnosticEvent("diagnostic", eventName, subject, exceptionType: null, stackFrames: null);
+    }
+
+    public void RecordSanitizedException(Exception exception, string? subject = null)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        string[] stackFrames;
+        try
+        {
+            stackFrames = new StackTrace(exception, fNeedFileInfo: false).GetFrames()?
+                .Select(frame => frame.GetMethod())
+                .Where(method => method is not null)
+                .Take(24)
+                .Select(method => $"{method!.DeclaringType?.FullName ?? "<global>"}.{method!.Name}")
+                .ToArray() ?? [];
+        }
+        catch
+        {
+            stackFrames = [];
+        }
+
+        WriteDiagnosticEvent(
+            "exception",
+            name: null,
+            subject,
+            exceptionType: exception.GetType().FullName ?? exception.GetType().Name,
+            stackFrames);
     }
 
     public Task WaitForInteractiveAsync(CancellationToken cancellationToken = default) =>
@@ -142,5 +182,49 @@ public sealed class StartupTracer
         var value = System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_ENABLE_PERF_TRACE");
         return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
             || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void WriteDiagnosticEvent(
+        string kind,
+        string? name,
+        string? subject,
+        string? exceptionType,
+        string[]? stackFrames)
+    {
+        if (!IsDiagnosticCaptureEnabled)
+            return;
+
+        var directory = System.Environment.GetEnvironmentVariable("CODEX_SWITCHBOARD_PERF_DIR");
+        if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
+            return;
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, $"startup-diagnostics-{System.Environment.ProcessId}.jsonl");
+            var entry = new
+            {
+                processId = System.Environment.ProcessId,
+                recordedAtUtc = DateTimeOffset.UtcNow,
+                kind,
+                name,
+                subject,
+                elapsedMilliseconds = (Stopwatch.GetTimestamp() - _startTimestamp) * 1000.0 / Stopwatch.Frequency,
+                exceptionType,
+                stackFrames,
+            };
+            var line = JsonSerializer.Serialize(entry, s_diagnosticJsonOptions) + System.Environment.NewLine;
+            var bytes = Encoding.UTF8.GetByteCount(line);
+            lock (s_diagnosticWriteLock)
+            {
+                var existingBytes = File.Exists(path) ? new FileInfo(path).Length : 0;
+                if (existingBytes + bytes <= MaximumDiagnosticBytes)
+                    File.AppendAllText(path, line, Encoding.UTF8);
+            }
+        }
+        catch
+        {
+            // Gated diagnostics must never affect application startup.
+        }
     }
 }

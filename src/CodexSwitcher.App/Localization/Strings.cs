@@ -651,6 +651,11 @@ public sealed class Strings
     public string AddApiProviderTooltip => S("Adicionar chave de API OpenAI-compatível", "Add an OpenAI-compatible API key");
     public string ApiProvidersEmptyTitle => S("Nenhum provedor de API ainda", "No API providers yet");
     public string ApiProvidersEmptyBody => S("Adicione uma chave de API para usar um provedor compatível com OpenAI no Codex.", "Add an API key to use an OpenAI-compatible provider with Codex.");
+    public string ApiProviderIndexUnavailableTitle => S("Dados do provedor de API indisponíveis", "API provider data unavailable");
+    public string ApiProviderIndexUnavailableMessage => S(
+        "Não foi possível ler a lista salva de provedores de API. Os arquivos originais foram mantidos sem alterações. Restaure um backup válido antes de gerenciar provedores de API ou perfis de inicialização.",
+        "The saved API provider list could not be read. The original files were left unchanged. Restore a valid backup before managing API providers or launch profiles.");
+    public string ApiProviderIndexUnavailableLabel => S("Dados de API indisponíveis", "API provider data unavailable");
     public string ActiveRoutingTitle => S("Roteamento ativo", "Active routing");
     public string CredentialSlotTitle => S("Credencial ativa", "Active credential");
     public string CredentialActiveBadge => S("Credencial ativa", "Credential active");

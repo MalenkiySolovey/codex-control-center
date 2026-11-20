@@ -164,7 +164,21 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
     {
         var existingMap = Items.ToDictionary(x => x.Id);
         var targetList = new List<ApiProviderItemViewModel>();
-        var apiProfiles = _apiProviderStore.GetAll();
+        IReadOnlyList<ApiProviderProfile> apiProfiles;
+        try
+        {
+            apiProfiles = _apiProviderStore.GetAll();
+            ApiProviderIndexRecoveryNotice.Clear(_notifications);
+        }
+        catch (CorruptApiProviderIndexException)
+        {
+            Items.Clear();
+            FilteredItems.Clear();
+            ShowEmptyState = true;
+            ApplySearchFilter();
+            ApiProviderIndexRecoveryNotice.Show(_notifications);
+            return;
+        }
 
         foreach (var prof in apiProfiles)
         {

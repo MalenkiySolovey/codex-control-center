@@ -106,22 +106,30 @@ public static class Program
             return;
         }
 
-        ComWrappersSupport.InitializeComWrappers();
-
-        var isRedirect = DecideRedirection();
-        if (isRedirect)
+        try
         {
-            Environment.Exit(0);
-            return;
+            ComWrappersSupport.InitializeComWrappers();
+
+            var isRedirect = DecideRedirection();
+            if (isRedirect)
+            {
+                Environment.Exit(0);
+                return;
+            }
+
+            Microsoft.UI.Xaml.Application.Start((p) =>
+            {
+                var context = new DispatcherQueueSynchronizationContext(
+                    DispatcherQueue.GetForCurrentThread());
+                SynchronizationContext.SetSynchronizationContext(context);
+                _ = new App();
+            });
         }
-
-        Microsoft.UI.Xaml.Application.Start((p) =>
+        catch (Exception exception)
         {
-            var context = new DispatcherQueueSynchronizationContext(
-                DispatcherQueue.GetForCurrentThread());
-            SynchronizationContext.SetSynchronizationContext(context);
-            _ = new App();
-        });
+            StartupTracer.Instance.RecordSanitizedException(exception, "Program.Main");
+            throw;
+        }
     }
 
     private static bool DecideRedirection()
@@ -131,7 +139,15 @@ public static class Program
         var instanceKey = ResolveSingleInstanceKey(
             Environment.GetEnvironmentVariable("CODEXSWITCHBOARD_HOME"),
             AppPaths.DefaultRoot);
+        StartupTracer.Instance.RecordDiagnosticEvent(
+            "SingleInstanceKeySelected",
+            string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CODEXSWITCHBOARD_HOME"))
+                ? "default"
+                : "custom");
         var keyInstance = AppInstance.FindOrRegisterForKey(instanceKey);
+        StartupTracer.Instance.RecordDiagnosticEvent(
+            "SingleInstanceClaimResult",
+            keyInstance.IsCurrent ? "current" : "redirect");
 
         if (!keyInstance.IsCurrent)
         {

@@ -32,37 +32,50 @@ public partial class App : Application
     public App()
     {
         StartupTracer.Instance.RecordMilestone("T1:AppConstructor");
+        if (StartupTracer.IsDiagnosticCaptureEnabled)
+        {
+            UnhandledException += (_, eventArgs) =>
+                StartupTracer.Instance.RecordSanitizedException(eventArgs.Exception, "Application.UnhandledException");
+        }
         InitializeComponent();
         StartupTracer.Instance.RecordMilestone("T2:AppInitComponentCompleted");
     }
 
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        StartupTracer.Instance.RecordMilestone("T3:OnLaunchedEntered");
-        StartupTracer.Instance.RecordMilestone("T4:HostBuilderStarted");
-        _host = SwitchboardHostBuilder.CreateHost();
-        StartupTracer.Instance.RecordMilestone("T5:HostBuilderCompleted");
-        await _host.StartAsync();
-        StartupTracer.Instance.RecordMilestone("T6:HostStartAsyncCompleted");
-
-        StartupTracer.Instance.RecordMilestone("T7a:MainWindowResolutionStarted");
-        _window = _host.Services.GetRequiredService<MainWindow>();
-        MainWindowInstance = _window;
-        StartupTracer.Instance.RecordMilestone("T7:MainWindowConstructed");
-        StartupTracer.Instance.RecordMilestone("T7d:MainWindowResolutionCompleted");
-
-        _window.Closed += OnMainWindowClosed;
-        StartupTracer.Instance.RecordMilestone("T9:WindowActivateCalled");
-        _window.Activate();
-        if (Program.CommandLineArgs.Any(argument =>
-                argument.Equals("--start-in-tray", StringComparison.OrdinalIgnoreCase)))
+        try
         {
-            // Keep the hide on the launch stack instead of waiting for another
-            // dispatcher turn. Startup still uses the normal Window activation path.
-            _window.HideToTray();
+            StartupTracer.Instance.RecordMilestone("T3:OnLaunchedEntered");
+            StartupTracer.Instance.RecordMilestone("T4:HostBuilderStarted");
+            _host = SwitchboardHostBuilder.CreateHost();
+            StartupTracer.Instance.RecordMilestone("T5:HostBuilderCompleted");
+            await _host.StartAsync();
+            StartupTracer.Instance.RecordMilestone("T6:HostStartAsyncCompleted");
+
+            StartupTracer.Instance.RecordMilestone("T7a:MainWindowResolutionStarted");
+            _window = _host.Services.GetRequiredService<MainWindow>();
+            MainWindowInstance = _window;
+            StartupTracer.Instance.RecordMilestone("T7:MainWindowConstructed");
+            StartupTracer.Instance.RecordMilestone("T7d:MainWindowResolutionCompleted");
+
+            _window.Closed += OnMainWindowClosed;
+            StartupTracer.Instance.RecordMilestone("T9:WindowActivateCalled");
+            _window.Activate();
+            if (Program.CommandLineArgs.Any(argument =>
+                    argument.Equals("--start-in-tray", StringComparison.OrdinalIgnoreCase)))
+            {
+                // Keep the hide on the launch stack instead of waiting for another
+                // dispatcher turn. Startup still uses the normal Window activation path.
+                _window.HideToTray();
+            }
+            _deferredMaintenanceTask = RunDeferredMaintenanceAfterInteractiveAsync(_host);
+            Services.BenchmarkScenarioRunner.CheckAndRun(_window, Program.CommandLineArgs);
         }
-        _deferredMaintenanceTask = RunDeferredMaintenanceAfterInteractiveAsync(_host);
-        Services.BenchmarkScenarioRunner.CheckAndRun(_window, Program.CommandLineArgs);
+        catch (Exception exception)
+        {
+            StartupTracer.Instance.RecordSanitizedException(exception, "App.OnLaunched");
+            throw;
+        }
     }
 
     private async Task RunDeferredMaintenanceAfterInteractiveAsync(IHost host)
