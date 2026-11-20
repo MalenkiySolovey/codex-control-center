@@ -1,4 +1,5 @@
 using CodexSwitcher.Core.Tests.TestSupport;
+using Llm.ProviderKit.Inspection;
 using Xunit;
 
 namespace CodexSwitcher.Core.Tests;
@@ -36,6 +37,63 @@ public sealed class ApiProviderStoreTests
         Assert.Equal("My Router.Cheap", retrieved.DisplayName);
         Assert.Equal("sk-...1234", retrieved.KeyPreview);
         Assert.Equal(ApiProviderProfileStatus.Active, retrieved.Status);
+    }
+
+    [Fact]
+    public void ApiProviderStore_RestartRestoresTypedBillingObservationAndIdentity()
+    {
+        using var temp = new TempDir();
+        var jsonPath = Path.Combine(temp.Root, "api-providers.json");
+        var store = new ApiProviderStore(_fs, jsonPath);
+        var profileId = Guid.NewGuid();
+        var ownerId = Guid.NewGuid();
+        var observedAt = DateTimeOffset.UtcNow.AddMinutes(-15);
+        var profile = new ApiProviderProfile
+        {
+            Id = profileId,
+            EndpointId = ownerId,
+            CatalogProviderId = "openrouter",
+            BaseUrl = "https://openrouter.ai/api/v1",
+            SelectedRouteId = "primary",
+            LastBillingSnapshot = new ProviderBillingSnapshot
+            {
+                ProfileId = profileId,
+                ProviderId = "openrouter",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                RouteId = "primary",
+                CredentialOwnerId = ownerId,
+                CredentialRevision = "synthetic-revision",
+                Metrics = [new ProviderMetric
+                {
+                    Id = "api-key-spending",
+                    Kind = ProviderMetricKind.Spending,
+                    Value = 25.500000000000000001m,
+                    Scope = ProviderMetricScope.ApiKey,
+                    Unit = ProviderMetricUnit.Currency("USD"),
+                    Availability = ProviderMetricAvailability.Live,
+                    ObservedAt = observedAt,
+                    Period = "monthly",
+                    PeriodSemantics = ProviderMetricPeriodSemantics.CalendarMonth,
+                }],
+                Availability = ProviderMetricAvailability.Live,
+                UsageAvailability = ProviderMetricAvailability.Live,
+                ObservedAt = observedAt,
+                LastAttemptAt = observedAt.AddSeconds(1),
+                Status = ProviderBillingStatus.Live,
+            },
+        };
+
+        store.Save(profile);
+        var reopened = new ApiProviderStore(_fs, jsonPath).GetById(profileId)!.LastBillingSnapshot!;
+
+        var metric = Assert.Single(reopened.Metrics);
+        Assert.Equal(25.500000000000000001m, metric.Value);
+        Assert.Equal(ProviderMetricKind.Spending, metric.Kind);
+        Assert.Equal(ProviderMetricScope.ApiKey, metric.Scope);
+        Assert.Equal(ProviderMetricUnit.Currency("USD"), metric.Unit);
+        Assert.Equal(ProviderMetricPeriodSemantics.CalendarMonth, metric.PeriodSemantics);
+        Assert.Equal(observedAt, reopened.ObservedAt);
+        Assert.Equal("synthetic-revision", reopened.CredentialRevision);
     }
 
     [Fact]

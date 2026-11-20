@@ -1,4 +1,6 @@
 using Xunit;
+using Llm.ProviderKit.Inspection;
+using ProviderInspectionService = CodexSwitcher.Core.Providers.Services.ProviderInspectionService;
 
 namespace CodexSwitcher.Core.Tests;
 
@@ -15,6 +17,18 @@ public sealed class ProviderInspectionServiceTests
         public ApiProviderProfile? GetByStableCodexProviderId(string stableId) =>
             Profiles.Values.FirstOrDefault(p => p.StableCodexProviderId == stableId);
         public void Save(ApiProviderProfile profile) => Profiles[profile.Id] = profile;
+        public bool TryUpdateBillingSnapshot(ApiProviderProfile expectedProfile, ProviderBillingSnapshot snapshot)
+        {
+            if (!Profiles.TryGetValue(expectedProfile.Id, out var current) || current.CreatedAt != expectedProfile.CreatedAt ||
+                current.StableCodexProviderId != expectedProfile.StableCodexProviderId || current.EndpointId != expectedProfile.EndpointId ||
+                current.CatalogProviderId != expectedProfile.CatalogProviderId || current.BaseUrl != expectedProfile.BaseUrl ||
+                current.SelectedRouteId != expectedProfile.SelectedRouteId || snapshot.ProfileId != expectedProfile.Id ||
+                snapshot.CredentialOwnerId != (expectedProfile.EndpointId ?? expectedProfile.Id) ||
+                snapshot.ProviderId != expectedProfile.CatalogProviderId || snapshot.BaseUrl != expectedProfile.BaseUrl ||
+                snapshot.RouteId != expectedProfile.SelectedRouteId) return false;
+            current.LastBillingSnapshot = snapshot;
+            return true;
+        }
         public void SaveAll(IEnumerable<ApiProviderProfile> profiles, ApiProviderSaveIntent intent = ApiProviderSaveIntent.NormalUpdate)
         {
             foreach (var p in profiles) Profiles[p.Id] = p;
@@ -38,6 +52,9 @@ public sealed class ProviderInspectionServiceTests
         public string? GetApiKey(Guid profileId) => Secrets.TryGetValue(profileId, out var s) ? s : null;
         public bool HasApiKey(Guid profileId) => Secrets.ContainsKey(profileId);
         public void SaveApiKey(Guid profileId, string apiKey) => Secrets[profileId] = apiKey;
+        public string? GetApiKeyRevision(Guid profileId) => Secrets.TryGetValue(profileId, out var secret)
+            ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(secret)))
+            : null;
         public void CloneApiKey(Guid sourceProfileId, Guid targetProfileId)
         {
             if (Secrets.TryGetValue(sourceProfileId, out var s))
@@ -70,6 +87,8 @@ public sealed class ProviderInspectionServiceTests
         public ProviderDescriptor? LastDescriptor { get; private set; }
         public bool GenericCalled { get; private set; }
         public bool DiscoverModelsCalled { get; private set; }
+        public int InspectCalls { get; private set; }
+        public Func<int, Task<ApiProviderSnapshot>>? InspectHandler { get; set; }
 
         public ApiProviderSnapshot ResultToReturn { get; set; } = new()
         {
@@ -80,7 +99,7 @@ public sealed class ProviderInspectionServiceTests
 
         public Exception? ExceptionToThrow { get; set; }
 
-        public Task<ApiProviderSnapshot> InspectAsync(
+        public async Task<ApiProviderSnapshot> InspectAsync(
             ProviderDescriptor descriptor,
             string activeBaseUrl,
             string? apiKey,
@@ -90,7 +109,8 @@ public sealed class ProviderInspectionServiceTests
             LastDescriptor = descriptor;
             LastInspectedBaseUrl = activeBaseUrl;
             LastInspectedApiKey = apiKey;
-            return Task.FromResult(ResultToReturn);
+            var call = ++InspectCalls;
+            return InspectHandler is null ? ResultToReturn : await InspectHandler(call);
         }
 
         public Task<ApiProviderSnapshot> DiscoverModelsAsync(
@@ -326,4 +346,334 @@ public sealed class ProviderInspectionServiceTests
         Assert.True(cache.TryGetModels(profileId, "primary", 1, out var cached));
         Assert.Equal(snapshot.Models, cached);
     }
+
+    [Fact]
+    public async Task InspectAsync_PersistsTypedKeySpendingWithoutInventingAccountBalance()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var inspector = new FakeInspector
+        {
+            ResultToReturn = BillingObservation(
+                [Metric("api-key-spending", ProviderMetricKind.Spending, 25.50m, ProviderMetricScope.ApiKey, ProviderMetricUnit.Currency("USD")),
+                 Metric("api-key-allowance", ProviderMetricKind.QuotaLimit, 100m, ProviderMetricScope.ApiKey, ProviderMetricUnit.Currency("USD"))],
+                ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown, ProviderMetricAvailability.Live),
+        };
+        var profile = new ApiProviderProfile
+        {
+            EndpointId = Guid.NewGuid(),
+            CatalogProviderId = "openrouter",
+            BaseUrl = "https://openrouter.ai/api/v1",
+            SelectedRouteId = "primary",
+        };
+        apiStore.Save(profile);
+        secretStore.SaveApiKey(profile.EndpointId.Value, SyntheticSecretKey);
+
+        await new ProviderInspectionService(apiStore, secretStore, new FakeCatalogService(), inspector).InspectAsync(profile.Id);
+
+        var billing = Assert.IsType<ProviderBillingSnapshot>(apiStore.GetById(profile.Id)!.LastBillingSnapshot);
+        Assert.Equal(ProviderBillingStatus.Live, billing.Status);
+        Assert.Equal(ProviderMetricAvailability.Unknown, billing.BalanceAvailability);
+        Assert.Equal(ProviderMetricAvailability.Live, billing.UsageAvailability);
+        Assert.Null(billing.Balance);
+        Assert.Equal(25.50m, billing.Used);
+        Assert.Equal(100m, billing.Limit);
+        Assert.Equal("USD", billing.Currency);
+        Assert.Equal(profile.Id, billing.ProfileId);
+        Assert.Equal(profile.CatalogProviderId, billing.ProviderId);
+        Assert.Equal(profile.EndpointId, billing.CredentialOwnerId);
+        Assert.Equal(secretStore.GetApiKeyRevision(profile.EndpointId.Value), billing.CredentialRevision);
+        Assert.DoesNotContain(SyntheticSecretKey, System.Text.Json.JsonSerializer.Serialize(billing));
+    }
+
+    [Fact]
+    public async Task FailedRefreshRetainsOriginalTypedObservationAndMarksItUnauthorized()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var oldObservedAt = DateTimeOffset.UtcNow.AddHours(-2);
+        var inspector = new FakeInspector
+        {
+            ResultToReturn = BillingObservation(
+                [Metric("key-spending", ProviderMetricKind.Spending, 6m, ProviderMetricScope.ApiKey, ProviderMetricUnit.Currency("USD"), oldObservedAt),
+                 Metric("key-limit", ProviderMetricKind.QuotaLimit, 20m, ProviderMetricScope.ApiKey, ProviderMetricUnit.Currency("USD"), oldObservedAt)],
+                ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown, ProviderMetricAvailability.Live, oldObservedAt),
+        };
+        var profile = new ApiProviderProfile { CatalogProviderId = "openrouter", BaseUrl = "https://openrouter.ai/api/v1", SelectedRouteId = "primary" };
+        apiStore.Save(profile);
+        secretStore.SaveApiKey(profile.Id, SyntheticSecretKey);
+        var service = new ProviderInspectionService(apiStore, secretStore, new FakeCatalogService(), inspector);
+
+        await service.InspectAsync(profile.Id);
+        inspector.ResultToReturn = BillingObservation([], ProviderMetricAvailability.Unauthorized,
+            ProviderMetricAvailability.Unknown, ProviderMetricAvailability.Unauthorized,
+            DateTimeOffset.UtcNow, "HTTP 401 from synthetic provider");
+        await service.InspectAsync(profile.Id);
+
+        var billing = apiStore.GetById(profile.Id)!.LastBillingSnapshot!;
+        Assert.Equal(ProviderBillingStatus.Unauthorized, billing.Status);
+        Assert.Equal(oldObservedAt, billing.ObservedAt);
+        Assert.True(billing.LastAttemptAt > oldObservedAt);
+        Assert.Equal(2, billing.Metrics.Count);
+        Assert.All(billing.Metrics, metric => Assert.Equal(ProviderMetricAvailability.Cached, metric.Availability));
+    }
+
+    [Fact]
+    public async Task TemporaryFailureRetainsValueAndStaysUnavailableRatherThanUnauthorized()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var catalogService = new FakeCatalogService();
+        var observedAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+        var inspector = new FakeInspector
+        {
+            ResultToReturn = BillingObservation(
+                [Metric("balance-usd", ProviderMetricKind.AvailableBalance, 6m, ProviderMetricScope.Account,
+                    ProviderMetricUnit.Currency("USD"), observedAt)],
+                ProviderMetricAvailability.Live, ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown,
+                observedAt),
+        };
+        var profile = new ApiProviderProfile { CatalogProviderId = "test-provider", BaseUrl = "https://provider.example.test/v1" };
+        apiStore.Save(profile);
+        secretStore.SaveApiKey(profile.Id, SyntheticSecretKey);
+        catalogService.Descriptors["test-provider"] = new ProviderDescriptor { Id = "test-provider", DisplayName = "Test provider" };
+        var service = new ProviderInspectionService(apiStore, secretStore, catalogService, inspector);
+
+        await service.InspectAsync(profile.Id);
+        inspector.ResultToReturn = BillingObservation([], ProviderMetricAvailability.Unavailable,
+            ProviderMetricAvailability.Unavailable, ProviderMetricAvailability.Unknown,
+            DateTimeOffset.UtcNow, "HTTP 503 from synthetic provider");
+        await service.InspectAsync(profile.Id);
+
+        var billing = apiStore.GetById(profile.Id)!.LastBillingSnapshot!;
+        Assert.Equal(ProviderBillingStatus.Unavailable, billing.Status);
+        Assert.Equal(observedAt, billing.ObservedAt);
+        Assert.Equal(ProviderMetricKind.AvailableBalance, Assert.Single(billing.Metrics).Kind);
+        Assert.Equal(ProviderMetricAvailability.Cached, billing.Metrics[0].Availability);
+    }
+
+    [Fact]
+    public async Task InspectAsync_DoesNotResurrectProfileDeletedDuringRequest()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var catalogService = new FakeCatalogService();
+        var profile = new ApiProviderProfile { CatalogProviderId = "test-provider", BaseUrl = "https://provider.example.test/v1" };
+        apiStore.Save(profile);
+        secretStore.SaveApiKey(profile.Id, SyntheticSecretKey);
+        catalogService.Descriptors["test-provider"] = new ProviderDescriptor { Id = "test-provider", DisplayName = "Test provider" };
+        var inspector = new FakeInspector
+        {
+            InspectHandler = _ =>
+            {
+                apiStore.Delete(profile.Id);
+                return Task.FromResult(BillingObservation(
+                    [Metric("balance", ProviderMetricKind.AvailableBalance, 12m, ProviderMetricScope.Account, ProviderMetricUnit.Currency("USD"))],
+                    ProviderMetricAvailability.Live, ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown));
+            },
+        };
+
+        await new ProviderInspectionService(apiStore, secretStore, catalogService, inspector).InspectAsync(profile.Id);
+
+        Assert.Null(apiStore.GetById(profile.Id));
+    }
+
+    [Fact]
+    public async Task InspectAsync_DiscardsObservationWhenCredentialRotatesDuringRequest()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var catalogService = new FakeCatalogService();
+        var profile = new ApiProviderProfile { CatalogProviderId = "test-provider", BaseUrl = "https://provider.example.test/v1" };
+        apiStore.Save(profile);
+        secretStore.SaveApiKey(profile.Id, SyntheticSecretKey);
+        catalogService.Descriptors["test-provider"] = new ProviderDescriptor { Id = "test-provider", DisplayName = "Test provider" };
+        var inspector = new FakeInspector
+        {
+            InspectHandler = _ =>
+            {
+                secretStore.SaveApiKey(profile.Id, "sk-rotated-synthetic-key");
+                return Task.FromResult(BillingObservation(
+                    [Metric("balance", ProviderMetricKind.AvailableBalance, 12m, ProviderMetricScope.Account, ProviderMetricUnit.Currency("USD"))],
+                    ProviderMetricAvailability.Live, ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown));
+            },
+        };
+
+        await new ProviderInspectionService(apiStore, secretStore, catalogService, inspector).InspectAsync(profile.Id);
+
+        Assert.Null(apiStore.GetById(profile.Id)!.LastBillingSnapshot);
+    }
+
+    [Fact]
+    public async Task InspectAsync_MissingCredentialDoesNotCallProviderAndStaysUnknown()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var catalogService = new FakeCatalogService();
+        var profile = new ApiProviderProfile { CatalogProviderId = "test-provider", BaseUrl = "https://provider.example.test/v1" };
+        apiStore.Save(profile);
+        catalogService.Descriptors["test-provider"] = new ProviderDescriptor { Id = "test-provider", DisplayName = "Test provider" };
+        var inspector = new FakeInspector();
+
+        var result = await new ProviderInspectionService(apiStore, secretStore, catalogService, inspector).InspectAsync(profile.Id);
+
+        Assert.Equal(0, inspector.InspectCalls);
+        Assert.Contains("No API key", result.Error);
+        var billing = apiStore.GetById(profile.Id)!.LastBillingSnapshot!;
+        Assert.Equal(ProviderBillingStatus.Unknown, billing.Status);
+        Assert.Null(billing.Balance);
+        Assert.Null(billing.Used);
+    }
+
+    [Fact]
+    public async Task InspectAsync_OlderRefreshFinishingLastCannotOverwriteNewerRefresh()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var catalogService = new FakeCatalogService();
+        var profile = new ApiProviderProfile { CatalogProviderId = "test-provider", BaseUrl = "https://provider.example.test/v1" };
+        apiStore.Save(profile);
+        secretStore.SaveApiKey(profile.Id, SyntheticSecretKey);
+        catalogService.Descriptors["test-provider"] = new ProviderDescriptor { Id = "test-provider", DisplayName = "Test provider" };
+        var older = new TaskCompletionSource<ApiProviderSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var newer = new TaskCompletionSource<ApiProviderSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var olderStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var newerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inspector = new FakeInspector
+        {
+            InspectHandler = call =>
+            {
+                if (call == 1)
+                {
+                    olderStarted.TrySetResult();
+                    return older.Task;
+                }
+
+                newerStarted.TrySetResult();
+                return newer.Task;
+            },
+        };
+        var service = new ProviderInspectionService(apiStore, secretStore, catalogService, inspector);
+
+        var olderRefresh = service.InspectAsync(profile.Id);
+        await olderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var newerRefresh = service.InspectAsync(profile.Id);
+        await newerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        newer.SetResult(BillingObservation(
+            [Metric("balance", ProviderMetricKind.AvailableBalance, 9m, ProviderMetricScope.Account, ProviderMetricUnit.Currency("USD"))],
+            ProviderMetricAvailability.Live, ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown));
+        await newerRefresh;
+        older.SetResult(BillingObservation(
+            [Metric("balance", ProviderMetricKind.AvailableBalance, 2m, ProviderMetricScope.Account, ProviderMetricUnit.Currency("USD"))],
+            ProviderMetricAvailability.Live, ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown));
+        await olderRefresh;
+
+        Assert.Equal(9m, Assert.Single(apiStore.GetById(profile.Id)!.LastBillingSnapshot!.Metrics).Value);
+    }
+
+    [Fact]
+    public async Task InspectAsync_DiscardsObservationWhenRouteChangesDuringRequest()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var catalogService = new FakeCatalogService();
+        var profile = new ApiProviderProfile
+        {
+            CatalogProviderId = "test-provider",
+            BaseUrl = "https://provider.example.test/v1",
+            SelectedRouteId = "primary",
+        };
+        apiStore.Save(profile);
+        secretStore.SaveApiKey(profile.Id, SyntheticSecretKey);
+        catalogService.Descriptors["test-provider"] = new ProviderDescriptor { Id = "test-provider", DisplayName = "Test provider" };
+        var inspector = new FakeInspector
+        {
+            InspectHandler = _ =>
+            {
+                var current = apiStore.GetById(profile.Id)!;
+                var changed = new ApiProviderProfile
+                {
+                    Id = current.Id,
+                    CreatedAt = current.CreatedAt,
+                    StableCodexProviderId = current.StableCodexProviderId,
+                    EndpointId = current.EndpointId,
+                    CatalogProviderId = current.CatalogProviderId,
+                    BaseUrl = current.BaseUrl,
+                    SelectedRouteId = "reserve",
+                };
+                apiStore.Save(changed);
+                return Task.FromResult(BillingObservation(
+                    [Metric("balance", ProviderMetricKind.AvailableBalance, 12m, ProviderMetricScope.Account, ProviderMetricUnit.Currency("USD"))],
+                    ProviderMetricAvailability.Live, ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown));
+            },
+        };
+
+        await new ProviderInspectionService(apiStore, secretStore, catalogService, inspector).InspectAsync(profile.Id);
+
+        Assert.Null(apiStore.GetById(profile.Id)!.LastBillingSnapshot);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ReplacingMetricWithIncompatibleCurrencyDoesNotMergeOldValue()
+    {
+        var apiStore = new FakeApiProviderStore();
+        var secretStore = new FakeSecretStore();
+        var catalogService = new FakeCatalogService();
+        var profile = new ApiProviderProfile { CatalogProviderId = "test-provider", BaseUrl = "https://provider.example.test/v1" };
+        apiStore.Save(profile);
+        secretStore.SaveApiKey(profile.Id, SyntheticSecretKey);
+        catalogService.Descriptors["test-provider"] = new ProviderDescriptor { Id = "test-provider", DisplayName = "Test provider" };
+        var inspector = new FakeInspector
+        {
+            ResultToReturn = BillingObservation(
+                [Metric("available-balance", ProviderMetricKind.AvailableBalance, 12m, ProviderMetricScope.Account, ProviderMetricUnit.Currency("USD"))],
+                ProviderMetricAvailability.Live, ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown),
+        };
+        var service = new ProviderInspectionService(apiStore, secretStore, catalogService, inspector);
+        await service.InspectAsync(profile.Id);
+        inspector.ResultToReturn = BillingObservation(
+            [Metric("available-balance", ProviderMetricKind.AvailableBalance, 90m, ProviderMetricScope.Account, ProviderMetricUnit.Currency("CNY"))],
+            ProviderMetricAvailability.Live, ProviderMetricAvailability.Live, ProviderMetricAvailability.Unknown);
+
+        await service.InspectAsync(profile.Id);
+
+        var balance = Assert.Single(apiStore.GetById(profile.Id)!.LastBillingSnapshot!.Metrics);
+        Assert.Equal(90m, balance.Value);
+        Assert.Equal("CNY", balance.Unit.Code);
+    }
+
+    private static ApiProviderSnapshot BillingObservation(IReadOnlyList<ProviderMetric> metrics,
+        ProviderMetricAvailability availability, ProviderMetricAvailability balanceAvailability,
+        ProviderMetricAvailability usageAvailability, DateTimeOffset? observedAt = null, string? error = null) => new()
+        {
+            LastCheckedAt = observedAt ?? DateTimeOffset.UtcNow,
+            Error = error,
+            Capabilities = new Dictionary<string, CapabilityStatus>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["balance"] = balanceAvailability == ProviderMetricAvailability.Unsupported ? CapabilityStatus.Unsupported : CapabilityStatus.Supported,
+                ["usage"] = usageAvailability == ProviderMetricAvailability.Unsupported ? CapabilityStatus.Unsupported : CapabilityStatus.Supported,
+            },
+            MetricSnapshot = new ProviderMetricSnapshot
+            {
+                Metrics = metrics,
+                ObservedAt = observedAt ?? DateTimeOffset.UtcNow,
+                Availability = availability,
+                BalanceAvailability = balanceAvailability,
+                UsageAvailability = usageAvailability,
+                Diagnostic = error,
+            },
+        };
+
+    private static ProviderMetric Metric(string id, ProviderMetricKind kind, decimal value, ProviderMetricScope scope,
+        ProviderMetricUnit unit, DateTimeOffset? observedAt = null) => new()
+        {
+            Id = id,
+            Kind = kind,
+            Value = value,
+            Scope = scope,
+            Unit = unit,
+            Availability = ProviderMetricAvailability.Live,
+            ObservedAt = observedAt ?? DateTimeOffset.UtcNow,
+            Source = "synthetic-provider",
+        };
 }

@@ -1,15 +1,17 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using CodexSwitcher.Core.Providers.Catalog;
 using CodexSwitcher.Core.Providers.Contracts;
 using CodexSwitcher.Infra.Providers.Inspection;
+using Llm.ProviderKit.Inspection;
 using Xunit;
 
 namespace CodexSwitcher.Core.Tests;
 
 public sealed class DeclarativeProviderInspectorTests
 {
-    private sealed class DocumentedGenericUsageStrategy : IGenericProviderBillingStrategy
+    private sealed class DocumentedGenericUsageStrategy : CodexSwitcher.Core.Providers.Contracts.IGenericProviderBillingStrategy
     {
         public string Id => "documented-test-usage";
         public int Order => 10;
@@ -142,6 +144,123 @@ public sealed class DeclarativeProviderInspectorTests
         Assert.NotNull(mock.LastRequest?.Headers.Authorization);
         Assert.Equal("Bearer", mock.LastRequest!.Headers.Authorization!.Scheme);
         Assert.Equal("sk-secret-12345", mock.LastRequest.Headers.Authorization.Parameter);
+    }
+
+    [Fact]
+    public async Task InspectAsync_OpenRouterKeyResponsePreservesKeyScopeAndNeverBecomesAccountBalance()
+    {
+        var mock = new MockHttpHandler
+        {
+            ResponseFactory = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"data":{"usage":25.500000000000000001,"limit":100,"limit_remaining":74.5}}""",
+                    Encoding.UTF8, "application/json"),
+            },
+        };
+        var descriptor = CreateTestDescriptor(id: "openrouter", host: "openrouter.ai", modelsStatus: CapabilityStatus.Unknown);
+        descriptor.Capabilities.Balance = new ProviderCapabilityRecipe
+        {
+            Status = CapabilityStatus.Supported,
+            Strategy = "json-http",
+            Request = new RecipeRequest
+            {
+                Method = "GET",
+                Url = "https://openrouter.ai/api/v1/key",
+                Auth = "bearer",
+            },
+            Response = new RecipeResponseMapping
+            {
+                Used = new JsonFieldMapping { Pointer = "/data/usage", Type = "decimal" },
+                Limit = new JsonFieldMapping { Pointer = "/data/limit", Type = "decimal" },
+                Currency = new CurrencyMapping { Literal = "USD" },
+            },
+        };
+
+        using var httpClient = new HttpClient(mock);
+        using var inspector = new DeclarativeProviderInspector(httpClient);
+        var snapshot = await inspector.InspectAsync(descriptor, "https://openrouter.ai/api/v1", "synthetic-key");
+
+        Assert.Null(snapshot.Balance);
+        Assert.Equal(25.500000000000000001m, snapshot.UsedCredits);
+        Assert.Equal(100m, snapshot.CreditLimit);
+        Assert.Equal(ProviderMetricAvailability.Unknown, snapshot.MetricSnapshot.BalanceAvailability);
+        var spending = Assert.Single(snapshot.MetricSnapshot.Metrics, metric => metric.Kind == ProviderMetricKind.Spending);
+        var allowance = Assert.Single(snapshot.MetricSnapshot.Metrics, metric => metric.Kind == ProviderMetricKind.QuotaLimit);
+        Assert.Equal(ProviderMetricScope.ApiKey, spending.Scope);
+        Assert.Equal(ProviderMetricScope.ApiKey, allowance.Scope);
+        Assert.Equal("USD", spending.Unit.Code);
+        Assert.Equal("USD", allowance.Unit.Code);
+        Assert.DoesNotContain(snapshot.MetricSnapshot.Metrics, metric => metric.Kind is ProviderMetricKind.AvailableBalance or ProviderMetricKind.QuotaRemaining);
+    }
+
+    [Fact]
+    public async Task InspectAsync_CatalogMetricMetadataSurvivesControlCenterAdapter()
+    {
+        var mock = new MockHttpHandler
+        {
+            ResponseFactory = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"usage":25.500000000000000001,"limit":100}""",
+                    Encoding.UTF8, "application/json"),
+            },
+        };
+        var descriptor = CreateTestDescriptor(
+            id: "stage4d-openrouter-smoke",
+            host: "127.0.0.1",
+            modelsStatus: CapabilityStatus.Unknown,
+            balanceStatus: CapabilityStatus.Unknown);
+        descriptor.Capabilities.Usage = new ProviderCapabilityRecipe
+        {
+            Status = CapabilityStatus.Supported,
+            Strategy = "json-http",
+            Request = new RecipeRequest { Method = "GET", Path = "/billing", Auth = "bearer" },
+            Response = new RecipeResponseMapping
+            {
+                Used = new JsonFieldMapping
+                {
+                    Pointer = "/usage",
+                    Type = "decimal",
+                    Metric = new Llm.ProviderKit.Catalog.ProviderMetricDefinition
+                    {
+                        Kind = ProviderMetricKind.Spending,
+                        Scope = ProviderMetricScope.ApiKey,
+                        UnitKind = ProviderMetricUnitKind.Currency,
+                        UnitCode = "USD",
+                    },
+                },
+                Limit = new JsonFieldMapping
+                {
+                    Pointer = "/limit",
+                    Type = "decimal",
+                    Metric = new Llm.ProviderKit.Catalog.ProviderMetricDefinition
+                    {
+                        Kind = ProviderMetricKind.QuotaLimit,
+                        Scope = ProviderMetricScope.ApiKey,
+                        UnitKind = ProviderMetricUnitKind.Currency,
+                        UnitCode = "USD",
+                    },
+                },
+            },
+        };
+
+        var descriptorJson = JsonSerializer.SerializeToUtf8Bytes(descriptor);
+        descriptor = JsonSerializer.Deserialize<ProviderDescriptor>(descriptorJson)!;
+        Assert.True(ProviderCatalogLoader.ValidateProviderDescriptor(descriptor, out var validationError), validationError);
+
+        using var httpClient = new HttpClient(mock);
+        using var inspector = new DeclarativeProviderInspector(httpClient);
+        var snapshot = await inspector.InspectAsync(descriptor, "https://127.0.0.1/v1", "synthetic-key");
+
+        Assert.Null(snapshot.Balance);
+        Assert.Equal(25.500000000000000001m, snapshot.UsedCredits);
+        Assert.Equal(100m, snapshot.CreditLimit);
+        var spending = Assert.Single(snapshot.MetricSnapshot.Metrics, metric => metric.Kind == ProviderMetricKind.Spending);
+        var allowance = Assert.Single(snapshot.MetricSnapshot.Metrics, metric => metric.Kind == ProviderMetricKind.QuotaLimit);
+        Assert.Equal(ProviderMetricScope.ApiKey, spending.Scope);
+        Assert.Equal(ProviderMetricScope.ApiKey, allowance.Scope);
+        Assert.Equal("USD", spending.Unit.Code);
+        Assert.Equal("USD", allowance.Unit.Code);
+        Assert.DoesNotContain(snapshot.MetricSnapshot.Metrics, metric => metric.Kind == ProviderMetricKind.AvailableBalance);
     }
 
     [Fact]

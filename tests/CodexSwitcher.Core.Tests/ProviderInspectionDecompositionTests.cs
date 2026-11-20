@@ -5,6 +5,7 @@ using CodexSwitcher.Core.Providers.Catalog;
 using CodexSwitcher.Core.Routing.Models;
 using CodexSwitcher.Infra.Providers.Inspection;
 using Xunit;
+using ProviderMetricKind = Llm.ProviderKit.Inspection.ProviderMetricKind;
 
 namespace CodexSwitcher.Core.Tests;
 
@@ -366,7 +367,11 @@ public sealed class ProviderInspectionDecompositionTests
         Assert.Equal(13.25m, snapshot.UsedCredits);
         Assert.Equal(40m, snapshot.CreditLimit);
         Assert.Equal(26.75m, snapshot.RemainingCredits);
-        Assert.Equal(26.75m, snapshot.Balance);
+        Assert.Contains(snapshot.MetricSnapshot.Metrics,
+            metric => metric.Kind == ProviderMetricKind.Unknown && metric.Value == 26.75m);
+        Assert.DoesNotContain(snapshot.MetricSnapshot.Metrics,
+            metric => metric.Kind == ProviderMetricKind.AvailableBalance);
+        Assert.Null(snapshot.Balance);
         Assert.Equal("USD", snapshot.Currency);
         Assert.Equal(1, mock.RequestHistory.Count(request => request.RequestUri!.AbsolutePath == "/v1/quota"));
         Assert.Equal(1, mock.RequestHistory.Count(request => request.RequestUri!.AbsolutePath == "/v1/usage"));

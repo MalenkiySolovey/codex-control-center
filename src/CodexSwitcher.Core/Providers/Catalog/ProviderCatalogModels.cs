@@ -248,6 +248,10 @@ public sealed class JsonFieldMapping
 
     [JsonPropertyName("scaleFactor")]
     public decimal? ScaleFactor { get; set; }
+
+    /// <summary>Explicit semantics for a mapped value; absent metadata is never inferred from the JSON field name.</summary>
+    [JsonPropertyName("metric")]
+    public Llm.ProviderKit.Catalog.ProviderMetricDefinition? Metric { get; set; }
 }
 
 public sealed class CurrencyMapping

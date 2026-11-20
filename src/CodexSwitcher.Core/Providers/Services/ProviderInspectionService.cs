@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CodexSwitcher.Core.Accounts.Contracts;
 using CodexSwitcher.Core.Accounts.Formatting;
 using CodexSwitcher.Core.Accounts.Models;
@@ -31,6 +32,7 @@ using CodexSwitcher.Core.Usage.Models;
 using CodexSwitcher.Core.Usage.Services;
 using CodexSwitcher.Core.Providers.Contracts;
 using CodexSwitcher.Core.Providers.Models;
+using Llm.ProviderKit.Inspection;
 
 namespace CodexSwitcher.Core.Providers.Services;
 
@@ -45,6 +47,8 @@ public sealed class ProviderInspectionService : IProviderInspectionService
     private readonly IProviderCatalogService _catalogService;
     private readonly IDeclarativeProviderInspector _inspector;
     private readonly IProviderModelCache? _modelCache;
+    private readonly ConcurrentDictionary<Guid, long> _billingGenerations = new();
+    private readonly ConcurrentDictionary<Guid, object> _billingCommitGates = new();
 
     public ProviderInspectionService(
         IApiProviderStore apiProviderStore,
@@ -74,11 +78,19 @@ public sealed class ProviderInspectionService : IProviderInspectionService
             };
         }
 
+        var generation = _billingGenerations.AddOrUpdate(profile.Id, 1, static (_, current) => current + 1);
+
         // Endpoint-bound credentials are intentionally shared by model
         // profiles. Reading by profile ID caused card discovery to emit a
         // false 401 while the edit dialog used the correct endpoint ID.
         var secretOwnerId = profile.EndpointId ?? profile.Id;
+        var credentialRevisionBefore = _secretStore.GetApiKeyRevision(secretOwnerId);
         string? apiKey = _secretStore.GetApiKey(secretOwnerId);
+        var credentialRevision = _secretStore.GetApiKeyRevision(secretOwnerId);
+        if (!string.Equals(credentialRevisionBefore, credentialRevision, StringComparison.Ordinal))
+        {
+            return CredentialChangedSnapshot();
+        }
         var descriptor = !string.IsNullOrWhiteSpace(profile.CatalogProviderId)
             ? _catalogService.GetDescriptor(profile.CatalogProviderId)
             : null;
@@ -86,6 +98,26 @@ public sealed class ProviderInspectionService : IProviderInspectionService
         var routeKey = !string.IsNullOrWhiteSpace(profile.SelectedRouteId)
             ? profile.SelectedRouteId
             : profile.BaseUrl;
+
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            var missingCredential = new ApiProviderSnapshot
+            {
+                ConnectionStatus = HealthStatus.Unknown,
+                LastCheckedAt = DateTimeOffset.UtcNow,
+                Error = "No API key is stored for this provider.",
+                MetricSnapshot = new ProviderMetricSnapshot
+                {
+                    ObservedAt = DateTimeOffset.UtcNow,
+                    Availability = ProviderMetricAvailability.Unknown,
+                    BalanceAvailability = ProviderMetricAvailability.Unknown,
+                    UsageAvailability = ProviderMetricAvailability.Unknown,
+                    Diagnostic = "No API key is stored for this provider.",
+                },
+            };
+            PersistObservationIfCurrent(profile, secretOwnerId, credentialRevision, descriptor, missingCredential, generation);
+            return missingCredential;
+        }
 
         ApiProviderSnapshot snapshot;
         try
@@ -118,117 +150,278 @@ public sealed class ProviderInspectionService : IProviderInspectionService
             };
         }
 
-        PersistBillingObservation(providerProfileId, descriptor, snapshot);
+        PersistObservationIfCurrent(profile, secretOwnerId, credentialRevision, descriptor, snapshot, generation);
 
         return snapshot;
     }
 
-    private void PersistBillingObservation(Guid profileId, ProviderDescriptor? descriptor, ApiProviderSnapshot observation)
+    private void PersistObservationIfCurrent(ApiProviderProfile profile, Guid credentialOwnerId,
+        string? credentialRevision, ProviderDescriptor? descriptor, ApiProviderSnapshot observation, long generation)
     {
-        var latestProfile = _apiProviderStore.GetById(profileId);
-        if (latestProfile is null)
+        var commitGate = _billingCommitGates.GetOrAdd(profile.Id, static _ => new object());
+        lock (commitGate)
         {
-            return;
+            if (_billingGenerations.TryGetValue(profile.Id, out var latestGeneration) && latestGeneration == generation &&
+                HasSameProfileIdentity(_apiProviderStore.GetById(profile.Id), profile) &&
+                string.Equals(_secretStore.GetApiKeyRevision(credentialOwnerId), credentialRevision, StringComparison.Ordinal))
+            {
+                PersistBillingObservation(profile, credentialOwnerId, credentialRevision, descriptor, observation);
+            }
         }
+    }
 
-        var current = latestProfile.LastBillingSnapshot;
-        var hasObservedFact = observation.Balance.HasValue || observation.UsedCredits.HasValue ||
-                              observation.Usage.HasValue || observation.RemainingCredits.HasValue ||
-                              observation.CreditLimit.HasValue;
-        var hasSupportedRecipe = IsCapability(observation, "balance", CapabilityStatus.Supported) ||
-                                 IsCapability(observation, "usage", CapabilityStatus.Supported);
+    private void PersistBillingObservation(
+        ApiProviderProfile profile,
+        Guid credentialOwnerId,
+        string? credentialRevision,
+        ProviderDescriptor? descriptor,
+        ApiProviderSnapshot observation)
+    {
+        var latestProfile = _apiProviderStore.GetById(profile.Id);
+        if (!HasSameProfileIdentity(latestProfile, profile)) return;
+
+        var metrics = observation.MetricSnapshot.Metrics ?? Array.Empty<ProviderMetric>();
+        var hasTypedFact = metrics.Any(metric => metric.Value.HasValue && metric.Availability is
+            ProviderMetricAvailability.Live or ProviderMetricAvailability.Partial);
+        var hasLegacyFact = observation.Balance.HasValue || observation.UsedCredits.HasValue ||
+                            observation.Usage.HasValue || observation.RemainingCredits.HasValue ||
+                            observation.CreditLimit.HasValue;
+        var balanceAvailability = ResolveCategoryAvailability(observation, isUsage: false);
+        var usageAvailability = ResolveCategoryAvailability(observation, isUsage: true);
+        var availability = observation.MetricSnapshot.Availability;
         var allUnsupported = IsCapability(observation, "balance", CapabilityStatus.Unsupported) &&
                              IsCapability(observation, "usage", CapabilityStatus.Unsupported);
+        var hasSupportedRecipe = IsCapability(observation, "balance", CapabilityStatus.Supported) ||
+                                 IsCapability(observation, "usage", CapabilityStatus.Supported);
+        var status = hasTypedFact
+            ? ToBillingStatus(availability == ProviderMetricAvailability.Unknown ? ProviderMetricAvailability.Partial : availability)
+            : allUnsupported
+                ? ProviderBillingStatus.Unsupported
+                : !hasSupportedRecipe && availability == ProviderMetricAvailability.Unknown
+                    ? ProviderBillingStatus.Unknown
+                    : ToBillingStatus(availability == ProviderMetricAvailability.Unknown
+                        ? ClassifyFailedAvailability(observation.Error, hasLegacyFact)
+                        : availability);
+        var diagnostic = hasTypedFact
+            ? SanitizeMessage(observation.MetricSnapshot.Diagnostic ?? observation.Error ?? string.Empty)
+            : hasLegacyFact
+                ? "Saved provider values lack typed accounting semantics; refresh to verify them."
+                : BuildBillingDiagnostic(observation, allUnsupported, hasSupportedRecipe);
+
+        var current = latestProfile!.LastBillingSnapshot;
+        var canReuseCurrent = MatchesSnapshotIdentity(current, profile, credentialOwnerId, credentialRevision);
+        var mergedMetrics = MergeMetrics(
+            canReuseCurrent ? current!.Metrics ?? Array.Empty<ProviderMetric>() : Array.Empty<ProviderMetric>(),
+            metrics,
+            balanceAvailability,
+            usageAvailability);
+        var latestMetricAt = mergedMetrics.Where(metric => metric.Value.HasValue)
+            .Select(metric => (DateTimeOffset?)metric.ObservedAt).Max() ??
+            (canReuseCurrent ? current!.ObservedAt : observation.LastCheckedAt);
+        var typedBalance = SingleMetric(mergedMetrics, ProviderMetricKind.AvailableBalance);
+        var typedUsed = SingleMetric(mergedMetrics, ProviderMetricKind.Spending, ProviderMetricKind.ProviderSpecificUsage,
+            ProviderMetricKind.ProviderCredits, ProviderMetricKind.RequestCount, ProviderMetricKind.TokenCount);
+        var typedLimit = SingleMetric(mergedMetrics, ProviderMetricKind.QuotaLimit, ProviderMetricKind.RequestAllowance,
+            ProviderMetricKind.TokenAllowance);
+        var typedRemaining = SingleMetric(mergedMetrics, ProviderMetricKind.QuotaRemaining);
+        var typedFacts = mergedMetrics.Where(metric => metric.Value.HasValue).ToArray();
+        var distinctUnits = typedFacts.Select(metric => metric.Unit).Distinct().ToArray();
+        var currency = distinctUnits.Length == 1 && distinctUnits[0].Kind == ProviderMetricUnitKind.Currency
+            ? distinctUnits[0].Code
+            : null;
+        var unit = distinctUnits.Length == 1 ? distinctUnits[0].Code ?? distinctUnits[0].Kind.ToString() : null;
+        var periods = typedFacts.Select(metric => metric.Period).Distinct(StringComparer.Ordinal).ToArray();
+        var resets = typedFacts.Select(metric => metric.ResetAt).Distinct().ToArray();
 
         var next = new ProviderBillingSnapshot
         {
-            Balance = observation.Balance,
-            Used = observation.UsedCredits ?? observation.Usage,
-            Limit = observation.CreditLimit,
-            Remaining = observation.RemainingCredits,
-            Currency = NormalizeFact(observation.Currency),
-            Unit = NormalizeFact(observation.Currency),
-            ResetAt = observation.ResetAt,
+            Metrics = mergedMetrics,
+            Availability = availability,
+            BalanceAvailability = balanceAvailability,
+            UsageAvailability = usageAvailability,
+            ProfileId = profile.Id,
+            ProviderId = profile.CatalogProviderId,
+            BaseUrl = profile.BaseUrl,
+            RouteId = profile.SelectedRouteId,
+            CredentialOwnerId = credentialOwnerId,
+            CredentialRevision = credentialRevision,
+            Balance = typedBalance?.Value ?? (metrics.Count == 0 ? observation.Balance : null),
+            Used = typedUsed?.Value ?? (metrics.Count == 0 ? observation.UsedCredits ?? observation.Usage : null),
+            Limit = typedLimit?.Value ?? (metrics.Count == 0 ? observation.CreditLimit : null),
+            Remaining = typedRemaining?.Value ?? (metrics.Count == 0 ? observation.RemainingCredits : null),
+            Currency = currency ?? (metrics.Count == 0 ? NormalizeFact(observation.Currency) : null),
+            Unit = unit ?? (metrics.Count == 0 ? NormalizeFact(observation.Currency) : null),
+            Period = periods.Length == 1 ? periods[0] : null,
+            ResetAt = resets.Length == 1 ? resets[0] : null,
             Source = descriptor?.DisplayName,
-            ObservedAt = observation.LastCheckedAt,
-            Status = hasObservedFact
-                ? string.IsNullOrWhiteSpace(observation.Error) ? ProviderBillingStatus.Live : ProviderBillingStatus.Partial
-                : allUnsupported
-                    ? ProviderBillingStatus.Unsupported
-                    : hasSupportedRecipe
-                        ? ClassifyFailedObservation(observation.Error)
-                        : ProviderBillingStatus.Unknown,
-            Diagnostic = BuildBillingDiagnostic(observation, hasObservedFact, allUnsupported, hasSupportedRecipe),
+            ObservedAt = latestMetricAt,
+            LastAttemptAt = observation.LastCheckedAt,
+            Status = status,
+            Diagnostic = diagnostic,
         };
 
-        if (current is null)
+        if (hasLegacyFact && !hasTypedFact)
         {
-            if (next.Status == ProviderBillingStatus.Unknown)
-            {
-                return;
-            }
-        }
-        else if (!hasObservedFact)
-        {
-            // A failed or unsupported refresh never replaces a good last-known
-            // value with zero/unknown. Retain it and mark it as cached.
-            next = current with
-            {
-                Status = ProviderBillingStatus.Cached,
-                Diagnostic = next.Diagnostic ?? current.Diagnostic,
-            };
-        }
-        else
-        {
-            next = next with
-            {
-                Balance = next.Balance ?? current.Balance,
-                Used = next.Used ?? current.Used,
-                Limit = next.Limit ?? current.Limit,
-                Remaining = next.Remaining ?? current.Remaining,
-                Currency = next.Currency ?? current.Currency,
-                Unit = next.Unit ?? current.Unit,
-                Period = next.Period ?? current.Period,
-                ResetAt = next.ResetAt ?? current.ResetAt,
-                Source = next.Source ?? current.Source,
-            };
+            next = next with { Diagnostic = "Saved provider values lack typed accounting semantics; refresh to verify them." };
         }
 
-        latestProfile.LastBillingSnapshot = next;
-        _apiProviderStore.Save(latestProfile);
+        _apiProviderStore.TryUpdateBillingSnapshot(profile, next);
     }
 
     private static bool IsCapability(ApiProviderSnapshot snapshot, string name, CapabilityStatus status) =>
         snapshot.Capabilities.TryGetValue(name, out var actual) && actual == status;
 
+    private static ProviderMetricAvailability ResolveCategoryAvailability(ApiProviderSnapshot snapshot, bool isUsage)
+    {
+        var availability = isUsage
+            ? snapshot.MetricSnapshot.UsageAvailability
+            : snapshot.MetricSnapshot.BalanceAvailability;
+        if (availability != ProviderMetricAvailability.Unknown) return availability;
+
+        var name = isUsage ? "usage" : "balance";
+        if (IsCapability(snapshot, name, CapabilityStatus.Unsupported)) return ProviderMetricAvailability.Unsupported;
+        var hasAnyMetric = snapshot.MetricSnapshot.Metrics.Count > 0;
+        var hasCategoryMetric = snapshot.MetricSnapshot.Metrics.Any(metric => IsUsageMetric(metric.Kind) == isUsage);
+        if (hasAnyMetric && !hasCategoryMetric) return ProviderMetricAvailability.Unknown;
+        if (IsCapability(snapshot, name, CapabilityStatus.Supported))
+        {
+            if (hasCategoryMetric)
+                return snapshot.MetricSnapshot.Availability;
+            return ClassifyFailedAvailability(snapshot.Error, hasLegacyFact: false);
+        }
+
+        return ProviderMetricAvailability.Unknown;
+    }
+
+    private static ProviderMetricAvailability ClassifyFailedAvailability(string? error, bool hasLegacyFact)
+    {
+        if (error?.Contains("No API key", StringComparison.OrdinalIgnoreCase) == true)
+            return ProviderMetricAvailability.Unknown;
+        if (error?.Contains("HTTP 401", StringComparison.OrdinalIgnoreCase) == true ||
+            error?.Contains("HTTP 403", StringComparison.OrdinalIgnoreCase) == true)
+            return ProviderMetricAvailability.Unauthorized;
+        if (error?.Contains("malformed", StringComparison.OrdinalIgnoreCase) == true ||
+            error?.Contains("invalid response", StringComparison.OrdinalIgnoreCase) == true)
+            return ProviderMetricAvailability.InvalidResponse;
+        if (!string.IsNullOrWhiteSpace(error)) return ProviderMetricAvailability.Unavailable;
+        return hasLegacyFact ? ProviderMetricAvailability.Partial : ProviderMetricAvailability.Unknown;
+    }
+
+    private static ProviderBillingStatus ToBillingStatus(ProviderMetricAvailability availability) => availability switch
+    {
+        ProviderMetricAvailability.Live => ProviderBillingStatus.Live,
+        ProviderMetricAvailability.Partial => ProviderBillingStatus.Partial,
+        ProviderMetricAvailability.Cached => ProviderBillingStatus.Cached,
+        ProviderMetricAvailability.Stale => ProviderBillingStatus.Stale,
+        ProviderMetricAvailability.Unsupported => ProviderBillingStatus.Unsupported,
+        ProviderMetricAvailability.Unavailable => ProviderBillingStatus.Unavailable,
+        ProviderMetricAvailability.Unauthorized => ProviderBillingStatus.Unauthorized,
+        ProviderMetricAvailability.InvalidResponse => ProviderBillingStatus.InvalidResponse,
+        _ => ProviderBillingStatus.Unknown,
+    };
+
+    private static ProviderMetric[] MergeMetrics(
+        IReadOnlyList<ProviderMetric> previous,
+        IReadOnlyList<ProviderMetric> incoming,
+        ProviderMetricAvailability balanceAvailability,
+        ProviderMetricAvailability usageAvailability)
+    {
+        var oldById = previous.ToDictionary(metric => metric.Id, StringComparer.Ordinal);
+        var incomingIds = new HashSet<string>(StringComparer.Ordinal);
+        var merged = new List<ProviderMetric>();
+        foreach (var metric in incoming)
+        {
+            incomingIds.Add(metric.Id);
+            if (metric.Value.HasValue)
+            {
+                merged.Add(metric);
+            }
+            else if (oldById.TryGetValue(metric.Id, out var oldMetric) && AreSemanticsCompatible(oldMetric, metric) && oldMetric.Value.HasValue)
+            {
+                merged.Add(oldMetric with { Availability = ProviderMetricAvailability.Cached });
+            }
+            else
+            {
+                merged.Add(metric);
+            }
+        }
+
+        foreach (var oldMetric in previous)
+        {
+            if (incomingIds.Contains(oldMetric.Id)) continue;
+            var categoryAvailability = IsUsageMetric(oldMetric.Kind) ? usageAvailability : balanceAvailability;
+            if (categoryAvailability is ProviderMetricAvailability.Live or ProviderMetricAvailability.Unsupported) continue;
+            var conflicts = incoming.Any(newMetric => newMetric.Kind == oldMetric.Kind && !AreSemanticsCompatible(oldMetric, newMetric));
+            if (!conflicts && oldMetric.Value.HasValue)
+                merged.Add(oldMetric with { Availability = ProviderMetricAvailability.Cached });
+        }
+
+        return merged
+            .GroupBy(metric => metric.Id, StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .ToArray();
+    }
+
+    private static bool AreSemanticsCompatible(ProviderMetric left, ProviderMetric right) =>
+        left.Kind == right.Kind && left.Scope == right.Scope &&
+        ProviderMetricNormalizer.UnitsEqual(left.Unit, right.Unit) &&
+        string.Equals(left.Period, right.Period, StringComparison.Ordinal) &&
+        left.PeriodSemantics == right.PeriodSemantics &&
+        left.PeriodStartAt == right.PeriodStartAt && left.PeriodEndAt == right.PeriodEndAt &&
+        left.ResetAt == right.ResetAt &&
+        string.Equals(left.Source, right.Source, StringComparison.Ordinal);
+
+    private static ProviderMetric? SingleMetric(IReadOnlyList<ProviderMetric> metrics, params ProviderMetricKind[] kinds)
+    {
+        var selected = metrics.Where(metric => metric.Value.HasValue && kinds.Contains(metric.Kind)).ToArray();
+        return selected.Length == 1 ? selected[0] : null;
+    }
+
+    private static bool IsUsageMetric(ProviderMetricKind kind) => kind is
+        ProviderMetricKind.Spending or ProviderMetricKind.QuotaLimit or ProviderMetricKind.QuotaRemaining or
+        ProviderMetricKind.ProviderCredits or ProviderMetricKind.ProviderSpecificUsage or ProviderMetricKind.RequestCount or
+        ProviderMetricKind.RequestAllowance or ProviderMetricKind.TokenCount or ProviderMetricKind.TokenAllowance;
+
+    private static bool MatchesSnapshotIdentity(ProviderBillingSnapshot? snapshot, ApiProviderProfile profile,
+        Guid credentialOwnerId, string? credentialRevision) => snapshot is not null &&
+        snapshot.ProfileId == profile.Id && snapshot.CredentialOwnerId == credentialOwnerId &&
+        string.Equals(snapshot.CredentialRevision, credentialRevision, StringComparison.Ordinal) &&
+        string.Equals(snapshot.ProviderId, profile.CatalogProviderId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(snapshot.BaseUrl, profile.BaseUrl, StringComparison.Ordinal) &&
+        string.Equals(snapshot.RouteId, profile.SelectedRouteId, StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasSameProfileIdentity(ApiProviderProfile? current, ApiProviderProfile expected) => current is not null &&
+        current.Id == expected.Id && current.CreatedAt == expected.CreatedAt &&
+        string.Equals(current.StableCodexProviderId, expected.StableCodexProviderId, StringComparison.Ordinal) &&
+        current.EndpointId == expected.EndpointId &&
+        string.Equals(current.CatalogProviderId, expected.CatalogProviderId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(current.BaseUrl, expected.BaseUrl, StringComparison.Ordinal) &&
+        string.Equals(current.SelectedRouteId, expected.SelectedRouteId, StringComparison.OrdinalIgnoreCase);
+
+    private static ApiProviderSnapshot CredentialChangedSnapshot() => new()
+    {
+        ConnectionStatus = HealthStatus.Unknown,
+        LastCheckedAt = DateTimeOffset.UtcNow,
+        Error = "Provider credential changed while inspection was starting. Refresh billing again.",
+        MetricSnapshot = new ProviderMetricSnapshot
+        {
+            ObservedAt = DateTimeOffset.UtcNow,
+            Availability = ProviderMetricAvailability.Stale,
+            BalanceAvailability = ProviderMetricAvailability.Stale,
+            UsageAvailability = ProviderMetricAvailability.Stale,
+            Diagnostic = "Provider credential changed while inspection was starting.",
+        },
+    };
+
     private static string? NormalizeFact(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private static ProviderBillingStatus ClassifyFailedObservation(string? error)
-    {
-        if (error?.Contains("HTTP 401", StringComparison.OrdinalIgnoreCase) == true ||
-            error?.Contains("HTTP 403", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            return ProviderBillingStatus.AuthRejected;
-        }
-
-        return string.IsNullOrWhiteSpace(error) ? ProviderBillingStatus.Unknown : ProviderBillingStatus.Unavailable;
-    }
-
     private static string? BuildBillingDiagnostic(
         ApiProviderSnapshot observation,
-        bool hasObservedFact,
         bool allUnsupported,
         bool hasSupportedRecipe)
     {
-        if (hasObservedFact)
-        {
-            return string.IsNullOrWhiteSpace(observation.Error)
-                ? null
-                : SanitizeMessage(observation.Error);
-        }
-
-        if (allUnsupported || !hasSupportedRecipe)
+        if (allUnsupported || (!hasSupportedRecipe && string.IsNullOrWhiteSpace(observation.Error)))
         {
             return "No supported billing endpoint was detected.";
         }

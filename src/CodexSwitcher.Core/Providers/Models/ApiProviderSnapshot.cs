@@ -3,6 +3,7 @@ using CodexSwitcher.Core.Accounts.Formatting;
 using CodexSwitcher.Core.Accounts.Models;
 using CodexSwitcher.Core.Accounts.Services;
 using CodexSwitcher.Core.Common.Dispatcher;
+using Llm.ProviderKit.Inspection;
 using CodexSwitcher.Core.Common.Enums;
 using CodexSwitcher.Core.Common.Environment;
 using CodexSwitcher.Core.Common.Errors;
@@ -76,6 +77,9 @@ public sealed record ApiProviderSnapshot
 
     /// <summary>Sanitized error message if inspection failed. Never contains secrets or URLs with tokens.</summary>
     public string? Error { get; init; }
+
+    /// <summary>Typed, provenance-preserving metrics from ProviderKit.</summary>
+    public ProviderMetricSnapshot MetricSnapshot { get; init; } = new();
 }
 
 /// <summary>
@@ -84,6 +88,20 @@ public sealed record ApiProviderSnapshot
 /// </summary>
 public sealed record ProviderBillingSnapshot
 {
+    /// <summary>Typed values are authoritative; flattened fields below remain for old readers.</summary>
+    public IReadOnlyList<ProviderMetric> Metrics { get; init; } = Array.Empty<ProviderMetric>();
+    public ProviderMetricAvailability Availability { get; init; } = ProviderMetricAvailability.Unknown;
+    public ProviderMetricAvailability BalanceAvailability { get; init; } = ProviderMetricAvailability.Unknown;
+    public ProviderMetricAvailability UsageAvailability { get; init; } = ProviderMetricAvailability.Unknown;
+
+    /// <summary>Identity binds cached values to one profile, provider route, and credential revision.</summary>
+    public Guid ProfileId { get; init; }
+    public string? ProviderId { get; init; }
+    public string? BaseUrl { get; init; }
+    public string? RouteId { get; init; }
+    public Guid? CredentialOwnerId { get; init; }
+    public string? CredentialRevision { get; init; }
+
     public decimal? Balance { get; init; }
     public decimal? Used { get; init; }
     public decimal? Limit { get; init; }
@@ -94,17 +112,21 @@ public sealed record ProviderBillingSnapshot
     public DateTimeOffset? ResetAt { get; init; }
     public string? Source { get; init; }
     public DateTimeOffset ObservedAt { get; init; }
+    public DateTimeOffset LastAttemptAt { get; init; }
     public ProviderBillingStatus Status { get; init; } = ProviderBillingStatus.Unknown;
     public string? Diagnostic { get; init; }
 }
 
 public enum ProviderBillingStatus
 {
-    Unknown,
-    Live,
-    Cached,
-    Unsupported,
-    AuthRejected,
-    Unavailable,
-    Partial,
+    Unknown = 0,
+    Live = 1,
+    Cached = 2,
+    Unsupported = 3,
+    AuthRejected = 4,
+    Unavailable = 5,
+    Partial = 6,
+    Stale = 7,
+    Unauthorized = 8,
+    InvalidResponse = 9,
 }

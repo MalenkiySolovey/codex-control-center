@@ -103,7 +103,8 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
         {
             ConnectionStatus = result.Succeeded ? HealthStatus.Valid : HealthStatus.Unknown,
             Models = result.ModelIds,
-            Balance = result.Billing.Balance ?? result.Billing.Remaining,
+            // A remaining allowance is not an account cash balance.
+            Balance = result.Billing.Balance,
             Currency = result.Billing.Currency,
             UsedCredits = result.Billing.Used,
             Usage = result.Billing.Used,
@@ -112,6 +113,7 @@ public sealed class DeclarativeProviderInspector : IDeclarativeProviderInspector
             Capabilities = capabilities,
             LastCheckedAt = result.ObservedAt,
             Error = result.Error,
+            MetricSnapshot = result.MetricSnapshot,
         };
     }
 

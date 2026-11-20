@@ -169,12 +169,14 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         foreach (var prof in apiProfiles)
         {
             var desc = _catalogService.GetDescriptor(prof.CatalogProviderId);
-            bool hasSecret = _secretStore.HasApiKey(prof.EndpointId ?? prof.Id);
+            var credentialOwnerId = prof.EndpointId ?? prof.Id;
+            bool hasSecret = _secretStore.HasApiKey(credentialOwnerId);
+            var credentialRevision = hasSecret ? _secretStore.GetApiKeyRevision(credentialOwnerId) : null;
             bool isTargetActive = isRoutingActiveToApi && activeTarget is ActiveTarget.Api a && a.Profile.Id == prof.Id;
 
             if (existingMap.TryGetValue(prof.Id, out var existing))
             {
-                existing.UpdateProfile(prof, desc, hasSecret, isTargetActive);
+                existing.UpdateProfile(prof, desc, hasSecret, isTargetActive, credentialRevision);
                 var routeKey = !string.IsNullOrWhiteSpace(prof.SelectedRouteId) ? prof.SelectedRouteId : prof.BaseUrl;
                 if (_modelCache.TryGetModels(prof.Id, routeKey, 1, out var cachedModels) && cachedModels.Count > 0)
                 {
@@ -188,7 +190,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
             }
             else
             {
-                var vm = new ApiProviderItemViewModel(prof, desc, hasSecret, isTargetActive);
+                var vm = new ApiProviderItemViewModel(prof, desc, hasSecret, isTargetActive, credentialRevision);
                 var routeKey = !string.IsNullOrWhiteSpace(prof.SelectedRouteId) ? prof.SelectedRouteId : prof.BaseUrl;
                 if (_modelCache.TryGetModels(prof.Id, routeKey, 1, out var cachedModels) && cachedModels.Count > 0)
                 {
@@ -288,7 +290,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
 
             if (_apiProviderStore.GetById(result.ProfileId) is { } persisted)
             {
-                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive);
+                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive, GetCredentialRevision(persisted));
             }
             item.ApplyRefreshResult(result);
             ApplySearchFilter();
@@ -510,7 +512,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
             : result.SelectedModel);
 
         _apiProviderStore.Save(item.Profile);
-        item.UpdateProfile(item.Profile, item.Descriptor, item.HasSecret, item.IsTargetActive);
+        item.UpdateProfile(item.Profile, item.Descriptor, item.HasSecret, item.IsTargetActive, GetCredentialRevision(item.Profile));
         ApplySearchFilter();
 
         if (item.IsTargetActive)
@@ -519,7 +521,8 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
             if (switchResult?.Outcome is not (TargetSwitchOutcome.Success or TargetSwitchOutcome.SuccessWithReopenWarning or TargetSwitchOutcome.NoOp))
             {
                 _apiProviderStore.Save(previousProfile);
-                item.UpdateProfile(previousProfile, item.Descriptor, item.HasSecret, isTargetActive: true);
+                item.UpdateProfile(previousProfile, item.Descriptor, item.HasSecret, isTargetActive: true,
+                    credentialRevision: GetCredentialRevision(previousProfile));
                 TargetStateChanged?.Invoke(this, EventArgs.Empty);
                 return;
             }
@@ -542,6 +545,8 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         item.Profile.Status = ApiProviderProfileStatus.Active;
         item.Profile.KeyPreview = ApiProviderProfile.ComputeKeyPreview(newKey);
         _apiProviderStore.Save(item.Profile);
+        item.UpdateProfile(item.Profile, item.Descriptor, hasSecret: true, isTargetActive: item.IsTargetActive,
+            credentialRevision: _secretStore.GetApiKeyRevision(secretOwnerId));
 
         TargetStateChanged?.Invoke(this, EventArgs.Empty);
         ShowInfo(Loc.RotateKeyDialogTitle, "API key updated successfully.", InfoBarSeverity.Success);
@@ -565,6 +570,8 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         item.Profile.Status = ApiProviderProfileStatus.CredentialMissing;
         item.Profile.KeyPreview = string.Empty;
         _apiProviderStore.Save(item.Profile);
+        item.UpdateProfile(item.Profile, item.Descriptor, hasSecret: false, isTargetActive: item.IsTargetActive,
+            credentialRevision: null);
 
         if (item.IsTargetActive)
         {
@@ -885,7 +892,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
         {
             if (_apiProviderStore.GetById(item.Id) is { } persisted)
             {
-                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive);
+                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive, GetCredentialRevision(persisted));
             }
 
             item.IsSelectingModel = false;
@@ -930,7 +937,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
             item.ApplyRefreshResult(result);
             if (_apiProviderStore.GetById(item.Id) is { } persisted)
             {
-                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive);
+                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive, GetCredentialRevision(persisted));
                 item.ApplyRefreshResult(result);
             }
         }
@@ -1003,14 +1010,17 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
             var observation = await _providerInspectionService.InspectAsync(item.Id, _cts.Token);
             if (_apiProviderStore.GetById(item.Id) is { } persisted)
             {
-                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive);
+                item.UpdateProfile(persisted, item.Descriptor, item.HasSecret, item.IsTargetActive, GetCredentialRevision(persisted));
                 item.ApplyBillingSnapshot(persisted.LastBillingSnapshot, fromCache: false);
             }
 
             var snapshot = _apiProviderStore.GetById(item.Id)?.LastBillingSnapshot;
-            var hasBillingValue = snapshot?.Balance.HasValue == true || snapshot?.Used.HasValue == true ||
+            var hasBillingValue = snapshot?.Metrics?.Any(metric => metric.Value.HasValue) == true ||
+                                  snapshot?.Balance.HasValue == true || snapshot?.Used.HasValue == true ||
                                   snapshot?.Remaining.HasValue == true || snapshot?.Limit.HasValue == true;
-            var warning = snapshot?.Status is ProviderBillingStatus.AuthRejected or ProviderBillingStatus.Unavailable ||
+            var warning = snapshot?.Status is ProviderBillingStatus.AuthRejected or ProviderBillingStatus.Unauthorized or
+                              ProviderBillingStatus.Unavailable or ProviderBillingStatus.InvalidResponse or
+                              ProviderBillingStatus.Partial or ProviderBillingStatus.Stale ||
                           (!hasBillingValue && snapshot?.Status is ProviderBillingStatus.Unknown or ProviderBillingStatus.Unsupported);
             var message = snapshot?.Diagnostic ?? observation.Error ?? "Provider billing was refreshed.";
             ShowInfo("Provider billing", message, warning ? InfoBarSeverity.Warning : InfoBarSeverity.Success);
@@ -1031,6 +1041,9 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
             item.IsRefreshingBilling = false;
         }
     }
+
+    private string? GetCredentialRevision(ApiProviderProfile profile) =>
+        _secretStore.GetApiKeyRevision(profile.EndpointId ?? profile.Id);
 
     private ApiProviderProfile ResolveAuthoritativeTargetProfile(Guid profileId) =>
         _apiProviderStore.GetById(profileId)
@@ -1394,7 +1407,7 @@ public sealed partial class ApiProvidersViewModel : ObservableObject, IDisposabl
                     }
 
                     _apiProviderStore.Save(item.Profile);
-                    item.UpdateProfile(item.Profile, item.Descriptor, item.HasSecret, item.IsTargetActive);
+                    item.UpdateProfile(item.Profile, item.Descriptor, item.HasSecret, item.IsTargetActive, GetCredentialRevision(item.Profile));
 
                     var severity = report.CompatibilityLevel switch
                     {

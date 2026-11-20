@@ -51,6 +51,9 @@ public interface IApiKeySecretStore
     /// </summary>
     string? GetApiKey(Guid profileId);
 
+    /// <summary>Returns a non-secret revision identifier for the encrypted key currently owned by the profile.</summary>
+    string? GetApiKeyRevision(Guid profileId);
+
     /// <summary>Permanently deletes the encrypted API key file for the given profile.</summary>
     bool DeleteApiKey(Guid profileId);
 

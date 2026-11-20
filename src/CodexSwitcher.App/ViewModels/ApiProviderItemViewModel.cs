@@ -13,6 +13,7 @@ using CodexSwitcher.Core.Common.Time;
 using CodexSwitcher.Core.Providers.Contracts;
 using CodexSwitcher.Core.Providers.Models;
 using CodexSwitcher.Core.Providers.Services;
+using Llm.ProviderKit.Inspection;
 using CodexSwitcher.Core.Routing.Contracts;
 using CodexSwitcher.Core.Routing.Services;
 using CodexSwitcher.Core.Security.Secrets;
@@ -81,8 +82,10 @@ public sealed record ApiProviderModelSelectionRequest(ApiProviderItemViewModel I
 /// </summary>
 public sealed partial class ApiProviderItemViewModel : ObservableObject
 {
+    private static readonly TimeSpan BillingStaleAfter = TimeSpan.FromHours(24);
     private long _latestRefreshGeneration;
     private bool _latestRefreshIsTerminal;
+    private string? _billingCredentialRevision;
 
     private static Strings Loc => Strings.Current;
 
@@ -191,7 +194,13 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
     public partial string BalanceSummary { get; set; } = "Unknown";
 
     [ObservableProperty]
+    public partial string BalanceLabel { get; set; } = "Account balance:";
+
+    [ObservableProperty]
     public partial string UsageSummary { get; set; } = "Unknown";
+
+    [ObservableProperty]
+    public partial string UsageLabel { get; set; } = "Usage / quota:";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanRefreshBilling))]
@@ -227,15 +236,18 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
         _ => string.Empty
     };
 
-    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush SuccessBrush = new(Windows.UI.Color.FromArgb(255, 16, 124, 65));
-    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush WarningBrush = new(Windows.UI.Color.FromArgb(255, 216, 59, 1));
-    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush DangerBrush = new(Windows.UI.Color.FromArgb(255, 168, 0, 0));
+    private static readonly Lazy<Microsoft.UI.Xaml.Media.SolidColorBrush> SuccessBrush = new(() =>
+        new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 16, 124, 65)));
+    private static readonly Lazy<Microsoft.UI.Xaml.Media.SolidColorBrush> WarningBrush = new(() =>
+        new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 216, 59, 1)));
+    private static readonly Lazy<Microsoft.UI.Xaml.Media.SolidColorBrush> DangerBrush = new(() =>
+        new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 168, 0, 0)));
 
     public Microsoft.UI.Xaml.Media.Brush CompatibilityBadgeBackground => CompatibilityLevel switch
     {
-        CodexCompatibilityLevel.CodexCompatible => SuccessBrush,
-        CodexCompatibilityLevel.PartiallyCompatible => WarningBrush,
-        _ => DangerBrush
+        CodexCompatibilityLevel.CodexCompatible => SuccessBrush.Value,
+        CodexCompatibilityLevel.PartiallyCompatible => WarningBrush.Value,
+        _ => DangerBrush.Value
     };
 
     public IReadOnlyList<ProviderRoute> Routes => Descriptor?.Routes ?? [];
@@ -263,12 +275,14 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
         ApiProviderProfile profile,
         ProviderDescriptor? descriptor,
         bool hasSecret = false,
-        bool isTargetActive = false)
+        bool isTargetActive = false,
+        string? credentialRevision = null)
     {
         Profile = profile ?? throw new ArgumentNullException(nameof(profile));
         Descriptor = descriptor;
         HasSecret = hasSecret;
         IsTargetActive = isTargetActive;
+        _billingCredentialRevision = credentialRevision;
 
         DisplayName = profile.DisplayName;
         BaseUrl = profile.BaseUrl;
@@ -288,11 +302,16 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
     }
 
     public void UpdateProfile(ApiProviderProfile updated, ProviderDescriptor? descriptor, bool hasSecret, bool isTargetActive)
+        => UpdateProfile(updated, descriptor, hasSecret, isTargetActive, _billingCredentialRevision);
+
+    public void UpdateProfile(ApiProviderProfile updated, ProviderDescriptor? descriptor, bool hasSecret, bool isTargetActive,
+        string? credentialRevision)
     {
         Profile = updated ?? throw new ArgumentNullException(nameof(updated));
         Descriptor = descriptor;
         HasSecret = hasSecret;
         IsTargetActive = isTargetActive;
+        _billingCredentialRevision = credentialRevision;
 
         DisplayName = updated.DisplayName;
         BaseUrl = updated.BaseUrl;
@@ -325,36 +344,250 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
         {
             var hasCatalogRecipe = Descriptor?.Capabilities?.Balance?.Status == CapabilityStatus.Supported ||
                                    Descriptor?.Capabilities?.Usage?.Status == CapabilityStatus.Supported;
+            BalanceLabel = "Account balance:";
+            UsageLabel = "Usage / quota:";
+            BalanceSummary = Descriptor?.Capabilities?.Balance?.Status == CapabilityStatus.Unsupported
+                ? "Not supported"
+                : "Unknown";
+            UsageSummary = Descriptor?.Capabilities?.Usage?.Status == CapabilityStatus.Unsupported
+                ? "Not supported"
+                : "Unknown";
             BillingDiagnostic = hasCatalogRecipe
                 ? "A billing recipe is available. Refresh balance & usage to inspect it."
                 : "No supported billing endpoint was detected.";
             return;
         }
 
-        var status = fromCache && snapshot.Status is ProviderBillingStatus.Live or ProviderBillingStatus.Partial
-            ? ProviderBillingStatus.Cached
-            : snapshot.Status;
-        BillingDiagnostic = !string.IsNullOrWhiteSpace(snapshot.Diagnostic)
-            ? snapshot.Diagnostic
-            : $"{status}. Last observed {snapshot.ObservedAt.ToLocalTime():g}.";
-
-        var balance = snapshot.Balance ?? snapshot.Remaining;
-        BalanceSummary = FormatBillingValue(balance, snapshot.Currency ?? snapshot.Unit, status);
-        UsageSummary = FormatBillingValue(snapshot.Used, snapshot.Currency ?? snapshot.Unit, status);
-    }
-
-    private static string FormatBillingValue(decimal? value, string? unit, ProviderBillingStatus status)
-    {
-        if (!value.HasValue)
+        var hasLegacyFacts = snapshot.Balance.HasValue || snapshot.Used.HasValue || snapshot.Limit.HasValue || snapshot.Remaining.HasValue;
+        if (snapshot.ProfileId == Guid.Empty && hasLegacyFacts)
         {
-            return status == ProviderBillingStatus.Unsupported ? "Not supported" : "Unknown";
+            BalanceLabel = "Account balance:";
+            UsageLabel = "Usage / quota:";
+            BalanceSummary = "Unknown";
+            UsageSummary = "Unknown";
+            BillingDiagnostic = "Saved legacy billing data has no verified unit, scope, or credential identity. Refresh to verify it.";
+            return;
         }
 
-        var formatted = value.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-        var suffix = string.IsNullOrWhiteSpace(unit) ? " (unit unknown)" : $" {unit.Trim()}";
-        var freshness = status == ProviderBillingStatus.Cached ? " · cached" : string.Empty;
-        return formatted + suffix + freshness;
+        if (!MatchesCurrentIdentity(snapshot))
+        {
+            BalanceLabel = "Account balance:";
+            UsageLabel = "Usage / quota:";
+            BalanceSummary = "Unknown";
+            UsageSummary = "Unknown";
+            BillingDiagnostic = "Saved billing data belongs to another profile, provider route, or credential. Refresh to verify it.";
+            return;
+        }
+
+        var hasTypedMetrics = snapshot.Metrics is { Count: > 0 };
+        if (!hasTypedMetrics && hasLegacyFacts)
+        {
+            BalanceLabel = "Account balance:";
+            UsageLabel = "Usage / quota:";
+            BalanceSummary = "Unknown";
+            UsageSummary = "Unknown";
+            BillingDiagnostic = "Saved legacy billing data has no verified unit or scope. Refresh to verify it.";
+            return;
+        }
+
+        var hasValues = hasTypedMetrics && snapshot.Metrics.Any(metric => metric.Value.HasValue);
+        var age = DateTimeOffset.UtcNow - snapshot.ObservedAt;
+        var status = ResolveDisplayStatus(snapshot.Status, fromCache, age, hasValues);
+        var balances = snapshot.Metrics.Where(metric => metric.Kind == ProviderMetricKind.AvailableBalance && metric.Value.HasValue).ToArray();
+        var usage = snapshot.Metrics.Where(metric => IsUsageMetric(metric.Kind) && metric.Value.HasValue).ToArray();
+        BalanceLabel = balances.Length == 0 ? "Account balance:" : BalanceScopeLabel(balances);
+        UsageLabel = "Usage / quota:";
+        BalanceSummary = FormatBalance(balances, snapshot.BalanceAvailability, status, fromCache, snapshot.Status);
+        UsageSummary = FormatUsage(usage, snapshot.UsageAvailability, status, fromCache, snapshot.Status);
+
+        var observationTime = snapshot.ObservedAt == default ? "unknown" :
+            snapshot.ObservedAt.ToLocalTime().ToString("g", System.Globalization.CultureInfo.CurrentCulture);
+        var attemptTime = snapshot.LastAttemptAt == default ? observationTime :
+            snapshot.LastAttemptAt.ToLocalTime().ToString("g", System.Globalization.CultureInfo.CurrentCulture);
+        var freshness = snapshot.Status == ProviderBillingStatus.Partial ? " Latest response was partial." : string.Empty;
+        var detail = string.IsNullOrWhiteSpace(snapshot.Diagnostic) ? string.Empty : $" {snapshot.Diagnostic}";
+        BillingDiagnostic = $"{StatusLabel(status)}.{detail} Last verified {observationTime}; last attempt {attemptTime}.{freshness}";
     }
+
+    private bool MatchesCurrentIdentity(ProviderBillingSnapshot snapshot) =>
+        snapshot.ProfileId == Profile.Id && snapshot.CredentialOwnerId == (Profile.EndpointId ?? Profile.Id) &&
+        string.Equals(snapshot.CredentialRevision, _billingCredentialRevision, StringComparison.Ordinal) &&
+        string.Equals(snapshot.ProviderId, Profile.CatalogProviderId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(snapshot.BaseUrl, Profile.BaseUrl, StringComparison.Ordinal) &&
+        string.Equals(snapshot.RouteId, Profile.SelectedRouteId, StringComparison.OrdinalIgnoreCase);
+
+    private static ProviderBillingStatus ResolveDisplayStatus(ProviderBillingStatus status, bool fromCache,
+        TimeSpan age, bool hasValues)
+    {
+        if (age < TimeSpan.Zero) age = TimeSpan.Zero;
+        if (fromCache && status is ProviderBillingStatus.Live or ProviderBillingStatus.Partial or ProviderBillingStatus.Cached or ProviderBillingStatus.Stale)
+        {
+            return age > BillingStaleAfter ? ProviderBillingStatus.Stale : ProviderBillingStatus.Cached;
+        }
+
+        return fromCache && hasValues && age > BillingStaleAfter
+            ? ProviderBillingStatus.Stale
+            : status;
+    }
+
+    private static string FormatBalance(ProviderMetric[] metrics, ProviderMetricAvailability availability,
+        ProviderBillingStatus status, bool fromCache, ProviderBillingStatus storedStatus)
+    {
+        if (metrics.Length == 0) return EmptyMetricState(availability, status);
+        var body = string.Join(" · ", metrics.Take(3).Select(metric => FormatMetricValue(metric)));
+        return AddMetricFreshness(body, status, fromCache, storedStatus, metrics.Any(metric => metric.Availability == ProviderMetricAvailability.Cached));
+    }
+
+    private static string FormatUsage(ProviderMetric[] metrics, ProviderMetricAvailability availability,
+        ProviderBillingStatus status, bool fromCache, ProviderBillingStatus storedStatus)
+    {
+        if (metrics.Length == 0) return EmptyMetricState(availability, status);
+        var primary = metrics.FirstOrDefault(metric => metric.Kind == ProviderMetricKind.Spending);
+        var descriptions = new List<string>();
+        if (primary is not null)
+        {
+            descriptions.Add(FormatMetricValue(primary, $"{ScopeLabel(primary.Scope)} spending"));
+            var limit = metrics.FirstOrDefault(metric => metric.Kind == ProviderMetricKind.QuotaLimit && AreComparable(primary, metric));
+            var remaining = metrics.FirstOrDefault(metric => metric.Kind == ProviderMetricKind.QuotaRemaining && AreComparable(primary, metric));
+            if (limit is not null) descriptions.Add(FormatMetricValue(limit, "allowance"));
+            if (remaining is not null) descriptions.Add(FormatMetricValue(remaining, "remaining allowance"));
+        }
+        else
+        {
+            foreach (var metric in metrics.OrderBy(MetricPriority).Take(2))
+                descriptions.Add(FormatMetricValue(metric, MetricLabel(metric.Kind)));
+        }
+
+        var body = string.Join(" · ", descriptions);
+        return AddMetricFreshness(body, status, fromCache, storedStatus, metrics.Any(metric => metric.Availability == ProviderMetricAvailability.Cached));
+    }
+
+    private static string AddMetricFreshness(string body, ProviderBillingStatus status, bool fromCache,
+        ProviderBillingStatus storedStatus, bool hasRetainedMetric)
+    {
+        if (status is ProviderBillingStatus.Unauthorized or ProviderBillingStatus.AuthRejected or
+            ProviderBillingStatus.Unavailable or ProviderBillingStatus.InvalidResponse)
+            return $"{StatusLabel(status)} · last known {body}";
+        if (status == ProviderBillingStatus.Stale)
+            return $"Stale · last known {body}";
+        if (fromCache || status == ProviderBillingStatus.Cached)
+            return $"{body} · cached";
+        if (status == ProviderBillingStatus.Partial || storedStatus == ProviderBillingStatus.Partial || hasRetainedMetric)
+            return hasRetainedMetric ? $"Partial · {body}" : $"{body} · partial";
+        return body;
+    }
+
+    private static string EmptyMetricState(ProviderMetricAvailability availability, ProviderBillingStatus overallStatus)
+    {
+        if (availability == ProviderMetricAvailability.Unknown && overallStatus is
+            ProviderBillingStatus.Unauthorized or ProviderBillingStatus.AuthRejected or ProviderBillingStatus.Unavailable or ProviderBillingStatus.InvalidResponse)
+            return StatusLabel(overallStatus);
+
+        return availability switch
+        {
+            ProviderMetricAvailability.Unsupported => "Not supported",
+            ProviderMetricAvailability.Unauthorized => "Unauthorized",
+            ProviderMetricAvailability.Unavailable => "Unavailable",
+            ProviderMetricAvailability.InvalidResponse => "Invalid response",
+            ProviderMetricAvailability.Partial => "Partial · unknown",
+            ProviderMetricAvailability.Cached => "Unknown · cached",
+            ProviderMetricAvailability.Stale => "Stale · unknown",
+            _ => "Unknown",
+        };
+    }
+
+    private static string FormatMetricValue(ProviderMetric metric, string? label = null)
+    {
+        var value = metric.Value!.Value.ToString("G29", System.Globalization.CultureInfo.InvariantCulture);
+        var unit = metric.Unit.Kind switch
+        {
+            ProviderMetricUnitKind.Currency => metric.Unit.Code ?? "currency unknown",
+            ProviderMetricUnitKind.ProviderSpecific => "provider units",
+            ProviderMetricUnitKind.Requests => "requests",
+            ProviderMetricUnitKind.Tokens => "tokens",
+            _ => "unit unknown",
+        };
+        return string.IsNullOrWhiteSpace(label) ? $"{value} {unit}" : $"{label} {value} {unit}";
+    }
+
+    private static string BalanceScopeLabel(IReadOnlyList<ProviderMetric> metrics)
+    {
+        var scopes = metrics.Select(metric => metric.Scope).Distinct().ToArray();
+        return scopes.Length == 1 ? scopes[0] switch
+        {
+            ProviderMetricScope.ApiKey => "API key balance:",
+            ProviderMetricScope.Organization => "Organization balance:",
+            ProviderMetricScope.Workspace => "Workspace balance:",
+            ProviderMetricScope.Team => "Team balance:",
+            ProviderMetricScope.Subscription => "Subscription balance:",
+            ProviderMetricScope.Account => "Account balance:",
+            _ => "Balance:",
+        } : "Balance:";
+    }
+
+    private static string ScopeLabel(ProviderMetricScope scope) => scope switch
+    {
+        ProviderMetricScope.ApiKey => "API key",
+        ProviderMetricScope.Account => "Account",
+        ProviderMetricScope.Organization => "Organization",
+        ProviderMetricScope.Workspace => "Workspace",
+        ProviderMetricScope.Team => "Team",
+        ProviderMetricScope.Subscription => "Subscription",
+        _ => "Provider",
+    };
+
+    private static string MetricLabel(ProviderMetricKind kind) => kind switch
+    {
+        ProviderMetricKind.QuotaLimit => "Quota limit",
+        ProviderMetricKind.QuotaRemaining => "Remaining allowance",
+        ProviderMetricKind.ProviderCredits => "Provider credits",
+        ProviderMetricKind.ProviderSpecificUsage => "Usage",
+        ProviderMetricKind.RequestCount => "Requests used",
+        ProviderMetricKind.RequestAllowance => "Request allowance",
+        ProviderMetricKind.TokenCount => "Tokens used",
+        ProviderMetricKind.TokenAllowance => "Token allowance",
+        ProviderMetricKind.AllocatedCredits => "Allocated credits",
+        ProviderMetricKind.PurchasedCredits => "Purchased credits",
+        _ => "Usage",
+    };
+
+    private static int MetricPriority(ProviderMetric metric) => metric.Kind switch
+    {
+        ProviderMetricKind.ProviderSpecificUsage => 0,
+        ProviderMetricKind.ProviderCredits => 1,
+        ProviderMetricKind.QuotaRemaining => 2,
+        ProviderMetricKind.RequestCount => 3,
+        ProviderMetricKind.TokenCount => 4,
+        ProviderMetricKind.QuotaLimit => 5,
+        ProviderMetricKind.RequestAllowance => 6,
+        ProviderMetricKind.TokenAllowance => 7,
+        _ => 8,
+    };
+
+    private static bool AreComparable(ProviderMetric left, ProviderMetric right) =>
+        left.Scope == right.Scope && ProviderMetricNormalizer.UnitsEqual(left.Unit, right.Unit) &&
+        string.Equals(left.Period, right.Period, StringComparison.Ordinal) &&
+        left.PeriodSemantics == right.PeriodSemantics &&
+        left.PeriodStartAt == right.PeriodStartAt && left.PeriodEndAt == right.PeriodEndAt &&
+        left.ResetAt == right.ResetAt;
+
+    private static bool IsUsageMetric(ProviderMetricKind kind) => kind is
+        ProviderMetricKind.Spending or ProviderMetricKind.QuotaLimit or ProviderMetricKind.QuotaRemaining or
+        ProviderMetricKind.ProviderCredits or ProviderMetricKind.ProviderSpecificUsage or ProviderMetricKind.RequestCount or
+        ProviderMetricKind.RequestAllowance or ProviderMetricKind.TokenCount or ProviderMetricKind.TokenAllowance;
+
+    private static string StatusLabel(ProviderBillingStatus status) => status switch
+    {
+        ProviderBillingStatus.Live => "Live",
+        ProviderBillingStatus.Partial => "Partial",
+        ProviderBillingStatus.Cached => "Cached",
+        ProviderBillingStatus.Stale => "Stale",
+        ProviderBillingStatus.Unsupported => "Not supported",
+        ProviderBillingStatus.AuthRejected or ProviderBillingStatus.Unauthorized => "Unauthorized",
+        ProviderBillingStatus.Unavailable => "Unavailable",
+        ProviderBillingStatus.InvalidResponse => "Invalid response",
+        _ => "Unknown",
+    };
 
     public void SetDiscoveredModels(IReadOnlyList<string> models)
     {

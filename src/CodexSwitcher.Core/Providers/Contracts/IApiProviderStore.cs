@@ -44,6 +44,8 @@ public interface IApiProviderStore
     ApiProviderProfile? GetById(Guid id);
     ApiProviderProfile? GetByStableCodexProviderId(string stableId);
     void Save(ApiProviderProfile profile);
+    /// <summary>Updates only billing observations when the profile identity still matches the captured profile.</summary>
+    bool TryUpdateBillingSnapshot(ApiProviderProfile expectedProfile, ProviderBillingSnapshot snapshot);
     void SaveAll(IEnumerable<ApiProviderProfile> profiles, ApiProviderSaveIntent intent = ApiProviderSaveIntent.NormalUpdate);
     bool Delete(Guid id);
     bool SetStatus(Guid id, ApiProviderProfileStatus status);

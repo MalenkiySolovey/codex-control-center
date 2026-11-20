@@ -134,6 +134,7 @@ public sealed class ApiKeySecretStore : IApiKeySecretStore
                 ProfileId = profileId,
                 ApiKey = apiKey.Trim(),
                 CreatedAt = DateTimeOffset.UtcNow,
+                RevisionId = Guid.NewGuid(),
             };
 
             var plaintextBytes = JsonSerializer.SerializeToUtf8Bytes(record);
@@ -188,6 +189,55 @@ public sealed class ApiKeySecretStore : IApiKeySecretStore
             {
                 var record = JsonSerializer.Deserialize<ApiKeyRecord>(plaintext);
                 return record?.ApiKey;
+            }
+            catch
+            {
+                return null;
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public string? GetApiKeyRevision(Guid profileId)
+    {
+        EnsureMigrated(profileId);
+        var path = KeyPath(profileId);
+        using (_coordinator.Lock(profileId))
+        {
+            if (!_fs.FileExists(path))
+                return null;
+
+            byte[] cipher;
+            try
+            {
+                cipher = _fs.ReadAllBytes(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+
+            byte[] plaintext;
+            try
+            {
+                plaintext = _protector.Unprotect(cipher);
+            }
+            catch
+            {
+                return null;
+            }
+
+            try
+            {
+                var record = JsonSerializer.Deserialize<ApiKeyRecord>(plaintext);
+                if (record is null) return null;
+                return record.RevisionId == Guid.Empty
+                    ? $"legacy:{record.CreatedAt.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+                    : $"v2:{record.RevisionId:N}";
             }
             catch
             {
@@ -260,5 +310,8 @@ public sealed class ApiKeySecretStore : IApiKeySecretStore
 
         [JsonPropertyName("createdAt")]
         public DateTimeOffset CreatedAt { get; set; }
+
+        [JsonPropertyName("revisionId")]
+        public Guid RevisionId { get; set; }
     }
 }

@@ -51,6 +51,21 @@ public sealed class ApiModelInventoryRefreshServiceTests
             SaveCount++;
         }
 
+        public bool TryUpdateBillingSnapshot(ApiProviderProfile expectedProfile, ProviderBillingSnapshot snapshot)
+        {
+            var current = GetById(expectedProfile.Id);
+            if (current is null || current.CreatedAt != expectedProfile.CreatedAt ||
+                current.StableCodexProviderId != expectedProfile.StableCodexProviderId || current.EndpointId != expectedProfile.EndpointId ||
+                current.CatalogProviderId != expectedProfile.CatalogProviderId || current.BaseUrl != expectedProfile.BaseUrl ||
+                current.SelectedRouteId != expectedProfile.SelectedRouteId || snapshot.ProfileId != expectedProfile.Id ||
+                snapshot.CredentialOwnerId != (expectedProfile.EndpointId ?? expectedProfile.Id) ||
+                snapshot.ProviderId != expectedProfile.CatalogProviderId || snapshot.BaseUrl != expectedProfile.BaseUrl ||
+                snapshot.RouteId != expectedProfile.SelectedRouteId) return false;
+            current.LastBillingSnapshot = snapshot;
+            Save(current);
+            return true;
+        }
+
         public void SaveAll(IEnumerable<ApiProviderProfile> profiles, ApiProviderSaveIntent intent = ApiProviderSaveIntent.NormalUpdate)
         {
             foreach (var profile in profiles)

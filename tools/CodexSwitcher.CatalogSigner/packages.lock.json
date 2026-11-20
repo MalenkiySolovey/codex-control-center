@@ -7,7 +7,7 @@
         "dependencies": {
           "ChatGpt.Accounts": "[0.1.0-preview.3, )",
           "Codex.RuntimeKit": "[0.1.0-preview.1, )",
-          "Llm.ProviderKit": "[0.1.0-preview.3, )"
+          "Llm.ProviderKit": "[0.1.0-preview.4, )"
         }
       },
       "codexswitcher.infra": {
@@ -15,7 +15,7 @@
         "dependencies": {
           "Codex.RuntimeKit": "[0.1.0-preview.1, )",
           "CodexSwitcher.Core": "[1.0.0, )",
-          "Llm.ProviderKit": "[0.1.0-preview.3, )",
+          "Llm.ProviderKit": "[0.1.0-preview.4, )",
           "System.Security.Cryptography.ProtectedData": "[9.0.0, )"
         }
       },
@@ -33,9 +33,9 @@
       },
       "Llm.ProviderKit": {
         "type": "CentralTransitive",
-        "requested": "[0.1.0-preview.3, )",
-        "resolved": "0.1.0-preview.3",
-        "contentHash": "w4DUXFMC1VgR8WoVGbWINV099W/zOb1/YA+OHupuPctKa49kz9D+qYhmUuwh7LWl6cgaeCCm2TfnBOdmjNKphA=="
+        "requested": "[0.1.0-preview.4, )",
+        "resolved": "0.1.0-preview.4",
+        "contentHash": "iYOFQ/QdDO9Oc1YF8lCKa3nljht9jy09qQpahJCI+YUdRBxW3djOj7uSIEssRA9fBf+D64iInFn5G4oYsYWUcg=="
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "CentralTransitive",

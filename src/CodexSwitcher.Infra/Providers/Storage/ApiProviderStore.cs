@@ -131,6 +131,25 @@ public sealed class ApiProviderStore : IApiProviderStore
         }
     }
 
+    public bool TryUpdateBillingSnapshot(ApiProviderProfile expectedProfile, ProviderBillingSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(expectedProfile);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        lock (_sync)
+        {
+            var profiles = LoadInternal();
+            var current = profiles.FirstOrDefault(profile => profile.Id == expectedProfile.Id);
+            if (current is null || !HasSameInspectionIdentity(current, expectedProfile) || !HasSnapshotIdentity(snapshot, expectedProfile))
+            {
+                return false;
+            }
+
+            current.LastBillingSnapshot = snapshot;
+            SaveInternal(profiles, ApiProviderSaveIntent.NormalUpdate);
+            return true;
+        }
+    }
+
     public void SaveAll(IEnumerable<ApiProviderProfile> profiles, ApiProviderSaveIntent intent = ApiProviderSaveIntent.NormalUpdate)
     {
         ArgumentNullException.ThrowIfNull(profiles);
@@ -153,6 +172,21 @@ public sealed class ApiProviderStore : IApiProviderStore
             return removed;
         }
     }
+
+    private static bool HasSameInspectionIdentity(ApiProviderProfile current, ApiProviderProfile expected) =>
+        current.Id == expected.Id &&
+        current.CreatedAt == expected.CreatedAt &&
+        string.Equals(current.StableCodexProviderId, expected.StableCodexProviderId, StringComparison.Ordinal) &&
+        current.EndpointId == expected.EndpointId &&
+        string.Equals(current.CatalogProviderId, expected.CatalogProviderId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(current.BaseUrl, expected.BaseUrl, StringComparison.Ordinal) &&
+        string.Equals(current.SelectedRouteId, expected.SelectedRouteId, StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasSnapshotIdentity(ProviderBillingSnapshot snapshot, ApiProviderProfile expected) =>
+        snapshot.ProfileId == expected.Id && snapshot.CredentialOwnerId == (expected.EndpointId ?? expected.Id) &&
+        string.Equals(snapshot.ProviderId, expected.CatalogProviderId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(snapshot.BaseUrl, expected.BaseUrl, StringComparison.Ordinal) &&
+        string.Equals(snapshot.RouteId, expected.SelectedRouteId, StringComparison.OrdinalIgnoreCase);
 
     public bool SetStatus(Guid id, ApiProviderProfileStatus status)
     {

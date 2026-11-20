@@ -228,7 +228,7 @@ public sealed class Stability2Tests : IDisposable
         };
 
         // 1. Missing key -> KeyRequired
-        var item = (INotifyPropertyChanged)Activator.CreateInstance(itemType, profile, null, false, false)!;
+        var item = (INotifyPropertyChanged)Activator.CreateInstance(itemType, profile, null, false, false, null)!;
         var cardVisualStateProp = itemType.GetProperty("CardVisualState")!;
         Assert.Equal("KeyRequired", cardVisualStateProp.GetValue(item)!.ToString());
 

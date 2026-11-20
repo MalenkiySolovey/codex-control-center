@@ -26,6 +26,27 @@ public sealed class ApiKeySecretStoreTests
     }
 
     [Fact]
+    public void CredentialRevisionIsNonSecretAndChangesWhenKeyRotates()
+    {
+        using var temp = new TempDir();
+        var store = new ApiKeySecretStore(_protector, _fs, temp.Root);
+        var profileId = Guid.NewGuid();
+
+        store.SaveApiKey(profileId, "sk-first-synthetic-key");
+        var firstRevision = store.GetApiKeyRevision(profileId);
+        store.SaveApiKey(profileId, "sk-second-synthetic-key");
+        var secondRevision = store.GetApiKeyRevision(profileId);
+
+        Assert.NotNull(firstRevision);
+        Assert.NotNull(secondRevision);
+        Assert.NotEqual(firstRevision, secondRevision);
+        Assert.DoesNotContain("sk-", firstRevision);
+        Assert.DoesNotContain("sk-", secondRevision);
+        Assert.True(store.DeleteApiKey(profileId));
+        Assert.Null(store.GetApiKeyRevision(profileId));
+    }
+
+    [Fact]
     public void StoredBlob_IsEncryptedAndDoesNotContainPlaintext()
     {
         using var temp = new TempDir();

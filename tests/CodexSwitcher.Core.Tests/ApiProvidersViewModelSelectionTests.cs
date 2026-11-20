@@ -392,6 +392,7 @@ public sealed class ApiProvidersViewModelSelectionTests
         public bool HasApiKey(Guid profileId) => true;
         public void SaveApiKey(Guid profileId, string apiKey) { }
         public string? GetApiKey(Guid profileId) => null;
+        public string? GetApiKeyRevision(Guid profileId) => "synthetic-revision";
         public bool DeleteApiKey(Guid profileId) => false;
         public void CloneApiKey(Guid sourceProfileId, Guid targetProfileId) { }
     }
