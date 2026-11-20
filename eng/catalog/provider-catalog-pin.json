@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/MalenkiySolovey/llm-provider-catalog",
+  "commit": "50c3e11970237af5b70896b4eb22c6036bf99eb0",
+  "schemaVersion": 1,
+  "catalogVersion": 4,
+  "catalogFile": "catalog/providers.catalog.json",
+  "schemaFile": "catalog/providers.catalog.schema.json",
+  "signatureFile": "catalog/providers.catalog.sig",
+  "catalogSha256": "07e17931c9c9e41fdabb4decef720c94ab7a6250d81ede3ae63b98c35fe3c056",
+  "schemaSha256": "07bfa650456b9832d742096cbff755f3817a43b59c91b39d023ad052f7635895",
+  "signatureSha256": "f08598d6d16c3582a5e7c804daeae965d135e9fd28be9eb96e84043687332892",
+  "officialPublicKeySha256": "c50680d397b93750f7b5492e2c4c0f3424b30adcfbffc77437c4ae6f21a9dd0c"
+}

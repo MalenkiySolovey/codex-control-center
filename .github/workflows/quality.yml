@@ -29,6 +29,11 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Setup Python for pinned catalog validation
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
       - name: Execute Quality Gates Verification
         shell: powershell
         run: powershell -ExecutionPolicy Bypass -File .\eng\quality\verify.ps1 -SkipPackaging

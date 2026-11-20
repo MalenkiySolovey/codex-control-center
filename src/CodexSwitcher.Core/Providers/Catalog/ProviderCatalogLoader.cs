@@ -32,6 +32,7 @@ using CodexSwitcher.Core.Usage.Models;
 using CodexSwitcher.Core.Usage.Services;
 using CodexSwitcher.Core.Routing.Models;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using CapabilityStatus = CodexSwitcher.Core.Routing.Models.CapabilityStatus;
 
@@ -44,6 +45,17 @@ namespace CodexSwitcher.Core.Providers.Catalog;
 /// </summary>
 public sealed class ProviderCatalogLoader
 {
+    private sealed class LastKnownGoodEnvelope
+    {
+        public int FormatVersion { get; init; }
+        public string CatalogBase64 { get; init; } = string.Empty;
+        public string SignatureBase64 { get; init; } = string.Empty;
+        public string CatalogSha256 { get; init; } = string.Empty;
+    }
+
+    private static readonly int MaxLastKnownGoodEnvelopeSizeBytes =
+        (CatalogSecurityConstants.MaxCatalogSizeBytes * 4 / 3) + (16 * 1024);
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -193,23 +205,25 @@ public sealed class ProviderCatalogLoader
             if (!string.IsNullOrEmpty(dir))
                 _fs.CreateDirectory(dir);
 
-            // Back up current external catalog to previous/last-known-good
-            if (_fs.FileExists(_catalogPath))
+            // Preserve the existing external catalog only when its detached signature is valid.
+            if (_fs.FileExists(_catalogPath) && _fs.FileExists(_catalogSigPath))
             {
                 try
                 {
                     var existingBytes = _fs.ReadAllBytes(_catalogPath);
-                    _fs.WriteAllBytesAtomic(_catalogPreviousPath, existingBytes);
+                    var existingSignature = _fs.ReadAllText(_catalogSigPath);
+                    TryUpdateLastKnownGood(existingBytes, existingSignature);
                 }
                 catch
                 {
-                    // Non-fatal if backup fails, proceed with safe atomic write
+                    // Non-fatal if a trusted backup cannot be refreshed. An existing LKG remains intact.
                 }
             }
 
             // Atomically write new catalog and signature
             _fs.WriteAllBytesAtomic(_catalogPath, candidateCatalogBytes);
             _fs.WriteAllTextAtomic(_catalogSigPath, base64Signature.Trim());
+            TryUpdateLastKnownGood(candidateCatalogBytes, base64Signature.Trim());
             return true;
         }
         catch (Exception ex)
@@ -350,7 +364,7 @@ public sealed class ProviderCatalogLoader
             if (validation.Status == CatalogLoadStatus.Supported && validation.Catalog != null)
             {
                 // Update previous known-good asynchronously or atomically if different
-                TryUpdateLastKnownGood(catalogBytes);
+                TryUpdateLastKnownGood(catalogBytes, sig);
                 return validation;
             }
         }
@@ -367,21 +381,35 @@ public sealed class ProviderCatalogLoader
         try
         {
             var lkgBytes = _fs.ReadAllBytes(_catalogPreviousPath);
-            if (lkgBytes.Length > CatalogSecurityConstants.MaxCatalogSizeBytes)
+            if (lkgBytes.Length == 0 || lkgBytes.Length > MaxLastKnownGoodEnvelopeSizeBytes)
                 return null;
 
-            var catalog = JsonSerializer.Deserialize<ProviderCatalog>(lkgBytes, SerializerOptions);
-            if (catalog != null &&
-                catalog.SchemaVersion <= CatalogSecurityConstants.SupportedSchemaVersion &&
-                !IsAppVersionTooOld(catalog.MinAppVersion, _currentAppVersion) &&
-                ValidateCatalogSemantics(catalog, out _))
+            var envelope = JsonSerializer.Deserialize<LastKnownGoodEnvelope>(lkgBytes, SerializerOptions);
+            if (envelope == null || envelope.FormatVersion != 1 ||
+                string.IsNullOrWhiteSpace(envelope.CatalogBase64) ||
+                string.IsNullOrWhiteSpace(envelope.SignatureBase64) ||
+                string.IsNullOrWhiteSpace(envelope.CatalogSha256))
+                return null;
+
+            var catalogBytes = Convert.FromBase64String(envelope.CatalogBase64);
+            if (catalogBytes.Length == 0 || catalogBytes.Length > CatalogSecurityConstants.MaxCatalogSizeBytes)
+                return null;
+
+            var expectedHash = Convert.FromHexString(envelope.CatalogSha256);
+            var actualHash = SHA256.HashData(catalogBytes);
+            if (expectedHash.Length != actualHash.Length ||
+                !CryptographicOperations.FixedTimeEquals(expectedHash, actualHash))
+                return null;
+
+            var validation = ValidateCandidate(catalogBytes, envelope.SignatureBase64);
+            if (validation.Status == CatalogLoadStatus.Supported && validation.Catalog != null)
             {
                 return new CatalogLoadResult
                 {
-                    Catalog = catalog,
+                    Catalog = validation.Catalog,
                     ActiveLayer = CatalogSourceLayer.LastKnownGood,
                     Status = CatalogLoadStatus.Supported,
-                    DiagnosticMessage = "Loaded from last-known-good fallback catalog.",
+                    DiagnosticMessage = "Loaded signature-verified last-known-good catalog.",
                 };
             }
         }
@@ -452,11 +480,24 @@ public sealed class ProviderCatalogLoader
         }
     }
 
-    private void TryUpdateLastKnownGood(byte[] catalogBytes)
+    private void TryUpdateLastKnownGood(byte[] catalogBytes, string base64Signature)
     {
         try
         {
-            _fs.WriteAllBytesAtomic(_catalogPreviousPath, catalogBytes);
+            var validation = ValidateCandidate(catalogBytes, base64Signature);
+            if (validation.Status != CatalogLoadStatus.Supported || validation.Catalog == null)
+                return;
+
+            var envelope = new LastKnownGoodEnvelope
+            {
+                FormatVersion = 1,
+                CatalogBase64 = Convert.ToBase64String(catalogBytes),
+                SignatureBase64 = base64Signature.Trim(),
+                CatalogSha256 = Convert.ToHexString(SHA256.HashData(catalogBytes)),
+            };
+            var envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, SerializerOptions);
+            if (envelopeBytes.Length <= MaxLastKnownGoodEnvelopeSizeBytes)
+                _fs.WriteAllBytesAtomic(_catalogPreviousPath, envelopeBytes);
         }
         catch
         {

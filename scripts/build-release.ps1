@@ -14,6 +14,9 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "..\eng\packages\Use-IsolatedNuGetCache.ps1")
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+$ProviderCatalogSyncScript = Join-Path $RepoRoot "eng\catalog\sync-provider-catalog.ps1"
+& pwsh -NoProfile -ExecutionPolicy Bypass -File $ProviderCatalogSyncScript -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { throw "Pinned provider catalog verification or materialization failed." }
 $ExternalKitBootstrapScript = Join-Path $RepoRoot "eng\packages\bootstrap-external-kits.ps1"
 $ExternalKitNuGetConfig = Join-Path $RepoRoot "artifacts\external-kits\NuGet.Config"
 & powershell -ExecutionPolicy Bypass -File $ExternalKitBootstrapScript

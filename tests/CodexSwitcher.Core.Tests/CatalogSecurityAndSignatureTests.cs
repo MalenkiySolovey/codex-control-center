@@ -11,8 +11,8 @@ public sealed class CatalogSecurityAndSignatureTests
     [Fact]
     public void OfficialCatalog_Signature_VerifiesSuccessfully()
     {
-        var catalogPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
-        var sigPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.sig");
+        var catalogPath = CatalogTestPaths.CatalogPath;
+        var sigPath = CatalogTestPaths.SignaturePath;
 
         Assert.True(File.Exists(catalogPath), $"Official catalog not found at {catalogPath}");
         Assert.True(File.Exists(sigPath), $"Official catalog sig not found at {sigPath}");
@@ -27,8 +27,8 @@ public sealed class CatalogSecurityAndSignatureTests
     [Fact]
     public void TamperedCatalogPayload_FailsVerification()
     {
-        var catalogPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
-        var sigPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.sig");
+        var catalogPath = CatalogTestPaths.CatalogPath;
+        var sigPath = CatalogTestPaths.SignaturePath;
 
         var catalogBytes = File.ReadAllBytes(catalogPath);
         var sigBase64 = File.ReadAllText(sigPath).Trim();
@@ -44,8 +44,8 @@ public sealed class CatalogSecurityAndSignatureTests
     [Fact]
     public void TamperedSignature_FailsVerification()
     {
-        var catalogPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
-        var sigPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.sig");
+        var catalogPath = CatalogTestPaths.CatalogPath;
+        var sigPath = CatalogTestPaths.SignaturePath;
 
         var catalogBytes = File.ReadAllBytes(catalogPath);
         var sigBytes = Convert.FromBase64String(File.ReadAllText(sigPath).Trim());
@@ -67,8 +67,8 @@ public sealed class CatalogSecurityAndSignatureTests
     [Fact]
     public void ForeignPublicKey_DoesNotVerifyOfficialSignature()
     {
-        var catalogPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
-        var sigPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.sig");
+        var catalogPath = CatalogTestPaths.CatalogPath;
+        var sigPath = CatalogTestPaths.SignaturePath;
 
         var catalogBytes = File.ReadAllBytes(catalogPath);
         var sigBytes = Convert.FromBase64String(File.ReadAllText(sigPath).Trim());
@@ -83,8 +83,8 @@ public sealed class CatalogSecurityAndSignatureTests
     [Fact]
     public void OfficialCatalog_ModelflareEntry_IncludesDevHosts_AndValidatesSignature()
     {
-        var catalogPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
-        var sigPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.sig");
+        var catalogPath = CatalogTestPaths.CatalogPath;
+        var sigPath = CatalogTestPaths.SignaturePath;
 
         Assert.True(File.Exists(catalogPath));
         Assert.True(File.Exists(sigPath));

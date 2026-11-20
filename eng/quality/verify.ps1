@@ -19,6 +19,13 @@ $ProtocolVerifyScript = Join-Path $RepoRoot "eng\protocol\verify-agent-state-pro
 $BuildReleaseScript = Join-Path $RepoRoot "scripts\build-release.ps1"
 $ExternalKitBootstrapScript = Join-Path $RepoRoot "eng\packages\bootstrap-external-kits.ps1"
 $ExternalKitNuGetConfig = Join-Path $RepoRoot "artifacts\external-kits\NuGet.Config"
+$ProviderCatalogSyncScript = Join-Path $RepoRoot "eng\catalog\sync-provider-catalog.ps1"
+
+Write-Host "Materializing and validating the pinned public provider catalog..." -ForegroundColor Cyan
+& pwsh -NoProfile -ExecutionPolicy Bypass -File $ProviderCatalogSyncScript -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Pinned provider catalog verification or materialization failed with exit code $LASTEXITCODE."
+}
 
 Write-Host "====================================================================" -ForegroundColor Cyan
 Write-Host " Codex Switchboard - Repository-Wide Quality Gates Verification" -ForegroundColor Cyan

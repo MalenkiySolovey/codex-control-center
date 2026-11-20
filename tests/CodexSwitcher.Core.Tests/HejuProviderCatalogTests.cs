@@ -14,7 +14,7 @@ public sealed class HejuProviderCatalogTests
     private ProviderDescriptor LoadDescriptor()
     {
         using var temp = new TempDir();
-        var catalogPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
+        var catalogPath = CatalogTestPaths.CatalogPath;
         var result = new ProviderCatalogLoader(
             _fileSystem,
             catalogPath,

@@ -8,6 +8,9 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '..\packages\Use-IsolatedNuGetCache.ps1')
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$providerCatalogSyncScript = Join-Path $repoRoot 'eng\catalog\sync-provider-catalog.ps1'
+$providerCatalogSync = & pwsh -NoProfile -ExecutionPolicy Bypass -File $providerCatalogSyncScript -RepoRoot $repoRoot
+if ($LASTEXITCODE -ne 0) { throw 'Pinned provider catalog verification or materialization failed.' }
 $bootstrapScript = Join-Path $repoRoot 'eng\packages\bootstrap-external-kits.ps1'
 $externalKitNuGetConfig = Join-Path $repoRoot 'artifacts\external-kits\NuGet.Config'
 $bootstrapScriptOutput = & powershell -ExecutionPolicy Bypass -File $bootstrapScript

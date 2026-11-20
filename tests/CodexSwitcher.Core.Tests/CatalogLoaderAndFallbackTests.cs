@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using CodexSwitcher.Core.Tests.TestSupport;
 using Xunit;
 
@@ -63,8 +64,8 @@ public sealed class CatalogLoaderAndFallbackTests
         var sigFile = temp.Combine("providers.catalog.sig");
 
         // Copy official catalog and sig from repo
-        var sourceCatalog = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
-        var sourceSig = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.sig");
+        var sourceCatalog = CatalogTestPaths.CatalogPath;
+        var sourceSig = CatalogTestPaths.SignaturePath;
 
         File.Copy(sourceCatalog, catalogFile);
         File.Copy(sourceSig, sigFile);
@@ -92,7 +93,7 @@ public sealed class CatalogLoaderAndFallbackTests
         var catalogFile = temp.Combine("providers.catalog.json");
         var sigFile = temp.Combine("providers.catalog.sig");
 
-        var sourceCatalog = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
+        var sourceCatalog = CatalogTestPaths.CatalogPath;
         File.Copy(sourceCatalog, catalogFile);
         File.WriteAllText(sigFile, "invalid-sig-base64");
 
@@ -118,7 +119,7 @@ public sealed class CatalogLoaderAndFallbackTests
         var catalogFile = temp.Combine("providers.catalog.json");
         var sigFile = temp.Combine("providers.catalog.sig");
 
-        var sourceCatalog = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
+        var sourceCatalog = CatalogTestPaths.CatalogPath;
         File.Copy(sourceCatalog, catalogFile);
         // Do NOT create sigFile
 
@@ -144,13 +145,45 @@ public sealed class CatalogLoaderAndFallbackTests
         var sigFile = temp.Combine("providers.catalog.sig");
         var lkgFile = temp.Combine("providers.catalog.previous.json");
 
-        // Set up valid Last-Known-Good
-        var sourceCatalog = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
-        File.Copy(sourceCatalog, lkgFile);
+        // Load a valid signed external catalog once to create authenticated LKG state.
+        var sourceCatalog = CatalogTestPaths.CatalogPath;
+        File.Copy(sourceCatalog, catalogFile);
+        File.Copy(CatalogTestPaths.SignaturePath, sigFile);
+
+        var loader = new ProviderCatalogLoader(
+            _fs,
+            catalogFile,
+            sigFile,
+            lkgFile,
+            temp.Combine("providers.local.json"),
+            "0.1.3");
+
+        var initialResult = loader.LoadCatalog();
+        Assert.Equal(CatalogSourceLayer.OfficialExternal, initialResult.ActiveLayer);
+        Assert.True(File.Exists(lkgFile));
 
         // Corrupt active catalog
         File.WriteAllText(catalogFile, "not-json{{{");
         File.WriteAllText(sigFile, "dummy");
+
+        var result = loader.LoadCatalog();
+
+        Assert.Equal(CatalogSourceLayer.LastKnownGood, result.ActiveLayer);
+        Assert.Equal(CatalogLoadStatus.Supported, result.Status);
+        Assert.True(result.Catalog.Providers.Count >= 2);
+    }
+
+    [Fact]
+    public void LoadCatalog_WhenLegacyUnsignedLastKnownGoodExists_FallsBackToEmbedded()
+    {
+        using var temp = new TempDir();
+        var catalogFile = temp.Combine("providers.catalog.json");
+        var sigFile = temp.Combine("providers.catalog.sig");
+        var lkgFile = temp.Combine("providers.catalog.previous.json");
+
+        File.WriteAllText(catalogFile, "not-json{{{");
+        File.WriteAllText(sigFile, "invalid-signature");
+        File.Copy(CatalogTestPaths.CatalogPath, lkgFile);
 
         var loader = new ProviderCatalogLoader(
             _fs,
@@ -162,9 +195,44 @@ public sealed class CatalogLoaderAndFallbackTests
 
         var result = loader.LoadCatalog();
 
-        Assert.Equal(CatalogSourceLayer.LastKnownGood, result.ActiveLayer);
+        Assert.Equal(CatalogSourceLayer.EmbeddedBootstrap, result.ActiveLayer);
         Assert.Equal(CatalogLoadStatus.Supported, result.Status);
-        Assert.True(result.Catalog.Providers.Count >= 2);
+        Assert.Contains(result.Catalog.Providers, provider => provider.Id == "router-cheap");
+    }
+
+    [Fact]
+    public void LoadCatalog_WhenLastKnownGoodSignatureDoesNotMatch_FallsBackToEmbedded()
+    {
+        using var temp = new TempDir();
+        var catalogFile = temp.Combine("providers.catalog.json");
+        var sigFile = temp.Combine("providers.catalog.sig");
+        var lkgFile = temp.Combine("providers.catalog.previous.json");
+        var catalogBytes = File.ReadAllBytes(CatalogTestPaths.CatalogPath);
+        var signatureBytes = Convert.FromBase64String(File.ReadAllText(CatalogTestPaths.SignaturePath).Trim());
+        signatureBytes[0] ^= 0x01;
+        var envelope = new
+        {
+            FormatVersion = 1,
+            CatalogBase64 = Convert.ToBase64String(catalogBytes),
+            SignatureBase64 = Convert.ToBase64String(signatureBytes),
+            CatalogSha256 = Convert.ToHexString(SHA256.HashData(catalogBytes)),
+        };
+        File.WriteAllText(lkgFile, JsonSerializer.Serialize(envelope));
+        File.WriteAllText(catalogFile, "not-json{{{");
+        File.WriteAllText(sigFile, "invalid-signature");
+
+        var loader = new ProviderCatalogLoader(
+            _fs,
+            catalogFile,
+            sigFile,
+            lkgFile,
+            temp.Combine("providers.local.json"),
+            "0.1.3");
+
+        var result = loader.LoadCatalog();
+
+        Assert.Equal(CatalogSourceLayer.EmbeddedBootstrap, result.ActiveLayer);
+        Assert.Equal(CatalogLoadStatus.Supported, result.Status);
     }
 
     [Fact]
@@ -242,6 +310,7 @@ public sealed class CatalogLoaderAndFallbackTests
         var custom = result.Catalog.Providers.FirstOrDefault(p => p.Id == "my-custom-proxy");
         Assert.NotNull(custom);
         Assert.Equal("My Custom Proxy", custom.DisplayName);
+        Assert.NotEqual(CatalogSourceLayer.OfficialExternal, result.ActiveLayer);
         // Embedded providers also preserved
         Assert.Contains(result.Catalog.Providers, p => p.Id == "router-cheap");
     }
@@ -330,7 +399,7 @@ public sealed class CatalogLoaderAndFallbackTests
     [Fact]
     public void RouterCheap_And_OpenRouter_Descriptors_FactStatusModel()
     {
-        var catalogPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
+        var catalogPath = CatalogTestPaths.CatalogPath;
         var catalogBytes = File.ReadAllBytes(catalogPath);
         var catalog = JsonSerializer.Deserialize<ProviderCatalog>(catalogBytes);
 

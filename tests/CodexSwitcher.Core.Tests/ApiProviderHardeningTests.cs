@@ -29,7 +29,7 @@ public sealed class ApiProviderHardeningTests
     public void Issue2_RouteSwitchLabel_ShowsCleanDisplayName_WithoutRegionInLabel()
     {
         using var temp = new TempDir();
-        var catalogPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "catalog", "providers.catalog.json");
+        var catalogPath = CatalogTestPaths.CatalogPath;
         var catalogSig = Path.ChangeExtension(catalogPath, ".sig");
 
         var loader = new ProviderCatalogLoader(

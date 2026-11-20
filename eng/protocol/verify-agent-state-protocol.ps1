@@ -4,6 +4,9 @@ param()
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$ProviderCatalogSyncScript = Join-Path $RepoRoot "eng\catalog\sync-provider-catalog.ps1"
+& pwsh -NoProfile -ExecutionPolicy Bypass -File $ProviderCatalogSyncScript -RepoRoot $RepoRoot
+if ($LASTEXITCODE -ne 0) { throw "Pinned provider catalog verification or materialization failed." }
 $ProtocolRoot = Join-Path $RepoRoot "third_party\agent-state-protocol"
 $ManifestPath = Join-Path $ProtocolRoot "protocol-manifest.json"
 $ProvenancePath = Join-Path $ProtocolRoot "PROVENANCE.json"

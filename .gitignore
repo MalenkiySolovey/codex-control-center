@@ -70,6 +70,7 @@ $RECYCLE.BIN/
 # ---------- bootstrapped external source/packages ----------
 /artifacts/external-kits/
 /artifacts/local-packages/
+/artifacts/provider-catalog/
 
 # ---------- App runtime data (never commit secrets) ----------
 # The encrypted vault lives in %LOCALAPPDATA%\CodexSwitcher, not in the repo,
