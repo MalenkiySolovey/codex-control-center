@@ -20,7 +20,7 @@ public static class CodexDesktopBalanceRendererExtension
         using var resource = typeof(CodexDesktopBalanceRendererExtension).Assembly.GetManifestResourceStream(ResourceName)
             ?? throw new InvalidOperationException("The bundled Codex Desktop balance renderer resource is missing.");
         using var reader = new StreamReader(resource, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        return reader.ReadToEnd();
+        return reader.ReadToEnd().Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
     }
 
     public static bool MatchesApprovedHash(string script)
