@@ -74,9 +74,26 @@ public static class DirectoryHardening
         }
 
         var dirInfo = new DirectoryInfo(path);
-        var security = new DirectorySecurity();
-        security.SetOwner(user);
+        var security = dirInfo.GetAccessControl();
+        var currentOwner = security.GetOwner(typeof(SecurityIdentifier));
+        // A newly created directory is already owned by this user. Rewriting that same
+        // owner can require WRITE_OWNER, which a standard inherited Modify ACL does not
+        // grant. Preserve the existing owner when it is already correct and only replace
+        // the DACL in that common case.
+        if (currentOwner is not SecurityIdentifier owner || !owner.Equals(user))
+        {
+            security.SetOwner(user);
+        }
+
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (FileSystemAccessRule existingRule in security.GetAccessRules(
+                     includeExplicit: true,
+                     includeInherited: true,
+                     targetType: typeof(SecurityIdentifier)))
+        {
+            security.RemoveAccessRuleAll(existingRule);
+        }
+
         security.AddAccessRule(new FileSystemAccessRule(
             user,
             FileSystemRights.FullControl,
