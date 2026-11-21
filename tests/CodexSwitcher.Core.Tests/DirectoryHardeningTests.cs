@@ -6,7 +6,7 @@ namespace CodexSwitcher.Core.Tests;
 public sealed class DirectoryHardeningTests
 {
     [Fact]
-    public void RestrictToCurrentUserSecuresOwnedDirectoryWithInheritedModifyOnly()
+    public void RestrictToCurrentUserSecuresOwnedDirectoryWithModifyOnlyAcl()
     {
         var root = Path.Combine(Path.GetTempPath(), $"CodexSwitcher.DirectoryHardening.{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -32,17 +32,44 @@ public sealed class DirectoryHardeningTests
                 InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
                 PropagationFlags.None,
                 AccessControlType.Allow));
+            rootSecurity.AddAccessRule(new FileSystemAccessRule(
+                user,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
             rootInfo.SetAccessControl(rootSecurity);
 
             var profileHome = Path.Combine(root, "profile");
             Directory.CreateDirectory(profileHome);
             var profileInfo = new DirectoryInfo(profileHome);
+            var profileSecurity = profileInfo.GetAccessControl();
+            if (profileSecurity.GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner || !owner.Equals(user))
+            {
+                profileSecurity.SetOwner(user);
+            }
+
+            profileSecurity.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            foreach (FileSystemAccessRule existingRule in profileSecurity.GetAccessRules(
+                         includeExplicit: true,
+                         includeInherited: true,
+                         targetType: typeof(SecurityIdentifier)))
+            {
+                profileSecurity.RemoveAccessRuleAll(existingRule);
+            }
+
+            profileSecurity.AddAccessRule(new FileSystemAccessRule(
+                authenticatedUsers,
+                FileSystemRights.Modify,
+                AccessControlType.Allow));
+            profileInfo.SetAccessControl(profileSecurity);
+
             var before = profileInfo.GetAccessControl();
             Assert.Equal(user, before.GetOwner(typeof(SecurityIdentifier)));
             Assert.Contains(
                 before.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>(),
-                inheritedRule => inheritedRule.IdentityReference.Equals(authenticatedUsers) &&
-                                 (inheritedRule.FileSystemRights & FileSystemRights.Modify) == FileSystemRights.Modify);
+                existingRule => existingRule.IdentityReference.Equals(authenticatedUsers) &&
+                                (existingRule.FileSystemRights & FileSystemRights.Modify) == FileSystemRights.Modify);
 
             DirectoryHardening.RestrictToCurrentUser(profileHome);
 
