@@ -118,7 +118,7 @@ public class SwitchboardCodexProcessRegistryTests
         var staleCandidate = new CodexProcessInfo(
             process.Id,
             process.ProcessName,
-            process.MainModule?.FileName,
+            process.StartInfo.FileName,
             null,
             CodexProcessKind.Cli);
 

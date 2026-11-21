@@ -26,7 +26,6 @@ public sealed class CodexDesktopBalanceController : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan BillingRefreshInterval = TimeSpan.FromSeconds(30);
-    private static readonly Version SupportedDesktopVersion = new(26, 1117, 3838, 0);
     private const string AnchorSelector = "[data-ambient-usage-label]";
     private const string ExtensionRootAttribute = "data-codex-control-center-api-balance";
 
@@ -288,7 +287,7 @@ public sealed class CodexDesktopBalanceController : BackgroundService
                 return Strings.Current.CodexDesktopBalanceStatusDesktopUnavailable;
             }
 
-            if (discovery.Installation.Version != SupportedDesktopVersion)
+            if (!CodexDesktopBalanceCompatibilityPolicy.IsSupportedVersion(discovery.Installation.Version))
             {
                 await DetachSessionAsync(session.Id, cancellationToken).ConfigureAwait(false);
                 return Strings.Current.CodexDesktopBalanceStatusUnsupportedVersion;
@@ -347,13 +346,9 @@ public sealed class CodexDesktopBalanceController : BackgroundService
 
             var anchor = await attachment.Renderer.ProbeUniqueVisibleAnchorAsync(AnchorSelector, cancellationToken).ConfigureAwait(false);
             var liveCompatibility = new CodexDesktopCompatibilityMatrix(
-            [
-                new CodexDesktopCompatibilityRule(
-                    SupportedDesktopVersion,
-                    SupportedDesktopVersion,
-                    "codex-profile-footer-ambient-usage-label-v1",
-                    RendererContractVerified: anchor.IsUniqueVisible),
-            ]).Evaluate(discovery.Installation.Version);
+            [CodexDesktopBalanceCompatibilityPolicy.CreateVersionRangeRule(
+                discovery.Installation.Version,
+                rendererContractVerified: anchor.IsUniqueVisible)]).Evaluate(discovery.Installation.Version);
             if (liveCompatibility.State != CodexDesktopCompatibilityState.Supported)
             {
                 await DetachSessionAsync(session.Id, cancellationToken).ConfigureAwait(false);
@@ -401,8 +396,8 @@ public sealed class CodexDesktopBalanceController : BackgroundService
                 var package = new CodexDesktopExtensionPackage(
                     CodexDesktopBalanceRendererExtension.Id,
                     new Version(0, 1, 0),
-                    SupportedDesktopVersion,
-                    SupportedDesktopVersion,
+                    CodexDesktopBalanceCompatibilityPolicy.MinimumSupportedVersion,
+                    CodexDesktopBalanceCompatibilityPolicy.MaximumSupportedVersion,
                     CodexDesktopBalanceRendererExtension.ApprovedSha256,
                     script);
                 var installed = await attachment.ExtensionHost.InstallOrUpdateAsync(

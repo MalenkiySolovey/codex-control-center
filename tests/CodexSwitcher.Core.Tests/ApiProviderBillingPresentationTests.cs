@@ -5,7 +5,7 @@ namespace CodexSwitcher.Core.Tests;
 
 public sealed class ApiProviderBillingPresentationTests
 {
-    private static readonly DateTimeOffset ObservedAt = new(2026, 11, 20, 10, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset ObservedAt = DateTimeOffset.UtcNow;
 
     [Fact]
     public void OpenRouterKeyMetricsDoNotRenderAsAccountBalance()
