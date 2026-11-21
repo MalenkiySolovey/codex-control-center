@@ -1,6 +1,8 @@
 (() => {
   const extensionId = "codex-control-center-api-balance";
-  const anchorSelector = "[data-ambient-usage-label]";
+  const primaryAnchorSelector = "[data-ambient-usage-label]";
+  const headerToolbarAnchorSelector = "[data-app-shell-header-toolbar]";
+  const anchorSelectors = [primaryAnchorSelector, headerToolbarAnchorSelector];
   const rootAttribute = "data-codex-control-center-api-balance";
   const maxMutationRecords = 256;
   const maxNodesPerMutation = 512;
@@ -8,6 +10,7 @@
   let payload = null;
   let root = null;
   let anchor = null;
+  let anchorSelectorInUse = null;
   let observer = null;
   let renderQueued = false;
   let disposed = false;
@@ -18,8 +21,8 @@
     return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
   };
 
-  const findVisibleAnchors = () => {
-    const candidates = document.querySelectorAll(anchorSelector);
+  const findVisibleAnchors = (selector) => {
+    const candidates = document.querySelectorAll(selector);
     if (candidates.length > maxAnchorCandidates) return { anchors: [], complete: false };
     const anchors = [];
     for (const candidate of candidates) {
@@ -27,6 +30,21 @@
       if (anchors.length > 1) return { anchors, complete: true };
     }
     return { anchors, complete: true };
+  };
+
+  const findPreferredVisibleAnchor = () => {
+    const primary = findVisibleAnchors(primaryAnchorSelector);
+    if (!primary.complete) return { anchor: null, selector: null, complete: false };
+    if (primary.anchors.length === 1) {
+      return { anchor: primary.anchors[0], selector: primaryAnchorSelector, complete: true };
+    }
+
+    const headerToolbar = findVisibleAnchors(headerToolbarAnchorSelector);
+    if (!headerToolbar.complete) return { anchor: null, selector: null, complete: false };
+    if (headerToolbar.anchors.length === 1) {
+      return { anchor: headerToolbar.anchors[0], selector: headerToolbarAnchorSelector, complete: true };
+    }
+    return { anchor: null, selector: null, complete: true };
   };
 
   const safePayload = (value) => {
@@ -53,6 +71,7 @@
     root?.remove();
     root = null;
     anchor = null;
+    anchorSelectorInUse = null;
   };
 
   const addTextRow = (panel, text) => {
@@ -62,7 +81,7 @@
     panel.append(row);
   };
 
-  const createRoot = () => {
+  const createRoot = (opensDownward) => {
     const container = document.createElement("span");
     container.setAttribute(rootAttribute, "");
     container.className = "relative ml-2 inline-flex min-w-0 shrink-0 items-center";
@@ -85,7 +104,9 @@
     const panel = document.createElement("div");
     panel.dataset.balancePanel = "";
     panel.id = "codex-control-center-api-balance-panel";
-    panel.className = "absolute bottom-full right-0 z-50 mb-2 w-64 rounded-xl border border-token-border-default bg-token-bg-secondary p-3 text-xs shadow-lg";
+    panel.className = opensDownward
+      ? "absolute top-full right-0 z-50 mt-2 w-64 rounded-xl border border-token-border-default bg-token-bg-secondary p-3 text-xs shadow-lg"
+      : "absolute bottom-full right-0 z-50 mb-2 w-64 rounded-xl border border-token-border-default bg-token-bg-secondary p-3 text-xs shadow-lg";
     panel.setAttribute("role", "dialog");
     panel.hidden = true;
     button.setAttribute("aria-controls", panel.id);
@@ -113,22 +134,24 @@
 
   const mount = () => {
     if (disposed) return;
-    const { anchors, complete } = findVisibleAnchors();
-    if (!complete || anchors.length !== 1 || !payload) {
+    const selected = findPreferredVisibleAnchor();
+    if (!selected.complete || !selected.anchor || !payload) {
       removeOwnedNode();
       return;
     }
 
-    const nextAnchor = anchors[0];
+    const nextAnchor = selected.anchor;
     if (!nextAnchor.parentElement) {
       removeOwnedNode();
       return;
     }
 
-    if (!root || anchor !== nextAnchor || root.parentElement !== nextAnchor.parentElement) {
+    if (!root || anchor !== nextAnchor || anchorSelectorInUse !== selected.selector ||
+        root.parentElement !== nextAnchor.parentElement) {
       removeOwnedNode();
-      root = createRoot();
+      root = createRoot(selected.selector === headerToolbarAnchorSelector);
       anchor = nextAnchor;
+      anchorSelectorInUse = selected.selector;
       nextAnchor.parentElement.insertBefore(root, nextAnchor.nextSibling);
     }
     renderPayload();
@@ -145,12 +168,12 @@
 
   const nodeContainsAnchor = (node) => {
     if (node.nodeType !== Node.ELEMENT_NODE || node.hasAttribute(rootAttribute)) return false;
-    if (node.matches(anchorSelector)) return true;
+    if (anchorSelectors.some((selector) => node.matches(selector))) return true;
     const walker = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT);
     for (let visited = 0; visited < maxNodesPerMutation; visited += 1) {
       const current = walker.nextNode();
       if (!current) return false;
-      if (current.matches(anchorSelector)) return true;
+      if (anchorSelectors.some((selector) => current.matches(selector))) return true;
     }
     return false;
   };
@@ -164,7 +187,7 @@
     }
     for (const record of records) {
       if (record.type === "attributes" &&
-          (record.target === anchor || record.target.matches?.(anchorSelector))) {
+          (record.target === anchor || anchorSelectors.some((selector) => record.target.matches?.(selector)))) {
         queueMount();
         return;
       }
@@ -189,7 +212,7 @@
     observer = new MutationObserver(handleMutations);
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: ["data-ambient-usage-label", "class", "style"],
+      attributeFilter: ["data-ambient-usage-label", "data-app-shell-header-toolbar", "class", "style"],
       childList: true,
       subtree: true,
     });

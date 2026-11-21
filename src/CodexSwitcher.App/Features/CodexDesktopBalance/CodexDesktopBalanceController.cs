@@ -26,7 +26,6 @@ public sealed class CodexDesktopBalanceController : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan BillingRefreshInterval = TimeSpan.FromSeconds(30);
-    private const string AnchorSelector = "[data-ambient-usage-label]";
     private const string ExtensionRootAttribute = "data-codex-control-center-api-balance";
 
     private readonly AppSettings _settings;
@@ -344,12 +343,23 @@ public sealed class CodexDesktopBalanceController : BackgroundService
                 _attachments[session.Id] = attachment;
             }
 
-            var anchor = await attachment.Renderer.ProbeUniqueVisibleAnchorAsync(AnchorSelector, cancellationToken).ConfigureAwait(false);
+            var nativeUsageLabel = await attachment.Renderer.ProbeUniqueVisibleAnchorAsync(
+                CodexDesktopBalanceAnchorPolicy.NativeUsageLabelSelector,
+                cancellationToken).ConfigureAwait(false);
+            var anchorSelector = CodexDesktopBalanceAnchorPolicy.SelectAnchor(nativeUsageLabel, headerToolbar: null);
+            if (anchorSelector is null)
+            {
+                var headerToolbar = await attachment.Renderer.ProbeUniqueVisibleAnchorAsync(
+                    CodexDesktopBalanceAnchorPolicy.HeaderToolbarSelector,
+                    cancellationToken).ConfigureAwait(false);
+                anchorSelector = CodexDesktopBalanceAnchorPolicy.SelectAnchor(nativeUsageLabel, headerToolbar);
+            }
+
             var liveCompatibility = new CodexDesktopCompatibilityMatrix(
             [CodexDesktopBalanceCompatibilityPolicy.CreateVersionRangeRule(
                 discovery.Installation.Version,
-                rendererContractVerified: anchor.IsUniqueVisible)]).Evaluate(discovery.Installation.Version);
-            if (liveCompatibility.State != CodexDesktopCompatibilityState.Supported)
+                rendererContractVerified: anchorSelector is not null)]).Evaluate(discovery.Installation.Version);
+            if (anchorSelector is null || liveCompatibility.State != CodexDesktopCompatibilityState.Supported)
             {
                 await DetachSessionAsync(session.Id, cancellationToken).ConfigureAwait(false);
                 return Strings.Current.CodexDesktopBalanceStatusAnchorUnverified;
@@ -432,7 +442,7 @@ public sealed class CodexDesktopBalanceController : BackgroundService
             }
 
             if (!await attachment.Renderer.IsExtensionAdjacentToAnchorAsync(
-                    AnchorSelector,
+                    anchorSelector,
                     ExtensionRootAttribute,
                     cancellationToken).ConfigureAwait(false))
             {

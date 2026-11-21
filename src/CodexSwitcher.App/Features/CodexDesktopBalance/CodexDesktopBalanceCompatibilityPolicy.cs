@@ -4,12 +4,12 @@ namespace CodexSwitcher.App.Features.CodexDesktopBalance;
 
 /// <summary>
 /// Codex Desktop versions at or above the first inspected build. Newer builds do not need to be
-/// enumerated; each session still requires a unique visible profile-footer anchor in the genuine
-/// renderer before the extension can be installed.
+/// enumerated; each session still requires a unique visible native usage label or header toolbar
+/// in the genuine renderer before the extension can be installed.
 /// </summary>
 public static class CodexDesktopBalanceCompatibilityPolicy
 {
-    private const string ProfileFooterUsageContract = "codex-profile-footer-ambient-usage-label-v1";
+    private const string VisibleUsageOrHeaderToolbarContract = "codex-visible-usage-label-or-header-toolbar-v1";
     private static readonly Version MinimumVersion = new(26, 1117, 3838, 0);
     private static readonly Version MaximumVersion = new(int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue);
 
@@ -36,7 +36,7 @@ public static class CodexDesktopBalanceCompatibilityPolicy
         return new CodexDesktopCompatibilityRule(
             MinimumVersion,
             MaximumVersion,
-            ProfileFooterUsageContract,
+            VisibleUsageOrHeaderToolbarContract,
             RendererContractVerified: rendererContractVerified);
     }
 }

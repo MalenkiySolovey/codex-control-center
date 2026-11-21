@@ -11,6 +11,9 @@ public sealed class CodexDesktopBalanceRendererExtensionTests
 
         Assert.True(CodexDesktopBalanceRendererExtension.MatchesApprovedHash(script));
         Assert.Contains("[data-ambient-usage-label]", script, StringComparison.Ordinal);
+        Assert.Contains("[data-app-shell-header-toolbar]", script, StringComparison.Ordinal);
+        Assert.Contains("findVisibleAnchors(primaryAnchorSelector)", script, StringComparison.Ordinal);
+        Assert.Contains("findVisibleAnchors(headerToolbarAnchorSelector)", script, StringComparison.Ordinal);
         Assert.Contains("bg-token-bg-secondary", script, StringComparison.Ordinal);
         Assert.Contains("text-token-text-secondary", script, StringComparison.Ordinal);
         Assert.Contains("border-token-border-default", script, StringComparison.Ordinal);
@@ -20,6 +23,7 @@ public sealed class CodexDesktopBalanceRendererExtensionTests
         Assert.Contains("maxNodesPerMutation = 512", script, StringComparison.Ordinal);
         Assert.Contains("attributeFilter", script, StringComparison.Ordinal);
         Assert.Contains("aria-controls", script, StringComparison.Ordinal);
+        Assert.Contains("top-full right-0 z-50 mt-2", script, StringComparison.Ordinal);
         Assert.Contains("data-codex-control-center-api-balance", script, StringComparison.Ordinal);
     }
 
