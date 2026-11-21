@@ -469,6 +469,9 @@ public static class ServiceCollectionExtensions
             .AddDialogServices()
             .AddPresentationServices();
 
+        services.AddSingleton<CodexSwitcher.App.Features.CodexDesktopBalance.CodexDesktopBalanceController>();
+        services.AddHostedService(sp => sp.GetRequiredService<CodexSwitcher.App.Features.CodexDesktopBalance.CodexDesktopBalanceController>());
+
         return services;
     }
 }

@@ -1,0 +1,276 @@
+using CodexSwitcher.Core.Providers.Models;
+using CodexSwitcher.Core.Providers.Services;
+using CodexSwitcher.Core.Routing.Models;
+using Llm.ProviderKit.Inspection;
+using System.Text.Json;
+
+namespace CodexSwitcher.Core.Tests;
+
+public sealed class CodexDesktopBalancePresentationMapperTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 11, 21, 12, 0, 0, TimeSpan.Zero);
+    private const string CodeHomeFingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    [Fact]
+    public void FiniteApiKeyAllowancePreservesScopeCurrencyPeriodAndPercentage()
+    {
+        var profile = Profile();
+        var remaining = Metric("remaining", ProviderMetricKind.QuotaRemaining, 6.01m, ProviderMetricScope.ApiKey,
+            ProviderMetricUnit.Currency("USD"), "billing-cycle");
+        var limit = Metric("limit", ProviderMetricKind.QuotaLimit, 283.23m, ProviderMetricScope.ApiKey,
+            ProviderMetricUnit.Currency("USD"), "billing-cycle");
+        profile.LastBillingSnapshot = Snapshot(profile, [remaining, limit]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.ApiKeyAllowance, presentation.Kind);
+        Assert.Equal(CodexDesktopBalanceState.Live, presentation.State);
+        Assert.Equal(6.01m, presentation.Remaining);
+        Assert.Equal(283.23m, presentation.Maximum);
+        Assert.InRange(presentation.RemainingPercentage!.Value, 2.12m, 2.13m);
+        Assert.Equal("Remaining $6.01 · 2.1%", presentation.ToCompactText(russian: false));
+        Assert.Equal("Осталось 6,01 $ · 2,1%", presentation.ToCompactText(russian: true));
+        Assert.Equal("API budget", presentation.ToExpandedTitle(russian: false));
+        Assert.Collection(
+            presentation.ToExpandedLines(russian: true).Take(3),
+            line => Assert.Equal("Осталось 6,01 $", line),
+            line => Assert.Equal("Максимум 283,23 $", line),
+            line => Assert.Equal("Доля остатка 2,1%", line));
+        Assert.Equal(CodeHomeFingerprint, presentation.ActiveCodeHomeFingerprint);
+    }
+
+    [Fact]
+    public void RendererPayloadContainsOnlySanitizedDisplayStrings()
+    {
+        var presentation = new CodexDesktopBalancePresentation
+        {
+            Kind = CodexDesktopBalanceKind.ApiKeyAllowance,
+            State = CodexDesktopBalanceState.Live,
+            ProviderLabel = "Synthetic provider",
+            ProfileLabel = "Test profile",
+            ScopeLabel = "ApiKey",
+            Remaining = 6.01m,
+            Maximum = 283.23m,
+            RemainingPercentage = 2.1m,
+            UnitCode = "USD",
+            Period = "billing-cycle",
+            Source = "synthetic-fixture",
+            ActiveCodeHomeFingerprint = CodeHomeFingerprint,
+        };
+
+        var payload = CodexDesktopBalanceRendererPayload.FromPresentation(presentation, russian: true);
+        var json = JsonSerializer.Serialize(payload);
+
+        Assert.NotNull(payload);
+        Assert.Equal("Осталось 6,01 $ · 2,1%", payload!.Compact);
+        Assert.Equal("Бюджет API", payload.Title);
+        Assert.Contains("Максимум 283,23 $", payload.Lines);
+        Assert.Contains("billing-cycle", json);
+        Assert.DoesNotContain("Source", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("Fingerprint", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("ProfileLabel", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("BaseUrl", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("credential", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RendererPayloadOmitsChatGptPresentationAndFiltersUnsafeDisplayText()
+    {
+        var hidden = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.ChatGpt(Guid.NewGuid()), CodeHomeFingerprint, null, Now);
+        var unsafeLabel = new CodexDesktopBalancePresentation
+        {
+            Kind = CodexDesktopBalanceKind.AccountBalance,
+            State = CodexDesktopBalanceState.Live,
+            AccountBalance = 12m,
+            UnitCode = "USD",
+            ProviderLabel = "unexpected\ncontent",
+        };
+
+        Assert.Null(CodexDesktopBalanceRendererPayload.FromPresentation(hidden, russian: true));
+        var payload = CodexDesktopBalanceRendererPayload.FromPresentation(unsafeLabel, russian: true);
+        Assert.NotNull(payload);
+        Assert.DoesNotContain(payload!.Lines, line => line.Contains("unexpected", StringComparison.Ordinal));
+        Assert.All(payload.Lines, line => Assert.DoesNotContain(line, char.IsControl));
+    }
+
+    [Fact]
+    public void AccountBalanceIsSeparateAndNeverInventsALimitOrPercentage()
+    {
+        var profile = Profile();
+        profile.LastBillingSnapshot = Snapshot(profile,
+        [
+            Metric("account-balance", ProviderMetricKind.AvailableBalance, 283.23m, ProviderMetricScope.Account,
+                ProviderMetricUnit.Currency("USD")),
+        ]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.AccountBalance, presentation.Kind);
+        Assert.Equal(283.23m, presentation.AccountBalance);
+        Assert.Null(presentation.Maximum);
+        Assert.Null(presentation.RemainingPercentage);
+        Assert.Equal("API budget · $283.23", presentation.ToCompactText(russian: false));
+        Assert.Equal("Бюджет API · 283,23 $", presentation.ToCompactText(russian: true));
+        Assert.Equal("Доступный баланс 283,23 $", presentation.ToExpandedLines(russian: true)[0]);
+    }
+
+    [Fact]
+    public void ProviderSpecificUsageRetainsItsUnitAndDoesNotBecomeCurrency()
+    {
+        var profile = Profile();
+        profile.LastBillingSnapshot = Snapshot(profile,
+        [
+            Metric("credits", ProviderMetricKind.ProviderSpecificUsage, 1234.567m, ProviderMetricScope.ApiKey,
+                ProviderMetricUnit.Provider("heju-display-units")),
+        ]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.UsageOnly, presentation.Kind);
+        Assert.Equal(1234.567m, presentation.Usage);
+        Assert.Equal("heju-display-units", presentation.UnitCode);
+        Assert.DoesNotContain("USD", presentation.ToCompactText(russian: false));
+    }
+
+    [Fact]
+    public void CredentialRotationAndUnverifiedCodeHomeSuppressAllAmounts()
+    {
+        var profile = Profile();
+        profile.LastBillingSnapshot = Snapshot(profile,
+        [
+            Metric("balance", ProviderMetricKind.AvailableBalance, 10m, ProviderMetricScope.Account,
+                ProviderMetricUnit.Currency("USD")),
+        ]);
+
+        var rotated = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-2", Now);
+        var unknownHome = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), "C:\\private\\CODEX_HOME", "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.StatusOnly, rotated.Kind);
+        Assert.Equal("desktop.balance.billing-identity-mismatch", rotated.DiagnosticCode);
+        Assert.Null(rotated.AccountBalance);
+        Assert.Equal("desktop.balance.code-home-unverified", unknownHome.DiagnosticCode);
+        Assert.Null(unknownHome.AccountBalance);
+    }
+
+    [Fact]
+    public void OldAndUnsupportedObservationsPreserveTheirStateWithoutFalsifyingFreshness()
+    {
+        var staleProfile = Profile();
+        var old = Metric("balance", ProviderMetricKind.AvailableBalance, 9m, ProviderMetricScope.Account,
+            ProviderMetricUnit.Currency("USD")) with
+        { ObservedAt = Now.AddDays(-2) };
+        staleProfile.LastBillingSnapshot = Snapshot(staleProfile, [old], observedAt: Now.AddDays(-2));
+        var stale = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(staleProfile), CodeHomeFingerprint, "revision-1", Now);
+
+        var unsupportedProfile = Profile();
+        unsupportedProfile.LastBillingSnapshot = Snapshot(unsupportedProfile, [], ProviderBillingStatus.Unsupported);
+        var unsupported = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(unsupportedProfile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceState.Stale, stale.State);
+        Assert.Equal(9m, stale.AccountBalance);
+        Assert.Equal(CodexDesktopBalanceState.Unsupported, unsupported.State);
+        Assert.Equal(CodexDesktopBalanceKind.StatusOnly, unsupported.Kind);
+    }
+
+    [Fact]
+    public void ChatGptAndExternalRoutesNeverReceiveTheThirdPartyBalancePayload()
+    {
+        var chatGpt = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.ChatGpt(Guid.NewGuid()), CodeHomeFingerprint, null, Now);
+        var external = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.External("company-proxy"), CodeHomeFingerprint, null, Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.Hidden, chatGpt.Kind);
+        Assert.Equal(CodexDesktopBalanceKind.Hidden, external.Kind);
+        Assert.DoesNotContain("openrouter", chatGpt.ToCompactText(russian: false), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MismatchedAllowancePeriodOrCurrencyDoesNotCreateAValue()
+    {
+        var profile = Profile();
+        var remaining = Metric("remaining", ProviderMetricKind.QuotaRemaining, 6m, ProviderMetricScope.ApiKey,
+            ProviderMetricUnit.Currency("USD"), "current-month");
+        var limit = Metric("limit", ProviderMetricKind.QuotaLimit, 20m, ProviderMetricScope.ApiKey,
+            ProviderMetricUnit.Currency("EUR"), "previous-month");
+        profile.LastBillingSnapshot = Snapshot(profile, [remaining, limit]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.StatusOnly, presentation.Kind);
+        Assert.Null(presentation.Remaining);
+        Assert.Null(presentation.Maximum);
+        Assert.Null(presentation.RemainingPercentage);
+    }
+
+    [Fact]
+    public void CodeHomeFingerprintIsOneWayAndNeverReturnsTheSourcePath()
+    {
+        const string path = "C:\\synthetic\\codex-home";
+
+        var fingerprint = CodexDesktopBalancePresentationMapper.CreateCodeHomeFingerprint(path);
+
+        Assert.Equal(64, fingerprint.Length);
+        Assert.DoesNotContain("synthetic", fingerprint, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(fingerprint, CodexDesktopBalancePresentationMapper.CreateCodeHomeFingerprint(path));
+    }
+
+    private static ApiProviderProfile Profile() => new()
+    {
+        Id = Guid.NewGuid(),
+        EndpointId = Guid.NewGuid(),
+        CatalogProviderId = "openrouter",
+        StableCodexProviderId = "switchboard_test",
+        SelectedRouteId = "primary",
+        Nickname = "Synthetic route",
+        BaseUrl = "https://example.invalid/v1",
+        Status = ApiProviderProfileStatus.Active,
+    };
+
+    private static ProviderBillingSnapshot Snapshot(
+        ApiProviderProfile profile,
+        IReadOnlyList<ProviderMetric> metrics,
+        ProviderBillingStatus status = ProviderBillingStatus.Live,
+        DateTimeOffset? observedAt = null) => new()
+        {
+            Metrics = metrics,
+            ProfileId = profile.Id,
+            ProviderId = profile.CatalogProviderId,
+            BaseUrl = profile.BaseUrl,
+            RouteId = profile.SelectedRouteId,
+            CredentialOwnerId = profile.EndpointId ?? profile.Id,
+            CredentialRevision = "revision-1",
+            ObservedAt = observedAt ?? Now,
+            LastAttemptAt = observedAt ?? Now,
+            Status = status,
+        };
+
+    private static ProviderMetric Metric(
+        string id,
+        ProviderMetricKind kind,
+        decimal value,
+        ProviderMetricScope scope,
+        ProviderMetricUnit unit,
+        string? period = null) => new()
+        {
+            Id = id,
+            Kind = kind,
+            Value = value,
+            Scope = scope,
+            Unit = unit,
+            Availability = ProviderMetricAvailability.Live,
+            ObservedAt = Now,
+            Period = period,
+            PeriodSemantics = period is null ? ProviderMetricPeriodSemantics.Unknown : ProviderMetricPeriodSemantics.BillingCycle,
+            Source = "synthetic test source",
+        };
+}

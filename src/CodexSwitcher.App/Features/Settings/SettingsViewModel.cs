@@ -51,6 +51,7 @@ using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using CodexSwitcher.App.Localization;
+using CodexSwitcher.App.Features.CodexDesktopBalance;
 using CodexSwitcher.App.Services;
 using Microsoft.UI.Xaml.Controls;
 using System.Collections.ObjectModel;
@@ -59,7 +60,7 @@ using CodexSwitcher.App.Dialogs;
 
 namespace CodexSwitcher.App.Features.Settings;
 
-public sealed class SettingsViewModel : INotifyPropertyChanged
+public sealed class SettingsViewModel : INotifyPropertyChanged, IDisposable
 {
     private static readonly int[] NotificationAutoDismissSecondOptions = [3, 5, 10, 15, 30, 60];
     private static readonly IReadOnlyList<string> GlobalHotkeyKeyOptions =
@@ -89,12 +90,14 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
     private readonly IApiProviderStore? _apiProviderStore;
     private readonly IProviderCatalogService? _catalogService;
     private readonly IKeyBrokerInstaller? _brokerInstaller;
+    private readonly ICodexLaunchService? _codexLaunchService;
+    private readonly CodexDesktopBalanceController? _desktopBalanceController;
+    private readonly IUiDispatcher? _uiDispatcher;
 
     private IReadOnlyList<QuickSwitchTargetChoice> _quickSwitchTargetChoices =
         [new(string.Empty, "Not assigned")];
     private bool _quickSwitchTargetsInitialized;
     public ObservableCollection<QuickSwitchHotkeyRowViewModel> QuickSwitchHotkeyRows { get; } = [];
-
     public Strings Loc => Strings.Current;
 
     public Action? OnMigrationCompleted { get; set; }
@@ -231,6 +234,27 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
             }
         }
     }
+
+    public bool CodexDesktopApiBalanceIntegrationEnabled
+    {
+        get => _settings.CodexDesktopApiBalanceIntegrationEnabled;
+        set
+        {
+            if (_settings.CodexDesktopApiBalanceIntegrationEnabled == value)
+            {
+                return;
+            }
+
+            _settings.CodexDesktopApiBalanceIntegrationEnabled = value;
+            _settingsStore.Save(_settings);
+            _desktopBalanceController?.NotifyConfigurationChanged();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CodexDesktopBalanceStatus));
+        }
+    }
+
+    public string CodexDesktopBalanceStatus => _desktopBalanceController?.StatusText
+        ?? Loc.CodexDesktopBalanceStatusOff;
 
     public bool StartWithWindows
     {
@@ -1044,7 +1068,10 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         IStartupRegistrationService? startupRegistrationService = null,
         IGlobalHotkeyService? globalHotkeyService = null,
         AccountRegistry? accountRegistry = null,
-        IApiProviderStore? apiProviderStore = null)
+        IApiProviderStore? apiProviderStore = null,
+        CodexDesktopBalanceController? desktopBalanceController = null,
+        ICodexLaunchService? codexLaunchService = null,
+        IUiDispatcher? uiDispatcher = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
@@ -1059,6 +1086,9 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         _globalHotkeyService = globalHotkeyService;
         _accountRegistry = accountRegistry;
         _apiProviderStore = apiProviderStore;
+        _desktopBalanceController = desktopBalanceController;
+        _codexLaunchService = codexLaunchService;
+        _uiDispatcher = uiDispatcher;
         _catalogService = catalogService;
         _brokerInstaller = brokerInstaller;
 
@@ -1087,6 +1117,35 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
             .First(option => option.Seconds == _settings.NotificationAutoDismissSeconds);
 
         _customExecutablePath = _settings.CodexExecutablePathOverride ?? string.Empty;
+        if (_desktopBalanceController is not null)
+        {
+            _desktopBalanceController.StatusChanged += OnDesktopBalanceStatusChanged;
+        }
+    }
+
+    private void OnDesktopBalanceStatusChanged()
+    {
+        void Notify()
+        {
+            OnPropertyChanged(nameof(CodexDesktopBalanceStatus));
+        }
+
+        if (_uiDispatcher is null || _uiDispatcher.HasThreadAccess)
+        {
+            Notify();
+        }
+        else
+        {
+            _uiDispatcher.Enqueue(Notify);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_desktopBalanceController is not null)
+        {
+            _desktopBalanceController.StatusChanged -= OnDesktopBalanceStatusChanged;
+        }
     }
 
     /// <summary>

@@ -544,6 +544,7 @@
       "CodexSwitchboard": {
         "type": "Project",
         "dependencies": {
+          "Codex.RuntimeKit": "[0.1.0-preview.2, )",
           "CodexSwitcher.Core": "[1.0.0, )",
           "CodexSwitcher.Infra": "[1.0.0, )",
           "CommunityToolkit.Mvvm": "[8.4.2, )",
@@ -564,14 +565,14 @@
         "type": "Project",
         "dependencies": {
           "ChatGpt.Accounts": "[0.1.0-preview.3, )",
-          "Codex.RuntimeKit": "[0.1.0-preview.1, )",
+          "Codex.RuntimeKit": "[0.1.0-preview.2, )",
           "Llm.ProviderKit": "[0.1.0-preview.4, )"
         }
       },
       "codexswitcher.infra": {
         "type": "Project",
         "dependencies": {
-          "Codex.RuntimeKit": "[0.1.0-preview.1, )",
+          "Codex.RuntimeKit": "[0.1.0-preview.2, )",
           "CodexSwitcher.Core": "[1.0.0, )",
           "Llm.ProviderKit": "[0.1.0-preview.4, )",
           "System.Security.Cryptography.ProtectedData": "[9.0.0, )"
@@ -585,9 +586,9 @@
       },
       "Codex.RuntimeKit": {
         "type": "CentralTransitive",
-        "requested": "[0.1.0-preview.1, )",
-        "resolved": "0.1.0-preview.1",
-        "contentHash": "HuEPcz9zrjHkJ4rEq4vp9y6vYXxWL38EruvEnzBQBOgbYUecdSDTMFc+cF2qQk+xvD0LmSUsN4tA+OFrefn3OQ=="
+        "requested": "[0.1.0-preview.2, )",
+        "resolved": "0.1.0-preview.2",
+        "contentHash": "CWYxYkjh0/ar5xCm1WS40e/eBMCx7pPa1kN3hOhKG3/a8QRdYPRgEU9oQOIMiMfgPD/yTp5UfKThMa0PLPGAkg=="
       },
       "CommunityToolkit.Mvvm": {
         "type": "CentralTransitive",

@@ -77,6 +77,7 @@ public sealed partial class SettingsWindow : Window
         }
         ConfigureWindow();
         Activated += OnWindowActivated;
+        Closed += (_, _) => ViewModel.Dispose();
         RecordSettingsOpenPhase("WindowCreated");
     }
 

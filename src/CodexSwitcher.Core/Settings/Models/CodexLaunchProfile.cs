@@ -14,6 +14,17 @@ public enum CodexLaunchRuntimeKind
     Desktop = 1,
 }
 
+public static class CodexDesktopBalanceLaunchPolicy
+{
+    public static bool ShouldEnableLoopbackDebugging(bool integrationEnabled, CodexLaunchProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        return integrationEnabled &&
+               profile.TargetKind == CodexLaunchTargetKind.ApiProvider &&
+               profile.RuntimeKind == CodexLaunchRuntimeKind.Desktop;
+    }
+}
+
 /// <summary>
 /// A user-visible launch recipe. It stores profile references and launch preferences only;
 /// credentials remain in the encrypted account vault or API-key secret store.
@@ -70,6 +81,15 @@ public sealed record CodexLaunchSession(
     int ProcessId,
     DateTimeOffset StartedAt)
 {
+    /// <summary>Credential profile captured for this managed process when it started.</summary>
+    public Guid CredentialProfileId { get; init; }
+
+    /// <summary>API credential owner captured when this managed session started.</summary>
+    public Guid? CredentialOwnerId { get; init; }
+
+    /// <summary>Non-secret credential revision captured when this managed session started.</summary>
+    public string? CredentialRevision { get; init; }
+
     public string RuntimeLabel => RuntimeKind == CodexLaunchRuntimeKind.Desktop
         ? "Codex Desktop · Experimental"
         : "Codex CLI";

@@ -112,6 +112,14 @@
                         <TextBlock Text="Preferences" FontSize="16" FontWeight="SemiBold" />
                         <ToggleSwitch Header="Always confirm before switching accounts"
                                       IsOn="{x:Bind ViewModel.AlwaysConfirmSwitch, Mode=TwoWay}" />
+                        <ToggleSwitch Header="{x:Bind ViewModel.Loc.CodexDesktopApiBalanceLabel}"
+                                      IsOn="{x:Bind ViewModel.CodexDesktopApiBalanceIntegrationEnabled, Mode=TwoWay}" />
+                        <TextBlock Text="{x:Bind ViewModel.Loc.CodexDesktopApiBalanceDescription}"
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.75" />
+                        <TextBlock Text="{x:Bind ViewModel.Loc.CodexDesktopBalanceStatusLabel}"
+                                   FontSize="12" FontWeight="SemiBold" />
+                        <TextBlock Text="{x:Bind ViewModel.CodexDesktopBalanceStatus, Mode=OneWay}"
+                                   TextWrapping="Wrap" FontSize="12" Opacity="0.85" />
                         <ComboBox Header="{x:Bind ViewModel.Loc.TrayTooltipModeLabel}"
                                   ItemsSource="{x:Bind ViewModel.TrayTooltipModeOptions}"
                                   DisplayMemberPath="Label"

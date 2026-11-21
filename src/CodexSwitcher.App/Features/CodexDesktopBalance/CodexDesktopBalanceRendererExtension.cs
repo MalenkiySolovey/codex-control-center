@@ -1,0 +1,33 @@
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace CodexSwitcher.App.Features.CodexDesktopBalance;
+
+/// <summary>
+/// Identifies the bundled renderer resource and its reviewed content hash.
+/// Build compatibility is intentionally decided separately from this asset.
+/// </summary>
+public static class CodexDesktopBalanceRendererExtension
+{
+    public const string Id = "codex-control-center-api-balance";
+    public const string PackageVersion = "0.1.0";
+    public const string ApprovedSha256 = "15D0E45ED1EE9789B8F8857E7E0CA5A8EE156187EB90923ED13C1FA6D5F011B7";
+    private const string ResourceName = "CodexSwitcher.App.Features.CodexDesktopBalance.CodexDesktopBalanceRendererExtension.js";
+
+    public static string LoadJavaScript()
+    {
+        using var resource = typeof(CodexDesktopBalanceRendererExtension).Assembly.GetManifestResourceStream(ResourceName)
+            ?? throw new InvalidOperationException("The bundled Codex Desktop balance renderer resource is missing.");
+        using var reader = new StreamReader(resource, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        return reader.ReadToEnd();
+    }
+
+    public static bool MatchesApprovedHash(string script)
+    {
+        ArgumentNullException.ThrowIfNull(script);
+        var actual = SHA256.HashData(Encoding.UTF8.GetBytes(script));
+        var expected = Convert.FromHexString(ApprovedSha256);
+        return CryptographicOperations.FixedTimeEquals(actual, expected);
+    }
+}

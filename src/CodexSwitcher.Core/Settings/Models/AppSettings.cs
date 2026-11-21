@@ -58,6 +58,9 @@ public sealed class AppSettings
     /// <summary>How much routing and cached quota information is shown when hovering the tray icon.</summary>
     public TrayTooltipMode TrayTooltipMode { get; set; } = TrayTooltipMode.ApplicationName;
 
+    /// <summary>Explicit opt-in for a compatible, removable API balance extension inside Codex Desktop.</summary>
+    public bool CodexDesktopApiBalanceIntegrationEnabled { get; set; }
+
     /// <summary>Up to nine user-configured direct account/provider switch shortcuts.</summary>
     public List<QuickSwitchHotkeyAssignment> QuickSwitchHotkeyAssignments { get; set; } = [];
 

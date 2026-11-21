@@ -10,9 +10,9 @@
       },
       "Codex.RuntimeKit": {
         "type": "Direct",
-        "requested": "[0.1.0-preview.1, )",
-        "resolved": "0.1.0-preview.1",
-        "contentHash": "HuEPcz9zrjHkJ4rEq4vp9y6vYXxWL38EruvEnzBQBOgbYUecdSDTMFc+cF2qQk+xvD0LmSUsN4tA+OFrefn3OQ=="
+        "requested": "[0.1.0-preview.2, )",
+        "resolved": "0.1.0-preview.2",
+        "contentHash": "CWYxYkjh0/ar5xCm1WS40e/eBMCx7pPa1kN3hOhKG3/a8QRdYPRgEU9oQOIMiMfgPD/yTp5UfKThMa0PLPGAkg=="
       },
       "Llm.ProviderKit": {
         "type": "Direct",

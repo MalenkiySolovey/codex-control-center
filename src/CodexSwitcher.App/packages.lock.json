@@ -2,6 +2,12 @@
   "version": 2,
   "dependencies": {
     "net10.0-windows10.0.19041": {
+      "Codex.RuntimeKit": {
+        "type": "Direct",
+        "requested": "[0.1.0-preview.2, )",
+        "resolved": "0.1.0-preview.2",
+        "contentHash": "CWYxYkjh0/ar5xCm1WS40e/eBMCx7pPa1kN3hOhKG3/a8QRdYPRgEU9oQOIMiMfgPD/yTp5UfKThMa0PLPGAkg=="
+      },
       "CommunityToolkit.Mvvm": {
         "type": "Direct",
         "requested": "[8.4.2, )",
@@ -462,14 +468,14 @@
         "type": "Project",
         "dependencies": {
           "ChatGpt.Accounts": "[0.1.0-preview.3, )",
-          "Codex.RuntimeKit": "[0.1.0-preview.1, )",
+          "Codex.RuntimeKit": "[0.1.0-preview.2, )",
           "Llm.ProviderKit": "[0.1.0-preview.4, )"
         }
       },
       "codexswitcher.infra": {
         "type": "Project",
         "dependencies": {
-          "Codex.RuntimeKit": "[0.1.0-preview.1, )",
+          "Codex.RuntimeKit": "[0.1.0-preview.2, )",
           "CodexSwitcher.Core": "[1.0.0, )",
           "Llm.ProviderKit": "[0.1.0-preview.4, )",
           "System.Security.Cryptography.ProtectedData": "[9.0.0, )"
@@ -480,12 +486,6 @@
         "requested": "[0.1.0-preview.3, )",
         "resolved": "0.1.0-preview.3",
         "contentHash": "R2AN9RV3ijKJX3I8AavSaJ/1O1y+GgqkexzL0hs0jbozRZrAi/CI6eRih1fStvNZOnAqtE8SnyzdmboTxpU7zA=="
-      },
-      "Codex.RuntimeKit": {
-        "type": "CentralTransitive",
-        "requested": "[0.1.0-preview.1, )",
-        "resolved": "0.1.0-preview.1",
-        "contentHash": "HuEPcz9zrjHkJ4rEq4vp9y6vYXxWL38EruvEnzBQBOgbYUecdSDTMFc+cF2qQk+xvD0LmSUsN4tA+OFrefn3OQ=="
       },
       "Llm.ProviderKit": {
         "type": "CentralTransitive",

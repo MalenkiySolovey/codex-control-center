@@ -278,6 +278,8 @@ public sealed class CodexLaunchService : ICodexLaunchService
         CodexModelOverrides? modelOverrides = null;
         EffectiveToolPolicy? toolPolicy = null;
         string? catalogPath = null;
+        Guid? credentialOwnerId = null;
+        string? credentialRevision = null;
         LaunchManifest manifest = null!;
         try
         {
@@ -340,7 +342,15 @@ public sealed class CodexLaunchService : ICodexLaunchService
                 provider.TransportOverrides?.Validate();
                 toolPolicy = EffectiveToolPolicy.Resolve(provider);
 
-                apiKey = _apiKeyStore.GetApiKey(provider.Id);
+                credentialOwnerId = provider.EndpointId ?? provider.Id;
+                var credentialRevisionBeforeRead = _apiKeyStore.GetApiKeyRevision(credentialOwnerId.Value);
+                apiKey = _apiKeyStore.GetApiKey(credentialOwnerId.Value);
+                credentialRevision = _apiKeyStore.GetApiKeyRevision(credentialOwnerId.Value);
+                if (!string.Equals(credentialRevisionBeforeRead, credentialRevision, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("The API credential changed while the launch profile was being prepared. Try launching it again.");
+                }
+
                 if (string.IsNullOrWhiteSpace(apiKey))
                 {
                     throw new InvalidOperationException("The selected API provider has no saved API key.");
@@ -441,6 +451,8 @@ public sealed class CodexLaunchService : ICodexLaunchService
                 TargetKind = profile.TargetKind,
                 RuntimeKind = profile.RuntimeKind,
                 CredentialProfileId = profile.CredentialProfileId,
+                CredentialOwnerId = credentialOwnerId,
+                CredentialRevision = credentialRevision,
                 ProfileName = profile.Name.Trim(),
                 CredentialName = credentialName,
                 Model = model,
@@ -473,7 +485,10 @@ public sealed class CodexLaunchService : ICodexLaunchService
                     home,
                     apiKey,
                     profile.RuntimeKind,
-                    sharedSqliteHome);
+                    sharedSqliteHome,
+                    enableDesktopBalanceDebugging: CodexDesktopBalanceLaunchPolicy.ShouldEnableLoopbackDebugging(
+                        _settings.CodexDesktopApiBalanceIntegrationEnabled,
+                        profile));
                 _processRegistry.RegisterOwnedProcess(startedProcess);
             }
             manifest.ProcessId = startedProcess.Id;
@@ -1088,7 +1103,8 @@ public sealed class CodexLaunchService : ICodexLaunchService
         string codexHome,
         string? apiKey,
         CodexLaunchRuntimeKind runtimeKind,
-        string? sharedSqliteHome)
+        string? sharedSqliteHome,
+        bool enableDesktopBalanceDebugging)
     {
         var extension = Path.GetExtension(executable);
         var startInfo = new ProcessStartInfo
@@ -1117,6 +1133,11 @@ public sealed class CodexLaunchService : ICodexLaunchService
             // path change. Use the launch-time Chromium switch as the single
             // profile-isolation source; the inherited override was removed above.
             startInfo.ArgumentList.Add($"--user-data-dir={Path.Combine(codexHome, "user-data")}");
+            if (enableDesktopBalanceDebugging)
+            {
+                startInfo.ArgumentList.Add("--remote-debugging-address=127.0.0.1");
+                startInfo.ArgumentList.Add("--remote-debugging-port=0");
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(apiKey))
@@ -1905,6 +1926,8 @@ public sealed class CodexLaunchService : ICodexLaunchService
                 argument.StartsWith("--cd=", StringComparison.OrdinalIgnoreCase) ||
                 argument.Equals("--user-data-dir", StringComparison.OrdinalIgnoreCase) ||
                 argument.StartsWith("--user-data-dir=", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("--remote-debugging-address", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("--remote-debugging-port", StringComparison.OrdinalIgnoreCase) ||
                 argument.StartsWith("--api-key", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
@@ -1937,7 +1960,12 @@ public sealed class CodexLaunchService : ICodexLaunchService
         manifest.ProcessId,
         manifest.ProcessStartedAt != default
             ? manifest.ProcessStartedAt
-            : observedStartFallback ?? manifest.ProcessStartedAt);
+            : observedStartFallback ?? manifest.ProcessStartedAt)
+    {
+        CredentialProfileId = manifest.CredentialProfileId,
+        CredentialOwnerId = manifest.CredentialOwnerId,
+        CredentialRevision = manifest.CredentialRevision,
+    };
 
     private CodexLaunchRuntimeKind ResolveRuntimeKind(LaunchManifest manifest, string home)
     {
@@ -1990,6 +2018,8 @@ public sealed class CodexLaunchService : ICodexLaunchService
         public CodexLaunchTargetKind TargetKind { get; set; }
         public CodexLaunchRuntimeKind? RuntimeKind { get; set; }
         public Guid CredentialProfileId { get; set; }
+        public Guid? CredentialOwnerId { get; set; }
+        public string? CredentialRevision { get; set; }
         public string ProfileName { get; set; } = string.Empty;
         public string CredentialName { get; set; } = string.Empty;
         public string? Model { get; set; }
