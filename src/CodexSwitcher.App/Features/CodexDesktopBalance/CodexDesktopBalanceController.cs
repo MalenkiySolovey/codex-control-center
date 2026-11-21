@@ -19,8 +19,8 @@ namespace CodexSwitcher.App.Features.CodexDesktopBalance;
 
 /// <summary>
 /// Owns one reversible balance extension per verified, Control Center managed API Desktop
-/// session. Provider and credential identity are resolved from that session, never from one
-/// global launch-profile selection.
+/// session. Provider and credential identity follow the active route in that session's own
+/// CODEX_HOME, never a global launch-profile selection.
 /// </summary>
 public sealed class CodexDesktopBalanceController : BackgroundService
 {
@@ -171,10 +171,33 @@ public sealed class CodexDesktopBalanceController : BackgroundService
                     continue;
                 }
 
+                var codeHome = GetCodeHomePath(session);
+                var configPath = Path.Combine(codeHome, "config.toml");
+                CodexRoutingState? activeRouting = null;
+                try
+                {
+                    if (File.Exists(configPath))
+                    {
+                        activeRouting = _routingConfigStore.ReadRoutingState(configPath);
+                    }
+                }
+                catch
+                {
+                    // A changing or unreadable route must not leave a previous provider balance visible.
+                }
+
+                if (activeRouting is null)
+                {
+                    await DetachSessionAsync(session.Id, cancellationToken).ConfigureAwait(false);
+                    outcomes.Add(new(false, Strings.Current.CodexDesktopBalanceStatusRouteChanged));
+                    continue;
+                }
+
                 if (!CodexDesktopBalanceSessionResolver.TryResolve(
                         session,
                         launchProfiles,
                         providerProfiles,
+                        activeRouting,
                         out var binding,
                         out var resolutionFailure) || binding is null)
                 {
@@ -246,7 +269,7 @@ public sealed class CodexDesktopBalanceController : BackgroundService
                 provider = inspectedProvider;
             }
 
-            if (provider.Id != session.CredentialProfileId || !IsActiveApiRoute(codeHome, provider))
+            if (!IsActiveApiRoute(codeHome, provider))
             {
                 await DetachSessionAsync(session.Id, cancellationToken).ConfigureAwait(false);
                 return Strings.Current.CodexDesktopBalanceStatusRouteChanged;
@@ -292,7 +315,13 @@ public sealed class CodexDesktopBalanceController : BackgroundService
             }
 
             if (!_attachments.TryGetValue(session.Id, out var attachment) ||
-                !attachment.Matches(binding, session.ProcessId, endpoint.Port, selection.Target.Id))
+                !attachment.Matches(
+                    binding,
+                    session.ProcessId,
+                    endpoint.Port,
+                    selection.Target.Id,
+                    credentialOwnerId,
+                    credentialRevision))
             {
                 await DetachSessionAsync(session.Id, cancellationToken).ConfigureAwait(false);
                 var attached = await _transport.AttachToMainRendererAsync(endpoint, targets, cancellationToken).ConfigureAwait(false);
@@ -307,6 +336,8 @@ public sealed class CodexDesktopBalanceController : BackgroundService
                     endpoint.Port,
                     attached.Session.Target.Id,
                     attached.Session,
+                    credentialOwnerId,
+                    credentialRevision,
                     new CodexDesktopExtensionHost(new Dictionary<string, string>(StringComparer.Ordinal)
                     {
                         [CodexDesktopBalanceRendererExtension.Id] = CodexDesktopBalanceRendererExtension.ApprovedSha256,
@@ -345,6 +376,19 @@ public sealed class CodexDesktopBalanceController : BackgroundService
             }
 
             var payloadJson = JsonSerializer.Serialize(payload);
+            if (!IsActiveApiRoute(codeHome, provider))
+            {
+                await DetachSessionAsync(session.Id, cancellationToken).ConfigureAwait(false);
+                return Strings.Current.CodexDesktopBalanceStatusRouteChanged;
+            }
+
+            var latestCredentialRevision = _apiKeyStore.GetApiKeyRevision(credentialOwnerId);
+            if (!string.Equals(latestCredentialRevision, credentialRevision, StringComparison.Ordinal))
+            {
+                await DetachSessionAsync(session.Id, cancellationToken).ConfigureAwait(false);
+                return Strings.Current.CodexDesktopBalanceStatusCredentialChanged;
+            }
+
             if (!attachment.IsInstalled)
             {
                 var script = CodexDesktopBalanceRendererExtension.LoadJavaScript();
@@ -467,6 +511,10 @@ public sealed class CodexDesktopBalanceController : BackgroundService
         _paths.LaunchHomesDir,
         $"{profile.Id:N}-{(int)profile.TargetKind}-{profile.CredentialProfileId:N}-desktop");
 
+    private string GetCodeHomePath(CodexLaunchSession session) => Path.Combine(
+        _paths.LaunchHomesDir,
+        $"{session.LaunchProfileId:N}-{(int)session.TargetKind}-{session.CredentialProfileId:N}-desktop");
+
     private async Task DetachAllAsync(CancellationToken cancellationToken)
     {
         foreach (var sessionId in _attachments.Keys.ToArray())
@@ -518,6 +566,7 @@ public sealed class CodexDesktopBalanceController : BackgroundService
         CodexDesktopBalanceSessionResolutionFailure.LaunchProfileMissing or
             CodexDesktopBalanceSessionResolutionFailure.AmbiguousLaunchProfile or
             CodexDesktopBalanceSessionResolutionFailure.LaunchProfileChanged => Strings.Current.CodexDesktopBalanceStatusInvalidProfile,
+        CodexDesktopBalanceSessionResolutionFailure.NotApiRoute => Strings.Current.CodexDesktopBalanceStatusNoApiRoute,
         CodexDesktopBalanceSessionResolutionFailure.CredentialProfileChanged => Strings.Current.CodexDesktopBalanceStatusCredentialChanged,
         CodexDesktopBalanceSessionResolutionFailure.ProviderProfileMissing or
             CodexDesktopBalanceSessionResolutionFailure.AmbiguousProviderProfile => Strings.Current.CodexDesktopBalanceStatusProviderUnavailable,
@@ -544,12 +593,14 @@ public sealed class CodexDesktopBalanceController : BackgroundService
         int debugPort,
         string targetId,
         CodexDesktopCdpSession renderer,
+        Guid credentialOwnerId,
+        string credentialRevision,
         CodexDesktopExtensionHost extensionHost)
     {
         public Guid LaunchProfileId { get; } = binding.LaunchProfile.Id;
         public Guid ProviderProfileId { get; } = binding.ProviderProfile.Id;
-        public Guid? CredentialOwnerId { get; } = binding.Session.CredentialOwnerId;
-        public string? CredentialRevision { get; } = binding.Session.CredentialRevision;
+        public Guid CredentialOwnerId { get; } = credentialOwnerId;
+        public string CredentialRevision { get; } = credentialRevision;
         public int ProcessId { get; } = processId;
         public int DebugPort { get; } = debugPort;
         public string TargetId { get; } = targetId;
@@ -558,11 +609,17 @@ public sealed class CodexDesktopBalanceController : BackgroundService
         public string? LastPayloadJson { get; set; }
         public bool IsInstalled { get; set; }
 
-        public bool Matches(CodexDesktopBalanceSessionBinding current, int currentProcessId, int currentPort, string currentTargetId) =>
+        public bool Matches(
+            CodexDesktopBalanceSessionBinding current,
+            int currentProcessId,
+            int currentPort,
+            string currentTargetId,
+            Guid currentCredentialOwnerId,
+            string currentCredentialRevision) =>
             LaunchProfileId == current.LaunchProfile.Id &&
             ProviderProfileId == current.ProviderProfile.Id &&
-            CredentialOwnerId == current.Session.CredentialOwnerId &&
-            string.Equals(CredentialRevision, current.Session.CredentialRevision, StringComparison.Ordinal) &&
+            CredentialOwnerId == currentCredentialOwnerId &&
+            string.Equals(CredentialRevision, currentCredentialRevision, StringComparison.Ordinal) &&
             ProcessId == currentProcessId &&
             DebugPort == currentPort &&
             string.Equals(TargetId, currentTargetId, StringComparison.Ordinal);

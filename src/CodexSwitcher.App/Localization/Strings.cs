@@ -107,8 +107,8 @@ public sealed class Strings
     public string TrayTooltipModeLabel => S("Informações no ícone da bandeja", "Tray icon tooltip");
     public string CodexDesktopApiBalanceLabel => S("Показывать бюджет API в Codex Desktop", "Show API budget inside Codex Desktop");
     public string CodexDesktopApiBalanceDescription => S(
-        "Выключено по умолчанию. Каждое управляемое окно с API получает баланс только своего профиля; окна ChatGPT сохраняют штатные лимиты. Обновление баланса — раз в 30 секунд.",
-        "Off by default. Each managed API window receives only its own profile balance; ChatGPT windows keep their native limits. Balance refreshes every 30 seconds.");
+        "Выключено по умолчанию. Каждое управляемое API-окно получает баланс только своего активного маршрута и запущенного ключа. При переходе на ChatGPT индикатор снимается, штатные лимиты сохраняются; для другого API-профиля перезапустите окно с его ключом. Обновление баланса — раз в 30 секунд.",
+        "Off by default. Each managed API window shows only the balance for its active route and the key it was launched with. Switching to ChatGPT removes the indicator and keeps native limits; restart the window with another API profile's key to show that balance. Balance refreshes every 30 seconds.");
     private string R(string ru, string en) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("ru", StringComparison.OrdinalIgnoreCase) ? ru : en;
     public string CodexDesktopBalanceStatusLabel => R("Состояние индикатора", "Indicator status");
     public string CodexDesktopBalanceStatusOff => R("Выключено; индикатор отсоединён.", "Off; the indicator is detached.");
@@ -116,8 +116,8 @@ public sealed class Strings
     public string CodexDesktopBalanceStatusAmbiguousProfile => R("Найдено несколько процессов для профиля; подключение остановлено.", "Multiple processes matched this profile; attachment was stopped.");
     public string CodexDesktopBalanceStatusProviderUnavailable => R("Профиль API недоступен или архивирован.", "The API provider profile is unavailable or archived.");
     public string CodexDesktopBalanceStatusCredentialUnavailable => R("Зашифрованный ключ API или его версия недоступны.", "The encrypted API key or its revision is unavailable.");
-    public string CodexDesktopBalanceStatusCredentialChanged => R("Ключ изменился после запуска Codex Desktop. Остановите и запустите профиль снова.", "The API key changed after Desktop started. Stop and relaunch the profile.");
-    public string CodexDesktopBalanceStatusRouteChanged => R("Маршрут в CODEX_HOME не совпадает с выбранным профилем API.", "The route in CODEX_HOME does not match the selected API profile.");
+    public string CodexDesktopBalanceStatusCredentialChanged => R("Ключ API или выбранный профиль изменился. Перезапустите управляемый профиль, чтобы подтвердить используемые учётные данные.", "The API key or selected profile changed. Relaunch the managed profile to verify the credentials it uses.");
+    public string CodexDesktopBalanceStatusRouteChanged => R("Маршрут этого окна изменился или не подтверждён; прежний баланс скрыт.", "This window's route changed or could not be verified; its previous balance was removed.");
     public string CodexDesktopBalanceStatusDesktopUnavailable => R("Не удалось подтвердить установленную сборку Codex Desktop.", "The installed Codex Desktop build could not be verified.");
     public string CodexDesktopBalanceStatusRestartProfile => R("Закройте этот профиль и запустите его снова, чтобы включить локальный CDP.", "Close this profile and launch it again to enable loopback CDP.");
     public string CodexDesktopBalanceStatusWaitingForRenderer => R("Ожидаю основное окно Codex Desktop, запущенное этим профилем.", "Waiting for the main Codex Desktop window launched by this profile.");
@@ -129,6 +129,7 @@ public sealed class Strings
     public string CodexDesktopBalanceStatusPlacementFailed => R("Не удалось подтвердить положение индикатора рядом со штатным статусом.", "The indicator could not be verified beside the native status area.");
     public string CodexDesktopBalanceStatusInstalled => R("Индикатор подключён рядом со штатным статусом Codex.", "The indicator is attached beside Codex's native status area.");
     public string CodexDesktopBalanceStatusNoApiSessions => R("Нет запущенных управляемых API-окон Codex Desktop. Запустите API-профиль в «Профилях запуска»; окна ChatGPT не изменяются.", "No managed API Codex Desktop windows are running. Start an API profile from Launch Profiles; ChatGPT windows remain unchanged.");
+    public string CodexDesktopBalanceStatusNoApiRoute => R("В управляемых окнах выбран ChatGPT или другой маршрут без баланса API. Штатные лимиты ChatGPT не изменяются.", "Managed windows currently use ChatGPT or another route without API balance data. Native ChatGPT limits remain unchanged.");
     public string CodexDesktopBalanceStatusWatching(int installed, int pending) => R(
         $"Индикатор подключён в {installed} API-окнах Codex; проверка раз в 30 секунд. Ожидают: {pending}.",
         $"Indicator attached in {installed} API Codex window(s); balance checked every 30 seconds. Waiting: {pending}.");
