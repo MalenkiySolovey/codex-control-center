@@ -181,7 +181,7 @@ public sealed class ProviderInspectionService : IProviderInspectionService
         if (!HasSameProfileIdentity(latestProfile, profile)) return;
 
         var metrics = observation.MetricSnapshot.Metrics ?? Array.Empty<ProviderMetric>();
-        var hasTypedFact = metrics.Any(metric => metric.Value.HasValue && metric.Availability is
+        var hasTypedFact = metrics.Any(metric => (metric.Value.HasValue || metric.IsUnlimited) && metric.Availability is
             ProviderMetricAvailability.Live or ProviderMetricAvailability.Partial);
         var hasLegacyFact = observation.Balance.HasValue || observation.UsedCredits.HasValue ||
                             observation.Usage.HasValue || observation.RemainingCredits.HasValue ||
@@ -215,7 +215,7 @@ public sealed class ProviderInspectionService : IProviderInspectionService
             metrics,
             balanceAvailability,
             usageAvailability);
-        var latestMetricAt = mergedMetrics.Where(metric => metric.Value.HasValue)
+        var latestMetricAt = mergedMetrics.Where(metric => metric.Value.HasValue || metric.IsUnlimited)
             .Select(metric => (DateTimeOffset?)metric.ObservedAt).Max() ??
             (canReuseCurrent ? current!.ObservedAt : observation.LastCheckedAt);
         var typedBalance = SingleMetric(mergedMetrics, ProviderMetricKind.AvailableBalance);

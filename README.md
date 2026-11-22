@@ -99,7 +99,8 @@ Codex Control Center solves both challenges:
 ### Catalog-Driven API Providers
 - **HeJu API / JuAPI:** Registered OpenAI-compatible provider support with separate **Global** and **Hong Kong** routes.
 - **Read-Only Model Discovery:** Both routes expose model discovery through their qualified `/v1/models` endpoints using the profile's encrypted bearer key.
-- **Truthful Usage Reporting:** Usage is available through the verified standard-key endpoint. Remaining balance is deliberately left unknown because its derivation and display currency cannot be represented truthfully by the current single-request catalog recipe.
+- **HeJu Global key quota:** The signed catalog includes a read-only API-key quota probe alongside the existing usage recipe. Finite keys show remaining and maximum quota in raw units. Unlimited keys have an explicit unlimited status. The account wallet and display currency are unknown.
+- **Codex Desktop API balance:** Enable this option in Settings before launching a managed API Desktop profile. The chip and its expanded panel follow that window's isolated profile and credential. The current renderer uses the header toolbar when the native usage label is absent. Turning the option off removes the chip. Control Center closes managed Desktop sessions gracefully.
 
 ### Safe Legacy Data Migration
 - **Zero-Friction Upgrade:** Automatically detects existing profiles from legacy `%LOCALAPPDATA%\CodexSwitcher`.

@@ -113,7 +113,7 @@ public static class CodexDesktopBalanceSessionResolver
 
         var matchingProviders = providerProfiles
             .Where(profile => string.Equals(profile.StableCodexProviderId, activeProviderId, StringComparison.OrdinalIgnoreCase) &&
-                              string.Equals(NormalizeBaseUrl(profile.BaseUrl), activeBaseUrl, StringComparison.OrdinalIgnoreCase))
+                              string.Equals(NormalizeBaseUrl(profile.BaseUrl), activeBaseUrl, StringComparison.Ordinal))
             .Take(2)
             .ToArray();
         if (matchingProviders.Length == 0)
@@ -145,7 +145,8 @@ public static class CodexDesktopBalanceSessionResolver
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
             (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+             !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) ||
+            !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
         {
             return string.Empty;
         }

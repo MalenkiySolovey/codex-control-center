@@ -41,6 +41,132 @@ public sealed class CodexDesktopBalancePresentationMapperTests
     }
 
     [Fact]
+    public void FiniteKeyAllowanceShowsKeyUsageSeparatelyFromAccountUsage()
+    {
+        var profile = Profile();
+        profile.LastBillingSnapshot = Snapshot(profile,
+        [
+            Metric("key-remaining", ProviderMetricKind.QuotaRemaining, 2_499_963m, ProviderMetricScope.ApiKey,
+                ProviderMetricUnit.Provider("quota-units")),
+            Metric("key-limit", ProviderMetricKind.QuotaLimit, 2_500_000m, ProviderMetricScope.ApiKey,
+                ProviderMetricUnit.Provider("quota-units")),
+            Metric("key-used", ProviderMetricKind.ProviderSpecificUsage, 37m, ProviderMetricScope.ApiKey,
+                ProviderMetricUnit.Provider("quota-units")),
+            Metric("account-used", ProviderMetricKind.ProviderSpecificUsage, 117.25m, ProviderMetricScope.Account,
+                ProviderMetricUnit.Provider("heju-display-units")),
+        ]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.ApiKeyAllowance, presentation.Kind);
+        Assert.Equal(37m, presentation.KeyUsage);
+        Assert.Equal(117.25m, presentation.AccountUsage);
+        Assert.Equal("Осталось 2 499 963 ед. квоты · <100%", presentation.ToCompactText(russian: true));
+        Assert.Contains("Потрачено ключом: 37 ед. квоты", presentation.ToExpandedLines(russian: true));
+        Assert.Contains("Расход аккаунта: 117,25 ед. HeJu", presentation.ToExpandedLines(russian: true));
+    }
+
+    [Fact]
+    public void UnlimitedKeyShowsUnlimitedModeAndDoesNotDisplaySentinelZerosAsQuota()
+    {
+        var profile = Profile();
+        profile.LastBillingSnapshot = Snapshot(profile,
+        [
+            new ProviderMetric
+            {
+                Id = "unlimited-key",
+                Kind = ProviderMetricKind.QuotaLimit,
+                Scope = ProviderMetricScope.ApiKey,
+                Unit = ProviderMetricUnit.Provider("quota-units"),
+                Availability = ProviderMetricAvailability.Live,
+                ObservedAt = Now,
+                IsUnlimited = true,
+            },
+            Metric("key-used", ProviderMetricKind.ProviderSpecificUsage, 37m, ProviderMetricScope.ApiKey,
+                ProviderMetricUnit.Provider("quota-units")),
+            Metric("account-used", ProviderMetricKind.ProviderSpecificUsage, 117.25m, ProviderMetricScope.Account,
+                ProviderMetricUnit.Provider("heju-display-units")),
+        ]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.ApiKeyAllowance, presentation.Kind);
+        Assert.True(presentation.QuotaUnlimited);
+        Assert.Null(presentation.Remaining);
+        Assert.Null(presentation.Maximum);
+        Assert.Null(presentation.RemainingPercentage);
+        Assert.Equal("Безлимитный API-ключ", presentation.ToCompactText(russian: true));
+        Assert.Contains("Лимит ключа: без ограничений", presentation.ToExpandedLines(russian: true));
+        Assert.Contains("Баланс аккаунта: неизвестен", presentation.ToExpandedLines(russian: true));
+        Assert.Contains("Потрачено ключом: 37 ед. квоты", presentation.ToExpandedLines(russian: true));
+        Assert.Contains("Расход аккаунта: 117,25 ед. HeJu", presentation.ToExpandedLines(russian: true));
+    }
+
+    [Fact]
+    public void UnlimitedKeyUsesOnlyAnExplicitlyScopedWallet()
+    {
+        var profile = Profile();
+        profile.LastBillingSnapshot = Snapshot(profile,
+        [
+            Metric("key-unlimited", ProviderMetricKind.QuotaLimit, 0m, ProviderMetricScope.ApiKey,
+                ProviderMetricUnit.Provider("quota-units")) with { Value = null, IsUnlimited = true },
+            Metric("wallet", ProviderMetricKind.AvailableBalance, 8m, ProviderMetricScope.Account,
+                ProviderMetricUnit.Currency("USD")),
+        ]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal("Unlimited API key · $8.00", presentation.ToCompactText(russian: false));
+        Assert.Contains("Account balance: $8.00", presentation.ToExpandedLines(russian: false));
+        Assert.Null(presentation.RemainingPercentage);
+    }
+
+    [Fact]
+    public void FiniteZeroGrantKeepsExplicitQuotaWithoutAnUndefinedPercentage()
+    {
+        var profile = Profile();
+        var unit = ProviderMetricUnit.Provider("quota-units");
+        profile.LastBillingSnapshot = Snapshot(profile,
+        [
+            Metric("key-limit", ProviderMetricKind.QuotaLimit, 0m, ProviderMetricScope.ApiKey, unit),
+            Metric("key-remaining", ProviderMetricKind.QuotaRemaining, 0m, ProviderMetricScope.ApiKey, unit),
+        ]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.ApiKeyAllowance, presentation.Kind);
+        Assert.Equal("Remaining 0 quota units", presentation.ToCompactText(russian: false));
+        Assert.Contains("Maximum 0 quota units", presentation.ToExpandedLines(russian: false));
+        Assert.Null(presentation.RemainingPercentage);
+    }
+
+    [Fact]
+    public void WalletFromAFormerUrlCannotBeShownAndAgedAmountsAreMarkedCached()
+    {
+        var profile = Profile();
+        var snapshot = Snapshot(profile,
+        [
+            Metric("wallet", ProviderMetricKind.AvailableBalance, 8m, ProviderMetricScope.Account,
+                ProviderMetricUnit.Currency("USD")),
+        ]);
+        profile.LastBillingSnapshot = snapshot;
+
+        var cached = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now.AddMinutes(3));
+        Assert.Equal("API budget · $8.00 · Cached", cached.ToCompactText(russian: false));
+
+        profile.LastBillingSnapshot = snapshot with { BaseUrl = "https://previous.example.invalid/v1" };
+        var staleRoute = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+        Assert.Equal("desktop.balance.billing-identity-mismatch", staleRoute.DiagnosticCode);
+        Assert.Null(staleRoute.AccountBalance);
+    }
+
+    [Fact]
     public void RendererPayloadContainsOnlySanitizedDisplayStrings()
     {
         var presentation = new CodexDesktopBalancePresentation
@@ -134,6 +260,25 @@ public sealed class CodexDesktopBalancePresentationMapperTests
         Assert.Equal(1234.567m, presentation.Usage);
         Assert.Equal("heju-display-units", presentation.UnitCode);
         Assert.DoesNotContain("USD", presentation.ToCompactText(russian: false));
+    }
+
+    [Fact]
+    public void AccountWideProviderSpecificUsageIsLabeledAsAccountUsage()
+    {
+        var profile = Profile();
+        profile.LastBillingSnapshot = Snapshot(profile,
+        [
+            Metric("account-used", ProviderMetricKind.ProviderSpecificUsage, 117.25m, ProviderMetricScope.Account,
+                ProviderMetricUnit.Provider("heju-display-units")),
+        ]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(CodexDesktopBalanceKind.UsageOnly, presentation.Kind);
+        Assert.Equal("Расход аккаунта 117,25 ед. HeJu", presentation.ToCompactText(russian: true));
+        Assert.Equal("Расход аккаунта 117,25 ед. HeJu", presentation.ToExpandedLines(russian: true)[0]);
+        Assert.DoesNotContain("Потрачено ключом", presentation.ToExpandedLines(russian: true));
     }
 
     [Fact]

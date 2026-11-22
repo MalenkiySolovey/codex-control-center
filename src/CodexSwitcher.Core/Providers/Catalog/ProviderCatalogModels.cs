@@ -151,6 +151,10 @@ public sealed class ProviderCapabilities
 
     [JsonPropertyName("usage")]
     public ProviderCapabilityRecipe Usage { get; set; } = new();
+
+    [JsonPropertyName("keyUsage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProviderCapabilityRecipe? KeyUsage { get; set; }
 }
 
 public sealed class ProviderCapabilityRecipe

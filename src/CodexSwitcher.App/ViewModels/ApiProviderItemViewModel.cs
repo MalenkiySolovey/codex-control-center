@@ -390,11 +390,12 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
             return;
         }
 
-        var hasValues = hasTypedMetrics && snapshot.Metrics.Any(metric => metric.Value.HasValue);
+        var hasValues = hasTypedMetrics && snapshot.Metrics.Any(metric => metric.Value.HasValue || metric.IsUnlimited);
         var age = DateTimeOffset.UtcNow - snapshot.ObservedAt;
         var status = ResolveDisplayStatus(snapshot.Status, fromCache, age, hasValues);
         var balances = snapshot.Metrics.Where(metric => metric.Kind == ProviderMetricKind.AvailableBalance && metric.Value.HasValue).ToArray();
-        var usage = snapshot.Metrics.Where(metric => IsUsageMetric(metric.Kind) && metric.Value.HasValue).ToArray();
+        var usage = snapshot.Metrics.Where(metric => IsUsageMetric(metric.Kind) && (metric.Value.HasValue ||
+            metric is { Kind: ProviderMetricKind.QuotaLimit, Scope: ProviderMetricScope.ApiKey, IsUnlimited: true })).ToArray();
         BalanceLabel = balances.Length == 0 ? "Account balance:" : BalanceScopeLabel(balances);
         UsageLabel = "Usage / quota:";
         BalanceSummary = FormatBalance(balances, snapshot.BalanceAvailability, status, fromCache, snapshot.Status);
@@ -442,9 +443,23 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
         ProviderBillingStatus status, bool fromCache, ProviderBillingStatus storedStatus)
     {
         if (metrics.Length == 0) return EmptyMetricState(availability, status);
-        var primary = metrics.FirstOrDefault(metric => metric.Kind == ProviderMetricKind.Spending);
         var descriptions = new List<string>();
-        if (primary is not null)
+        var quota = metrics.FirstOrDefault(metric => metric.Kind == ProviderMetricKind.QuotaLimit &&
+            metric.Scope == ProviderMetricScope.ApiKey &&
+            metric.Unit is { Kind: ProviderMetricUnitKind.ProviderSpecific, Code: "quota-units" });
+        var primary = metrics.FirstOrDefault(metric => metric.Kind == ProviderMetricKind.Spending);
+        if (quota is { IsUnlimited: true })
+        {
+            descriptions.Add("API key limit unlimited");
+        }
+        else if (quota is not null)
+        {
+            var remaining = metrics.FirstOrDefault(metric => metric.Kind == ProviderMetricKind.QuotaRemaining &&
+                AreComparable(quota, metric) && metric.ObservedAt == quota.ObservedAt);
+            if (remaining is not null) descriptions.Add(FormatMetricValue(remaining, "API key remaining"));
+            descriptions.Add(FormatMetricValue(quota, "API key maximum"));
+        }
+        else if (primary is not null)
         {
             descriptions.Add(FormatMetricValue(primary, $"{ScopeLabel(primary.Scope)} spending"));
             var limit = metrics.FirstOrDefault(metric => metric.Kind == ProviderMetricKind.QuotaLimit && AreComparable(primary, metric));
@@ -498,11 +513,12 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
 
     private static string FormatMetricValue(ProviderMetric metric, string? label = null)
     {
+        if (metric is { IsUnlimited: true, Value: null }) return "API key limit unlimited";
         var value = metric.Value!.Value.ToString("G29", System.Globalization.CultureInfo.InvariantCulture);
         var unit = metric.Unit.Kind switch
         {
             ProviderMetricUnitKind.Currency => metric.Unit.Code ?? "currency unknown",
-            ProviderMetricUnitKind.ProviderSpecific => "provider units",
+            ProviderMetricUnitKind.ProviderSpecific => metric.Unit.Code == "quota-units" ? "quota units" : "provider units",
             ProviderMetricUnitKind.Requests => "requests",
             ProviderMetricUnitKind.Tokens => "tokens",
             _ => "unit unknown",

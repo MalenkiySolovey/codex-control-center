@@ -11,8 +11,8 @@ namespace CodexSwitcher.App.Features.CodexDesktopBalance;
 public static class CodexDesktopBalanceRendererExtension
 {
     public const string Id = "codex-control-center-api-balance";
-    public const string PackageVersion = "0.1.0";
-    public const string ApprovedSha256 = "40AEF15CCE4ED731507DA898EE25953970665F26BB01AF547286B15C5C037AB3";
+    public const string PackageVersion = "0.1.1";
+    public const string ApprovedSha256 = "0940F0BC71FD14FE89A732B0D802CE17340FC71EFC8B59DED3FD6D512457367D";
     private const string ResourceName = "CodexSwitcher.App.Features.CodexDesktopBalance.CodexDesktopBalanceRendererExtension.js";
 
     public static string LoadJavaScript()

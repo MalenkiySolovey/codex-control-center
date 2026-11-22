@@ -12,18 +12,18 @@
     {
       "name": "llm-provider-kit",
       "repository": "https://github.com/MalenkiySolovey/llm-provider-kit.git",
-      "commit": "77704a42315f0887933b9f4668de6afe233a636a",
+      "commit": "1e931d3a39bbc4f2309051092117c2f083606806",
       "project": "src/Llm.ProviderKit/Llm.ProviderKit.csproj",
       "packageId": "Llm.ProviderKit",
-      "version": "0.1.0-preview.4"
+      "version": "0.1.0-preview.6"
     },
     {
       "name": "codex-runtime-kit",
       "repository": "https://github.com/MalenkiySolovey/codex-runtime-kit.git",
-      "commit": "99efa0605c2d279a101fc03f5a9eb559415e61f9",
+      "commit": "e7bcfb7fad35f35c8509e76d2317691f0c1648b1",
       "project": "src/Codex.RuntimeKit/Codex.RuntimeKit.csproj",
       "packageId": "Codex.RuntimeKit",
-      "version": "0.1.0-preview.2"
+      "version": "0.1.0-preview.3"
     }
   ]
 }

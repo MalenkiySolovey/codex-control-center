@@ -194,6 +194,46 @@ public sealed class DeclarativeProviderInspectorTests
     }
 
     [Fact]
+    public async Task InspectAsync_BundledHeJuRecipeSurvivesAdapterAndKeepsWalletUnknown()
+    {
+        var catalog = ProviderCatalogLoader.LoadBootstrapCatalog();
+        Assert.True(catalog.Catalog.CatalogVersion >= 6);
+        var heju = Assert.Single(catalog.Catalog.Providers, provider => provider.Id == "hejuapi");
+        var route = Assert.Single(heju.Routes, candidate => candidate.Id == "global");
+        var mock = new MockHttpHandler
+        {
+            ResponseFactory = request =>
+            {
+                var body = request.RequestUri!.AbsolutePath switch
+                {
+                    "/api/usage/token/" => """{"code":true,"data":{"total_granted":800,"total_used":300,"total_available":500,"unlimited_quota":false}}""",
+                    "/v1/dashboard/billing/usage" => """{"total_usage":1600}""",
+                    _ => """{"data":[{"id":"synthetic-model"}]}""",
+                };
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                };
+            },
+        };
+        using var client = new HttpClient(mock);
+        using var inspector = new DeclarativeProviderInspector(client);
+
+        var snapshot = await inspector.InspectAsync(heju, route.BaseUrl, "synthetic-key");
+
+        var remaining = Assert.Single(snapshot.MetricSnapshot.Metrics, metric => metric.Kind == ProviderMetricKind.QuotaRemaining);
+        Assert.Equal(500m, remaining.Value);
+        Assert.Equal(ProviderMetricScope.ApiKey, remaining.Scope);
+        Assert.Equal(ProviderMetricUnit.Provider("quota-units"), remaining.Unit);
+        Assert.Equal(16m, snapshot.Usage);
+        Assert.Null(snapshot.Balance);
+        Assert.Null(snapshot.Currency);
+        Assert.Equal(ProviderMetricAvailability.Unknown, snapshot.MetricSnapshot.BalanceAvailability);
+        Assert.Single(mock.RequestHistory, request =>
+            request.RequestUri!.AbsolutePath == "/api/usage/token/" && request.Headers.Authorization?.Parameter == "synthetic-key");
+    }
+
+    [Fact]
     public async Task InspectAsync_CatalogMetricMetadataSurvivesControlCenterAdapter()
     {
         var mock = new MockHttpHandler

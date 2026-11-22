@@ -12,18 +12,17 @@ public sealed class CodexDesktopBalanceRendererExtensionTests
         Assert.True(CodexDesktopBalanceRendererExtension.MatchesApprovedHash(script));
         Assert.Contains("[data-ambient-usage-label]", script, StringComparison.Ordinal);
         Assert.Contains("[data-app-shell-header-toolbar]", script, StringComparison.Ordinal);
-        Assert.Contains("findVisibleAnchors(primaryAnchorSelector)", script, StringComparison.Ordinal);
-        Assert.Contains("findVisibleAnchors(headerToolbarAnchorSelector)", script, StringComparison.Ordinal);
+        Assert.Contains("uniqueVisible(nativeAnchor)", script, StringComparison.Ordinal);
+        Assert.Contains("uniqueVisible(toolbarAnchor)", script, StringComparison.Ordinal);
         Assert.Contains("bg-token-bg-secondary", script, StringComparison.Ordinal);
         Assert.Contains("text-token-text-secondary", script, StringComparison.Ordinal);
         Assert.Contains("border-token-border-default", script, StringComparison.Ordinal);
         Assert.Contains("rounded-full", script, StringComparison.Ordinal);
-        Assert.Contains("maxAnchorCandidates = 16", script, StringComparison.Ordinal);
-        Assert.Contains("maxMutationRecords = 256", script, StringComparison.Ordinal);
-        Assert.Contains("maxNodesPerMutation = 512", script, StringComparison.Ordinal);
-        Assert.Contains("attributeFilter", script, StringComparison.Ordinal);
         Assert.Contains("aria-controls", script, StringComparison.Ordinal);
-        Assert.Contains("top-full right-0 z-50 mt-2", script, StringComparison.Ordinal);
+        Assert.Contains("aria-expanded", script, StringComparison.Ordinal);
+        Assert.Contains("""setProperty("-webkit-app-region", "no-drag")""", script, StringComparison.Ordinal);
+        Assert.Contains("document.body.append(panel)", script, StringComparison.Ordinal);
+        Assert.Contains("panel.showPopover", script, StringComparison.Ordinal);
         Assert.Contains("data-codex-control-center-api-balance", script, StringComparison.Ordinal);
     }
 
@@ -33,9 +32,11 @@ public sealed class CodexDesktopBalanceRendererExtensionTests
         var script = CodexDesktopBalanceRendererExtension.LoadJavaScript();
 
         Assert.Contains("textContent", script, StringComparison.Ordinal);
-        Assert.Contains("observer?.disconnect()", script, StringComparison.Ordinal);
-        Assert.Contains("removeEventListener", script, StringComparison.Ordinal);
-        Assert.Contains("root?.remove()", script, StringComparison.Ordinal);
+        Assert.Contains("listeners.abort()", script, StringComparison.Ordinal);
+        Assert.Contains("surface?.root.remove()", script, StringComparison.Ordinal);
+        Assert.Contains("surface?.panel.remove()", script, StringComparison.Ordinal);
+        Assert.Contains("setTimeout(removeSurface, leaseMilliseconds)", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("MutationObserver", script, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("eval(", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("fetch(", script, StringComparison.OrdinalIgnoreCase);

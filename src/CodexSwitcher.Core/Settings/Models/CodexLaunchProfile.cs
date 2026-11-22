@@ -81,6 +81,9 @@ public sealed record CodexLaunchSession(
     int ProcessId,
     DateTimeOffset StartedAt)
 {
+    /// <summary>The isolated CODEX_HOME recorded by the managed launch owner.</summary>
+    public string? CodexHomePath { get; init; }
+
     /// <summary>Credential profile captured for this managed process when it started.</summary>
     public Guid CredentialProfileId { get; init; }
 

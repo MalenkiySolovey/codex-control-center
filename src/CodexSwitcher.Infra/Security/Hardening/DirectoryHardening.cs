@@ -62,6 +62,8 @@ namespace CodexSwitcher.Infra.Security.Hardening;
 [SupportedOSPlatform("windows")]
 public static class DirectoryHardening
 {
+    private const InheritanceFlags ChildInheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+
     public static void RestrictToCurrentUser(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -75,12 +77,29 @@ public static class DirectoryHardening
 
         var dirInfo = new DirectoryInfo(path);
         var security = dirInfo.GetAccessControl();
-        var currentOwner = security.GetOwner(typeof(SecurityIdentifier));
+        var ownedByCurrentUser = user.Equals(security.GetOwner(typeof(SecurityIdentifier)));
+        if (ownedByCurrentUser && security.AreAccessRulesProtected)
+        {
+            var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier));
+            if (rules.Count == 1 && rules[0] is FileSystemAccessRule
+                {
+                    IsInherited: false,
+                    FileSystemRights: FileSystemRights.FullControl,
+                    InheritanceFlags: ChildInheritance,
+                    PropagationFlags: PropagationFlags.None,
+                    AccessControlType: AccessControlType.Allow,
+                } rule && user.Equals(rule.IdentityReference))
+            {
+                // Persisting an unchanged inheritable ACL makes Windows walk existing descendants.
+                return;
+            }
+        }
+
         // A newly created directory is already owned by this user. Rewriting that same
         // owner can require WRITE_OWNER, which a standard inherited Modify ACL does not
         // grant. Preserve the existing owner when it is already correct and only replace
         // the DACL in that common case.
-        if (currentOwner is not SecurityIdentifier owner || !owner.Equals(user))
+        if (!ownedByCurrentUser)
         {
             security.SetOwner(user);
         }
@@ -97,7 +116,7 @@ public static class DirectoryHardening
         security.AddAccessRule(new FileSystemAccessRule(
             user,
             FileSystemRights.FullControl,
-            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            ChildInheritance,
             PropagationFlags.None,
             AccessControlType.Allow));
 

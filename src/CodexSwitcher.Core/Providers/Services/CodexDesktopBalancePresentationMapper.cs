@@ -43,31 +43,44 @@ public sealed record CodexDesktopBalancePresentation
     public decimal? Remaining { get; init; }
     public decimal? Maximum { get; init; }
     public decimal? RemainingPercentage { get; init; }
+    public bool QuotaUnlimited { get; init; }
+    public decimal? KeyUsage { get; init; }
+    public string? KeyUsageUnitCode { get; init; }
+    public decimal? AccountUsage { get; init; }
+    public string? AccountUsageUnitCode { get; init; }
     public decimal? AccountBalance { get; init; }
+    public string? AccountBalanceUnitCode { get; init; }
     public decimal? Usage { get; init; }
     public string? UnitCode { get; init; }
     public string? Period { get; init; }
     public string? Source { get; init; }
     public DateTimeOffset? ObservedAt { get; init; }
     public DateTimeOffset? ResetAt { get; init; }
+    public DateTimeOffset? ExpiresAt { get; init; }
     public string? ActiveCodeHomeFingerprint { get; init; }
     public string DiagnosticCode { get; init; } = "desktop.balance.unknown";
 
     public string ToCompactText(bool russian)
     {
         var culture = russian ? CultureInfo.GetCultureInfo("ru-RU") : CultureInfo.GetCultureInfo("en-US");
-        return Kind switch
+        var text = Kind switch
         {
+            CodexDesktopBalanceKind.ApiKeyAllowance when QuotaUnlimited =>
+                (russian ? "Безлимитный API-ключ" : "Unlimited API key") +
+                (AccountBalance is { } wallet ? $" · {FormatAmount(wallet, AccountBalanceUnitCode, culture, russian)}" : string.Empty),
             CodexDesktopBalanceKind.ApiKeyAllowance when Remaining is not null =>
                 $"{(russian ? "Осталось" : "Remaining")} {FormatAmount(Remaining.Value, UnitCode, culture, russian)}" +
                 (RemainingPercentage is null ? string.Empty : $" · {FormatPercentage(RemainingPercentage.Value, culture)}%"),
             CodexDesktopBalanceKind.AccountBalance when AccountBalance is not null =>
                 $"{(russian ? "Бюджет API" : "API budget")} · {FormatAmount(AccountBalance.Value, UnitCode, culture, russian)}",
             CodexDesktopBalanceKind.UsageOnly when Usage is not null =>
-                $"{(russian ? "Использовано" : "Used")} {FormatAmount(Usage.Value, UnitCode, culture, russian)}",
+                $"{UsageLabel(russian, ScopeLabel)} {FormatAmount(Usage.Value, UnitCode, culture, russian)}",
             CodexDesktopBalanceKind.StatusOnly => StateLabel(russian),
             _ => string.Empty,
         };
+        return text.Length == 0 || Kind == CodexDesktopBalanceKind.StatusOnly || State == CodexDesktopBalanceState.Live
+            ? text
+            : $"{text} · {StateLabel(russian)}";
     }
 
     public string ToExpandedTitle(bool russian) => Kind switch
@@ -96,12 +109,25 @@ public sealed record CodexDesktopBalancePresentation
                     lines.Add($"{(russian ? "Доля остатка" : "Remaining share")} {FormatPercentage(RemainingPercentage.Value, culture)}%");
                 }
 
+                AddUsageLine(lines, russian, russian ? "Потрачено ключом" : "Key usage", KeyUsage, KeyUsageUnitCode, culture);
+                AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
+                break;
+            case CodexDesktopBalanceKind.ApiKeyAllowance when QuotaUnlimited:
+                lines.Add(russian ? "Лимит ключа: без ограничений" : "Key limit: unlimited");
+                var accountLabel = russian ? "Баланс аккаунта" : "Account balance";
+                var wallet = AccountBalance is { } observedWallet
+                    ? FormatAmount(observedWallet, AccountBalanceUnitCode, culture, russian)
+                    : russian ? "неизвестен" : "Unknown";
+                lines.Add($"{accountLabel}: {wallet}");
+                AddUsageLine(lines, russian, russian ? "Потрачено ключом" : "Key usage", KeyUsage, KeyUsageUnitCode, culture);
+                AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
                 break;
             case CodexDesktopBalanceKind.AccountBalance when AccountBalance is not null:
                 lines.Add($"{(russian ? "Доступный баланс" : "Available balance")} {FormatAmount(AccountBalance.Value, UnitCode, culture, russian)}");
+                AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
                 break;
             case CodexDesktopBalanceKind.UsageOnly when Usage is not null:
-                lines.Add($"{(russian ? "Использовано" : "Used")} {FormatAmount(Usage.Value, UnitCode, culture, russian)}");
+                lines.Add($"{UsageLabel(russian, ScopeLabel)} {FormatAmount(Usage.Value, UnitCode, culture, russian)}");
                 break;
             case CodexDesktopBalanceKind.StatusOnly:
                 lines.Add(StateLabel(russian));
@@ -132,6 +158,11 @@ public sealed record CodexDesktopBalancePresentation
             lines.Add($"{(russian ? "Сброс" : "Resets")}: {ResetAt.Value.ToLocalTime().ToString("g", culture)}");
         }
 
+        if (ExpiresAt is not null)
+        {
+            lines.Add($"{(russian ? "Ключ действует до" : "Key expires")}: {ExpiresAt.Value.ToLocalTime().ToString("g", culture)}");
+        }
+
         if (Kind != CodexDesktopBalanceKind.StatusOnly)
         {
             lines.Add(StateLabel(russian));
@@ -157,9 +188,13 @@ public sealed record CodexDesktopBalancePresentation
     private static string FormatPercentage(decimal value, CultureInfo culture)
     {
         var formatted = value.ToString("0.#", culture);
-        return value > 0m && decimal.TryParse(formatted, culture, out var rounded) && rounded == 0m
-            ? $"<{0.1m.ToString("0.#", culture)}"
-            : formatted;
+        if (decimal.TryParse(formatted, culture, out var rounded))
+        {
+            if (value > 0m && rounded == 0m) return $"<{0.1m.ToString("0.#", culture)}";
+            if (value < 100m && rounded == 100m) return "<100";
+        }
+
+        return formatted;
     }
 
     private static string FormatAmount(decimal value, string? unitCode, CultureInfo culture, bool russian)
@@ -187,8 +222,41 @@ public sealed record CodexDesktopBalancePresentation
             return russian ? $"{amount} {currencySymbol}" : $"{currencySymbol}{amount}";
         }
 
+        if (normalizedUnit.Equals("quota-units", StringComparison.OrdinalIgnoreCase))
+        {
+            var amount = value.ToString("#,0.############################", culture);
+            return russian ? $"{amount} ед. квоты" : $"{amount} quota units";
+        }
+
+        if (normalizedUnit.Equals("heju-display-units", StringComparison.OrdinalIgnoreCase))
+        {
+            return russian
+                ? $"{Format(value, culture)} ед. HeJu"
+                : $"{Format(value, culture)} HeJu units";
+        }
+
         return $"{Format(value, culture)} {normalizedUnit}";
     }
+
+    private static string UsageLabel(bool russian, string? scope) =>
+        string.Equals(scope, nameof(ProviderMetricScope.Account), StringComparison.Ordinal)
+            ? russian ? "Расход аккаунта" : "Account usage"
+            : string.Equals(scope, nameof(ProviderMetricScope.ApiKey), StringComparison.Ordinal)
+                ? russian ? "Потрачено ключом" : "Key usage"
+                : russian ? "Использовано" : "Used";
+
+    private static void AddUsageLine(List<string> lines, bool russian, string label, decimal? value, string? unitCode,
+        CultureInfo culture)
+    {
+        if (value is not null)
+        {
+            lines.Add($"{label}: {FormatAmount(value.Value, unitCode, culture, russian)}");
+        }
+    }
+
+    private static void AddAccountUsageLine(List<string> lines, bool russian, decimal? value, string? unitCode,
+        CultureInfo culture) =>
+        AddUsageLine(lines, russian, russian ? "Расход аккаунта" : "Account usage", value, unitCode, culture);
 
     private static void AddLabel(List<string> lines, string label, string? value)
     {
@@ -206,6 +274,7 @@ public sealed record CodexDesktopBalancePresentation
 public static class CodexDesktopBalancePresentationMapper
 {
     public static readonly TimeSpan StaleAfter = TimeSpan.FromHours(24);
+    private static readonly TimeSpan LiveFor = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan MaximumFutureSkew = TimeSpan.FromMinutes(5);
 
     public static string CreateCodeHomeFingerprint(string codeHomePath)
@@ -256,6 +325,7 @@ public static class CodexDesktopBalancePresentationMapper
         var expectedCredentialOwnerId = profile.EndpointId ?? profile.Id;
         if (snapshot.ProfileId != profile.Id ||
             !string.Equals(snapshot.ProviderId, profile.CatalogProviderId, StringComparison.Ordinal) ||
+            !string.Equals(snapshot.BaseUrl, profile.BaseUrl, StringComparison.Ordinal) ||
             !string.Equals(snapshot.RouteId, profile.SelectedRouteId, StringComparison.Ordinal) ||
             snapshot.CredentialOwnerId != expectedCredentialOwnerId ||
             !string.Equals(snapshot.CredentialRevision, currentCredentialRevision, StringComparison.Ordinal))
@@ -264,39 +334,56 @@ public static class CodexDesktopBalancePresentationMapper
         }
 
         var state = ResolveState(snapshot, now, snapshot.Metrics);
-        var metrics = snapshot.Metrics.Where(metric => metric.Value.HasValue).ToArray();
-        var remaining = ExactlyOne(metrics, ProviderMetricKind.QuotaRemaining, ProviderMetricScope.ApiKey);
+        var metrics = snapshot.Metrics.ToArray();
         var limit = ExactlyOne(metrics, ProviderMetricKind.QuotaLimit, ProviderMetricScope.ApiKey);
-        if (remaining is not null && limit is not null && AreCompatibleAllowanceMetrics(remaining, limit, now))
+        var remaining = ExactlyOne(metrics, ProviderMetricKind.QuotaRemaining, ProviderMetricScope.ApiKey);
+        var keyUsage = ExactlyOneUsage(metrics, ProviderMetricScope.ApiKey, now);
+        var accountUsage = ExactlyOneUsage(metrics, ProviderMetricScope.Account, now);
+        var accountBalance = ExactlyOne(metrics, ProviderMetricKind.AvailableBalance, ProviderMetricScope.Account);
+        if (accountBalance is not null && (!IsCurrency(accountBalance) || !IsDisplayable(accountBalance, now)))
+            accountBalance = null;
+
+        var unlimited = limit is not null && IsUnlimitedDisplayable(limit, now);
+        if (limit is not null && (unlimited ||
+            (remaining is not null && AreCompatibleAllowanceMetrics(remaining, limit, now))))
         {
-            decimal? percentage = limit.Value is > 0m
-                ? Math.Clamp(remaining.Value!.Value / limit.Value.Value * 100m, 0m, 100m)
+            var keyRemaining = unlimited ? null : remaining;
+            var wallet = unlimited ? accountBalance : null;
+            decimal? percentage = limit.Value > 0m && keyRemaining?.Value is { } amount
+                ? amount / limit.Value.Value * 100m
                 : null;
-            state = ResolveState(snapshot, now, [remaining, limit]);
+            state = ResolveState(snapshot, now, [limit, .. NonNullMetrics(keyRemaining, keyUsage, accountUsage, wallet)]);
             return new()
             {
                 Kind = CodexDesktopBalanceKind.ApiKeyAllowance,
                 State = state,
                 ProviderLabel = SafeLabel(profile.CatalogProviderId),
                 ProfileLabel = SafeLabel(profile.Nickname),
-                ScopeLabel = remaining.Scope.ToString(),
-                Remaining = remaining.Value,
+                ScopeLabel = nameof(ProviderMetricScope.ApiKey),
+                Remaining = keyRemaining?.Value,
                 Maximum = limit.Value,
                 RemainingPercentage = percentage,
-                UnitCode = remaining.Unit.Code ?? remaining.Unit.Kind.ToString(),
-                Period = SafeLabel(remaining.Period),
-                Source = SafeLabel(remaining.Source),
-                ObservedAt = remaining.ObservedAt,
-                ResetAt = remaining.ResetAt,
+                QuotaUnlimited = unlimited,
+                KeyUsage = keyUsage?.Value,
+                KeyUsageUnitCode = DisplayUnitCode(keyUsage?.Unit),
+                AccountUsage = accountUsage?.Value,
+                AccountUsageUnitCode = DisplayUnitCode(accountUsage?.Unit),
+                AccountBalance = wallet?.Value,
+                AccountBalanceUnitCode = DisplayUnitCode(wallet?.Unit),
+                UnitCode = DisplayUnitCode(limit.Unit),
+                Period = SafeLabel(limit.Period),
+                Source = SafeLabel(limit.Source),
+                ObservedAt = limit.ObservedAt,
+                ResetAt = limit.ResetAt,
+                ExpiresAt = limit.ExpiresAt,
                 ActiveCodeHomeFingerprint = activeCodeHomeFingerprint,
-                DiagnosticCode = "desktop.balance.api-key-allowance",
+                DiagnosticCode = unlimited ? "desktop.balance.api-key-unlimited" : "desktop.balance.api-key-allowance",
             };
         }
 
-        var accountBalance = ExactlyOne(metrics, ProviderMetricKind.AvailableBalance, ProviderMetricScope.Account);
-        if (accountBalance is not null && IsCurrency(accountBalance) && IsDisplayable(accountBalance, now))
+        if (accountBalance is not null)
         {
-            state = ResolveState(snapshot, now, [accountBalance]);
+            state = ResolveState(snapshot, now, [accountBalance, .. NonNullMetrics(accountUsage)]);
             return new()
             {
                 Kind = CodexDesktopBalanceKind.AccountBalance,
@@ -305,6 +392,8 @@ public static class CodexDesktopBalancePresentationMapper
                 ProfileLabel = SafeLabel(profile.Nickname),
                 ScopeLabel = ProviderMetricScope.Account.ToString(),
                 AccountBalance = accountBalance.Value,
+                AccountUsage = accountUsage?.Value,
+                AccountUsageUnitCode = DisplayUnitCode(accountUsage?.Unit),
                 UnitCode = accountBalance.Unit.Code,
                 Period = SafeLabel(accountBalance.Period),
                 Source = SafeLabel(accountBalance.Source),
@@ -331,17 +420,19 @@ public static class CodexDesktopBalancePresentationMapper
                 ProfileLabel = SafeLabel(profile.Nickname),
                 ScopeLabel = usage.Scope.ToString(),
                 Usage = usage.Value,
-                UnitCode = usage.Unit.Code ?? usage.Unit.Kind.ToString(),
+                UnitCode = DisplayUnitCode(usage.Unit),
                 Period = SafeLabel(usage.Period),
                 Source = SafeLabel(usage.Source),
                 ObservedAt = usage.ObservedAt,
                 ResetAt = usage.ResetAt,
+                ExpiresAt = usage.ExpiresAt,
                 ActiveCodeHomeFingerprint = activeCodeHomeFingerprint,
                 DiagnosticCode = "desktop.balance.usage-only",
             };
         }
 
-        return Status(state, "desktop.balance.metric-unavailable", activeCodeHomeFingerprint);
+        return Status(state == CodexDesktopBalanceState.Live ? CodexDesktopBalanceState.Unknown : state,
+            "desktop.balance.metric-unavailable", activeCodeHomeFingerprint);
     }
 
     private static CodexDesktopBalancePresentation Status(
@@ -392,7 +483,8 @@ public static class CodexDesktopBalancePresentationMapper
             return CodexDesktopBalanceState.Stale;
         }
 
-        if (metrics.Any(metric => metric.Availability == ProviderMetricAvailability.Cached))
+        if (age > LiveFor || metrics.Any(metric => metric.Availability == ProviderMetricAvailability.Cached ||
+            now - metric.ObservedAt > LiveFor))
         {
             return CodexDesktopBalanceState.Cached;
         }
@@ -414,6 +506,24 @@ public static class CodexDesktopBalancePresentationMapper
         return matches.Length == 1 ? matches[0] : null;
     }
 
+    private static ProviderMetric? ExactlyOneUsage(
+        IReadOnlyList<ProviderMetric> metrics,
+        ProviderMetricScope scope,
+        DateTimeOffset now)
+    {
+        var matches = metrics.Where(metric => IsUsageMetric(metric) && metric.Scope == scope &&
+            metric.Value.HasValue && IsDisplayable(metric, now)).Take(2).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    private static IEnumerable<ProviderMetric> NonNullMetrics(params ProviderMetric?[] metrics) =>
+        metrics.Where(metric => metric is not null).Cast<ProviderMetric>();
+
+    private static bool IsUnlimitedDisplayable(ProviderMetric metric, DateTimeOffset now) =>
+        metric.IsUnlimited && metric.Value is null &&
+        metric.ObservedAt <= now + MaximumFutureSkew &&
+        metric.Availability is ProviderMetricAvailability.Live or ProviderMetricAvailability.Cached or ProviderMetricAvailability.Stale;
+
     private static bool AreCompatibleAllowanceMetrics(ProviderMetric remaining, ProviderMetric limit, DateTimeOffset now) =>
         remaining.Scope == ProviderMetricScope.ApiKey &&
         remaining.Unit == limit.Unit &&
@@ -423,13 +533,25 @@ public static class CodexDesktopBalancePresentationMapper
         remaining.PeriodEndAt == limit.PeriodEndAt &&
         remaining.ResetAt == limit.ResetAt &&
         remaining.ObservedAt == limit.ObservedAt &&
-        remaining.Value >= 0m && limit.Value > 0m && remaining.Value <= limit.Value &&
+        !remaining.IsUnlimited && !limit.IsUnlimited &&
+        remaining.Value >= 0m && limit.Value >= 0m && remaining.Value <= limit.Value &&
         IsDisplayable(remaining, now) && IsDisplayable(limit, now) &&
         (remaining.Unit.Kind == ProviderMetricUnitKind.Currency || remaining.Unit.Kind == ProviderMetricUnitKind.ProviderSpecific ||
          remaining.Unit.Kind is ProviderMetricUnitKind.Requests or ProviderMetricUnitKind.Tokens);
 
     private static bool IsCurrency(ProviderMetric metric) =>
         metric.Unit.Kind == ProviderMetricUnitKind.Currency && !string.IsNullOrWhiteSpace(metric.Unit.Code);
+
+    private static string? DisplayUnitCode(ProviderMetricUnit? unit) => unit?.Kind switch
+    {
+        ProviderMetricUnitKind.Currency => unit.Code,
+        ProviderMetricUnitKind.ProviderSpecific when unit.Code is { Length: 3 } code && code.All(char.IsAsciiLetter) =>
+            $"units ({code})",
+        ProviderMetricUnitKind.ProviderSpecific => unit.Code,
+        ProviderMetricUnitKind.Requests => "requests",
+        ProviderMetricUnitKind.Tokens => "tokens",
+        _ => null,
+    };
 
     private static bool IsDisplayable(ProviderMetric metric, DateTimeOffset now) =>
         metric.Value.HasValue &&

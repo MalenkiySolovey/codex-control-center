@@ -6,6 +6,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Codex.RuntimeKit.Desktop.Discovery;
 using CodexSwitcher.Core.Accounts.Contracts;
 using CodexSwitcher.Core.Accounts.Formatting;
 using CodexSwitcher.Core.Accounts.Models;
@@ -197,7 +198,10 @@ public sealed class CodexLaunchService : ICodexLaunchService
 
         try
         {
-            return await LaunchCoreAsync(profile, cancellationToken).ConfigureAwait(false);
+            var launch = profile.RuntimeKind == CodexLaunchRuntimeKind.Desktop
+                ? Task.Run(() => LaunchCoreAsync(profile, cancellationToken), cancellationToken)
+                : LaunchCoreAsync(profile, cancellationToken);
+            return await launch.ConfigureAwait(false);
         }
         finally
         {
@@ -495,7 +499,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
             _fs.WriteAllTextAtomic(GetManifestPath(home), JsonSerializer.Serialize(manifest, JsonOptions));
             manifest.ProcessStartedAt = TryGetStartTime(startedProcess)
                 ?? throw new InvalidOperationException("Switchboard could not verify the started Codex process timestamp; the isolated session was rolled back.");
-            var presentation = ToSession(manifest);
+            var presentation = ToSession(manifest, home);
             var state = new SessionState(startedProcess, home, manifest, presentation, profileLock);
             createdState = state;
 
@@ -530,7 +534,14 @@ public sealed class CodexLaunchService : ICodexLaunchService
                     }
                     else
                     {
-                        startedProcess.Kill(entireProcessTree: true);
+                        if (profile.RuntimeKind == CodexLaunchRuntimeKind.Desktop)
+                        {
+                            startedProcess.CloseMainWindow();
+                        }
+                        else
+                        {
+                            startedProcess.Kill(entireProcessTree: true);
+                        }
                         await startedProcess.WaitForExitAsync(CancellationToken.None)
                             .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
                             .ConfigureAwait(false);
@@ -570,7 +581,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                         startedProcess,
                         home,
                         manifest,
-                        ToSession(manifest, DateTimeOffset.UtcNow),
+                        ToSession(manifest, home, DateTimeOffset.UtcNow),
                         profileLock);
                     lock (_sync)
                     {
@@ -652,7 +663,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
-                    // Fall through to terminating only the process tree started for this profile.
+                    // Desktop shutdown must stay graceful. CLI profiles retain their owned process-tree stop.
                 }
                 catch (InvalidOperationException)
                 {
@@ -661,6 +672,11 @@ public sealed class CodexLaunchService : ICodexLaunchService
 
                 if (!HasExitedOrDetached(state.Process))
                 {
+                    if (state.Presentation.RuntimeKind == CodexLaunchRuntimeKind.Desktop)
+                    {
+                        throw new TimeoutException("The managed Codex Desktop window did not close. Close it normally and retry.");
+                    }
+
                     state.Process.Kill(entireProcessTree: true);
                 }
             }
@@ -814,7 +830,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                     IDisposable? profileLock = manifest.TargetKind == CodexLaunchTargetKind.ChatGptAccount
                         ? _coordinator.Lock(manifest.CredentialProfileId)
                         : null;
-                    var state = new SessionState(process, home, manifest, ToSession(manifest), profileLock);
+                    var state = new SessionState(process, home, manifest, ToSession(manifest, home), profileLock);
                     lock (_sync)
                     {
                         _sessions[manifest.SessionId] = state;
@@ -1052,48 +1068,9 @@ public sealed class CodexLaunchService : ICodexLaunchService
             throw new InvalidOperationException("Codex Desktop launch profiles are available only on Windows.");
         }
 
-        // The MSIX package's app/ChatGPT.exe is the real entry point. Codex.exe is an
-        // updater trampoline and may fail when started directly. Query the registered
-        // package each time so an app update can move its versioned WindowsApps path.
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = ResolvePowerShellPath(),
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardOutput = true,
-        };
-        startInfo.ArgumentList.Add("-NoLogo");
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-NonInteractive");
-        startInfo.ArgumentList.Add("-Command");
-        startInfo.ArgumentList.Add("(Get-AppxPackage -Name 'OpenAI.Codex' | Select-Object -First 1 -ExpandProperty InstallLocation)");
-
-        try
-        {
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Windows could not query the installed Codex Desktop package.");
-            var output = process.StandardOutput.ReadToEndAsync();
-            if (!process.WaitForExit(15000))
-            {
-                try { process.Kill(entireProcessTree: true); }
-                catch { }
-                throw new InvalidOperationException("Timed out while locating the installed Codex Desktop package.");
-            }
-
-            var installLocation = output.GetAwaiter().GetResult().Trim();
-            var executable = Path.Combine(installLocation, "app", "ChatGPT.exe");
-            if (string.IsNullOrWhiteSpace(installLocation) || !File.Exists(executable))
-            {
-                throw new InvalidOperationException("Codex Desktop was not found. Install the OpenAI.Codex Microsoft Store app first.");
-            }
-
-            return executable;
-        }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            throw new InvalidOperationException("Could not start PowerShell to locate Codex Desktop.", ex);
-        }
+        var result = new CodexDesktopDiscovery().Discover();
+        return result.Installation?.ExecutablePath ??
+            throw new InvalidOperationException($"Could not verify the installed Codex Desktop package ({result.DiagnosticCode}).");
     }
 
     private static Process StartCodexProcess(
@@ -1128,6 +1105,8 @@ public sealed class CodexLaunchService : ICodexLaunchService
         startInfo.Environment.Remove(ApiKeyEnvironmentVariable);
         if (runtimeKind == CodexLaunchRuntimeKind.Desktop)
         {
+            startInfo.Environment.Remove("OPENAI_API_KEY");
+            startInfo.Environment.Remove("CODEX_API_KEY");
             // The installed Desktop runtime resolves its per-instance userData
             // before this environment override is applied and logs it as a late
             // path change. Use the launch-time Chromium switch as the single
@@ -1931,7 +1910,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                 argument.StartsWith("--api-key", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    $"Argument '{argument}' can override the launch profile's account, model, CODEX_HOME, Electron data directory, or working directory and is not allowed here.");
+                    "A launch argument attempts to override the profile's account, model, CODEX_HOME, Electron data directory, or working directory.");
             }
         }
     }
@@ -1948,7 +1927,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
         }
     }
 
-    private static CodexLaunchSession ToSession(LaunchManifest manifest, DateTimeOffset? observedStartFallback = null) => new(
+    private static CodexLaunchSession ToSession(LaunchManifest manifest, string home, DateTimeOffset? observedStartFallback = null) => new(
         manifest.SessionId,
         manifest.LaunchProfileId,
         manifest.TargetKind,
@@ -1962,6 +1941,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
             ? manifest.ProcessStartedAt
             : observedStartFallback ?? manifest.ProcessStartedAt)
     {
+        CodexHomePath = home,
         CredentialProfileId = manifest.CredentialProfileId,
         CredentialOwnerId = manifest.CredentialOwnerId,
         CredentialRevision = manifest.CredentialRevision,

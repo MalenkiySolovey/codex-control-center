@@ -80,6 +80,11 @@ public sealed class DirectoryHardeningTests
             var onlyRule = Assert.Single(rules);
             Assert.Equal(user, onlyRule.IdentityReference);
             Assert.Equal(FileSystemRights.FullControl, onlyRule.FileSystemRights);
+
+            DirectoryHardening.RestrictToCurrentUser(profileHome);
+
+            Assert.Equal(secured.GetSecurityDescriptorSddlForm(AccessControlSections.Access | AccessControlSections.Owner),
+                profileInfo.GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Access | AccessControlSections.Owner));
         }
         finally
         {
