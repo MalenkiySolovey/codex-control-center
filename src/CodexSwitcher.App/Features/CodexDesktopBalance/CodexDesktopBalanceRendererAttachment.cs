@@ -40,7 +40,11 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
         }
 
         using var process = Process.GetProcessById(session.ProcessId);
-        if (process.HasExited || process.StartTime.ToUniversalTime() != session.StartedAt.UtcDateTime) return false;
+        if (process.HasExited || process.StartTime.ToUniversalTime() != session.StartedAt.UtcDateTime ||
+            process.MainWindowHandle == IntPtr.Zero)
+        {
+            return false;
+        }
         endpoint = candidate;
         return true;
     }

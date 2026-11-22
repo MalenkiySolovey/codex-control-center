@@ -164,9 +164,13 @@ public sealed class Strings
     public string TrayLaunchProfileStart => S("Iniciar", "Launch");
     public string TrayLaunchProfileStop => S("Parar", "Stop");
     public string LaunchStopConfirmTitle => S("Parar sessão gerenciada?", "Stop managed Codex session?");
-    public string LaunchStopConfirmMessage(string profileName) => S(
-        $"A sessão '{profileName}' será encerrada. Salve seu trabalho primeiro. Se ela não fechar normalmente, o Control Center terminará o processo e alterações não salvas poderão ser perdidas.",
-        $"The managed session '{profileName}' will be stopped. Save your work first. If it does not close normally, Control Center will terminate its process tree and unsaved work may be lost.");
+    public string LaunchStopConfirmMessage(string profileName, bool mayTerminateProcess) => mayTerminateProcess
+        ? S(
+            $"A sessão '{profileName}' será encerrada. Salve seu trabalho primeiro. Se ela não fechar normalmente, o Control Center terminará o processo e alterações não salvas poderão ser perdidas.",
+            $"The managed session '{profileName}' will be stopped. Save your work first. If it does not close normally, Control Center will terminate its process tree and unsaved work may be lost.")
+        : S(
+            $"O Control Center pedirá que a janela '{profileName}' feche normalmente. Salve seu trabalho primeiro.",
+            $"Control Center will ask the '{profileName}' window to close normally. Save your work first.");
     public string LaunchStopConfirmButton => S("Parar sessão", "Stop session");
     public string LaunchProfileStartFailedTitle => S("Falha ao iniciar o Codex", "Codex launch failed");
     public string LaunchProfileStopFailedTitle => S("Não foi possível parar o Codex", "Could not stop Codex");
@@ -196,9 +200,13 @@ public sealed class Strings
         "Não foi possível resolver com segurança o local SQLite principal do Codex. Verifique CODEX_SQLITE_HOME e sqlite_home na configuração do Codex.",
         "Control Center could not safely resolve the main Codex SQLite location. Check CODEX_SQLITE_HOME and sqlite_home in Codex configuration.");
     public string LaunchQuitConfirmTitle => S("Sair e parar sessões gerenciadas?", "Quit and stop managed sessions?");
-    public string LaunchQuitConfirmMessage(int count) => S(
-        $"Sair do Control Center também encerrará {count} sessão(ões) gerenciada(s) do Codex. Salve seu trabalho primeiro; se uma sessão não fechar normalmente, suas alterações não salvas poderão ser perdidas.",
-        $"Quitting Control Center will also stop {count} managed Codex session(s). Save your work first; if a session does not close normally, unsaved work may be lost.");
+    public string LaunchQuitConfirmMessage(int count, bool includesCliSessions) => includesCliSessions
+        ? S(
+            $"O Control Center tentará encerrar {count} sessão(ões) gerenciada(s). Salve seu trabalho primeiro. Se uma sessão de CLI não fechar normalmente, alterações não salvas poderão ser perdidas.",
+            $"Control Center will try to stop {count} managed sessions. Save your work first. Unsaved work in CLI sessions may be lost if normal close fails.")
+        : S(
+            $"O Control Center pedirá que as {count} janelas gerenciadas do Codex Desktop fechem normalmente. Salve seu trabalho primeiro.",
+            $"Control Center will ask the {count} managed Codex Desktop windows to close normally. Save your work first.");
     public string LaunchQuitConfirmButton => S("Sair e parar", "Quit and stop");
     public string TrayOpenSettings => S("Configurações", "Settings");
     public string TrayQuit => S("Sair do Control Center", "Quit Control Center");

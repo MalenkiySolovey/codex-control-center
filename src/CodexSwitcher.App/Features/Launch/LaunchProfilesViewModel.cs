@@ -395,7 +395,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
         {
             if (isStopping)
             {
-                if (!await ConfirmStopAsync(item.Name))
+                if (!await ConfirmStopAsync(item.Name, item.Profile.RuntimeKind))
                 {
                     return;
                 }
@@ -442,7 +442,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
 
         try
         {
-            if (!await ConfirmStopAsync(session.ProfileName))
+            if (!await ConfirmStopAsync(session.ProfileName, session.RuntimeKind))
             {
                 return;
             }
@@ -460,12 +460,12 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
         }
     }
 
-    private Task<bool> ConfirmStopAsync(string profileName)
+    private Task<bool> ConfirmStopAsync(string profileName, CodexLaunchRuntimeKind runtimeKind)
     {
         var loc = Strings.Current;
         return _dialogs.ConfirmAsync(
             loc.LaunchStopConfirmTitle,
-            loc.LaunchStopConfirmMessage(profileName),
+            loc.LaunchStopConfirmMessage(profileName, runtimeKind == CodexLaunchRuntimeKind.Cli),
             loc.LaunchStopConfirmButton,
             destructive: true);
     }

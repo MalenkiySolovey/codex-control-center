@@ -147,7 +147,6 @@ public sealed class CodexDesktopBalanceController(
             if (!CodexDesktopBalanceCompatibilityPolicy.IsSupportedVersion(installation.Version))
                 return Strings.Current.CodexDesktopBalanceStatusUnsupportedVersion;
 
-            _billing.Schedule(binding.ProviderProfile, credentialRevision, cancellationToken);
             if (!CodexDesktopBalanceRendererAttachment.TryResolveEndpoint(session, installation, codeHome, out var endpoint) || endpoint is null)
                 return Strings.Current.CodexDesktopBalanceStatusRestartProfile;
 
@@ -165,6 +164,7 @@ public sealed class CodexDesktopBalanceController(
                 _attachments.Add(session.Id, attachment);
             }
 
+            _billing.Schedule(binding.ProviderProfile, credentialRevision, cancellationToken);
             return await attachment.PresentAsync(CreateCurrentPayload, cancellationToken).ConfigureAwait(false);
 
             CodexDesktopBalanceRendererPayload? CreateCurrentPayload()

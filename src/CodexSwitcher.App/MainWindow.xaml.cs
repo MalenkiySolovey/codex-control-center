@@ -617,14 +617,14 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var sessionCount = Root.ViewModel.LaunchProfiles.RunningSessions.Count;
-            if (sessionCount > 0)
+            var sessions = Root.ViewModel.LaunchProfiles.RunningSessions;
+            if (sessions.Count > 0)
             {
                 BringToFront();
                 var loc = Strings.Current;
                 var confirmed = await _dialogs.ConfirmAsync(
                     loc.LaunchQuitConfirmTitle,
-                    loc.LaunchQuitConfirmMessage(sessionCount),
+                    loc.LaunchQuitConfirmMessage(sessions.Count, sessions.Any(session => session.RuntimeKind == CodexLaunchRuntimeKind.Cli)),
                     loc.LaunchQuitConfirmButton,
                     destructive: true);
                 if (!confirmed)

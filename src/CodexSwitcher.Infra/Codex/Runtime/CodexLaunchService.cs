@@ -674,7 +674,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                 {
                     if (state.Presentation.RuntimeKind == CodexLaunchRuntimeKind.Desktop)
                     {
-                        throw new TimeoutException("The managed Codex Desktop window did not close. Close it normally and retry.");
+                        throw new TimeoutException("The managed Codex Desktop process is still running. Use that instance's Quit command to finish closing the profile.");
                     }
 
                     state.Process.Kill(entireProcessTree: true);
