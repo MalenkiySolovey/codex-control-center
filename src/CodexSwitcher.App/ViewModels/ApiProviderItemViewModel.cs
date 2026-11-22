@@ -514,6 +514,12 @@ public sealed partial class ApiProviderItemViewModel : ObservableObject
     private static string FormatMetricValue(ProviderMetric metric, string? label = null)
     {
         if (metric is { IsUnlimited: true, Value: null }) return "API key limit unlimited";
+        if (metric.Scope == ProviderMetricScope.ApiKey &&
+            ProviderQuotaDisplayFormatter.Format(metric.Display, System.Globalization.CultureInfo.InvariantCulture) is { } converted)
+        {
+            return string.IsNullOrWhiteSpace(label) ? converted : $"{label} {converted}";
+        }
+
         var value = metric.Value!.Value.ToString("G29", System.Globalization.CultureInfo.InvariantCulture);
         var unit = metric.Unit.Kind switch
         {

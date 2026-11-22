@@ -12,10 +12,10 @@
     {
       "name": "llm-provider-kit",
       "repository": "https://github.com/MalenkiySolovey/llm-provider-kit.git",
-      "commit": "1e931d3a39bbc4f2309051092117c2f083606806",
+      "commit": "92d33611abc9c2b60f49549674bd24afba44c6d3",
       "project": "src/Llm.ProviderKit/Llm.ProviderKit.csproj",
       "packageId": "Llm.ProviderKit",
-      "version": "0.1.0-preview.6"
+      "version": "0.1.0-preview.7"
     },
     {
       "name": "codex-runtime-kit",

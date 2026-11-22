@@ -40,6 +40,24 @@ public sealed class ApiProviderBillingPresentationTests
     }
 
     [Fact]
+    public void CatalogDenominationShowsKeyAmountsWithTheProviderSymbol()
+    {
+        var unit = ProviderMetricUnit.Provider("quota-units");
+        var profile = Profile(Snapshot(
+            [Metric("remaining", ProviderMetricKind.QuotaRemaining, 2_000_000m, ProviderMetricScope.ApiKey, unit)
+                with { Display = new ProviderMetricDisplay(4m, "USD", "$") },
+             Metric("limit", ProviderMetricKind.QuotaLimit, 2_500_000m, ProviderMetricScope.ApiKey, unit)
+                with { Display = new ProviderMetricDisplay(5m, "USD", "$") }],
+            ProviderBillingStatus.Live, ProviderMetricAvailability.Unknown, ProviderMetricAvailability.Live));
+
+        var card = new ApiProviderItemViewModel(profile, null, hasSecret: true, credentialRevision: "revision-1");
+
+        Assert.Contains("API key remaining $4.00", card.UsageSummary);
+        Assert.Contains("API key maximum $5.00", card.UsageSummary);
+        Assert.Equal("Unknown", card.BalanceSummary);
+    }
+
+    [Fact]
     public void OldSavedObservationIsDisplayedAsStaleAndLastKnown()
     {
         var oldMetric = Metric("balance-usd", ProviderMetricKind.AvailableBalance, 12.3456789m,

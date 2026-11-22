@@ -182,6 +182,10 @@ public sealed class ProviderCapabilityRecipe
     /// <summary>Named-response output mapping used by multi-request recipes.</summary>
     [JsonPropertyName("outputs")]
     public RecipeResponseMapping? Outputs { get; set; }
+
+    [JsonPropertyName("quotaDisplay")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Llm.ProviderKit.Catalog.QuotaDisplayConversion? QuotaDisplay { get; set; }
 }
 
 public sealed class RecipeRequest

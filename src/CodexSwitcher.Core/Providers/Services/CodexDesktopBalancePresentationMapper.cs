@@ -42,15 +42,19 @@ public sealed record CodexDesktopBalancePresentation
     public string? ScopeLabel { get; init; }
     public decimal? Remaining { get; init; }
     public decimal? Maximum { get; init; }
+    public ProviderMetricDisplay? RemainingDisplay { get; init; }
+    public ProviderMetricDisplay? MaximumDisplay { get; init; }
     public decimal? RemainingPercentage { get; init; }
     public bool QuotaUnlimited { get; init; }
     public decimal? KeyUsage { get; init; }
     public string? KeyUsageUnitCode { get; init; }
+    public ProviderMetricDisplay? KeyUsageDisplay { get; init; }
     public decimal? AccountUsage { get; init; }
     public string? AccountUsageUnitCode { get; init; }
     public decimal? AccountBalance { get; init; }
     public string? AccountBalanceUnitCode { get; init; }
     public decimal? Usage { get; init; }
+    public ProviderMetricDisplay? UsageDisplay { get; init; }
     public string? UnitCode { get; init; }
     public string? Period { get; init; }
     public string? Source { get; init; }
@@ -69,12 +73,12 @@ public sealed record CodexDesktopBalancePresentation
                 (russian ? "Безлимитный API-ключ" : "Unlimited API key") +
                 (AccountBalance is { } wallet ? $" · {FormatAmount(wallet, AccountBalanceUnitCode, culture, russian)}" : string.Empty),
             CodexDesktopBalanceKind.ApiKeyAllowance when Remaining is not null =>
-                $"{(russian ? "Осталось" : "Remaining")} {FormatAmount(Remaining.Value, UnitCode, culture, russian)}" +
+                $"{(russian ? "Осталось" : "Remaining")} {FormatAmount(Remaining.Value, UnitCode, culture, russian, RemainingDisplay)}" +
                 (RemainingPercentage is null ? string.Empty : $" · {FormatPercentage(RemainingPercentage.Value, culture)}%"),
             CodexDesktopBalanceKind.AccountBalance when AccountBalance is not null =>
                 $"{(russian ? "Бюджет API" : "API budget")} · {FormatAmount(AccountBalance.Value, UnitCode, culture, russian)}",
             CodexDesktopBalanceKind.UsageOnly when Usage is not null =>
-                $"{UsageLabel(russian, ScopeLabel)} {FormatAmount(Usage.Value, UnitCode, culture, russian)}",
+                $"{UsageLabel(russian, ScopeLabel)} {FormatAmount(Usage.Value, UnitCode, culture, russian, UsageDisplay)}",
             CodexDesktopBalanceKind.StatusOnly => StateLabel(russian),
             _ => string.Empty,
         };
@@ -98,10 +102,10 @@ public sealed record CodexDesktopBalancePresentation
         switch (Kind)
         {
             case CodexDesktopBalanceKind.ApiKeyAllowance when Remaining is not null:
-                lines.Add($"{(russian ? "Осталось" : "Remaining")} {FormatAmount(Remaining.Value, UnitCode, culture, russian)}");
+                lines.Add($"{(russian ? "Осталось" : "Remaining")} {FormatAmount(Remaining.Value, UnitCode, culture, russian, RemainingDisplay)}");
                 if (Maximum is not null)
                 {
-                    lines.Add($"{(russian ? "Максимум" : "Maximum")} {FormatAmount(Maximum.Value, UnitCode, culture, russian)}");
+                    lines.Add($"{(russian ? "Максимум" : "Maximum")} {FormatAmount(Maximum.Value, UnitCode, culture, russian, MaximumDisplay)}");
                 }
 
                 if (RemainingPercentage is not null)
@@ -109,7 +113,7 @@ public sealed record CodexDesktopBalancePresentation
                     lines.Add($"{(russian ? "Доля остатка" : "Remaining share")} {FormatPercentage(RemainingPercentage.Value, culture)}%");
                 }
 
-                AddUsageLine(lines, russian, russian ? "Потрачено ключом" : "Key usage", KeyUsage, KeyUsageUnitCode, culture);
+                AddUsageLine(lines, russian, russian ? "Потрачено ключом" : "Key usage", KeyUsage, KeyUsageUnitCode, culture, KeyUsageDisplay);
                 AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
                 break;
             case CodexDesktopBalanceKind.ApiKeyAllowance when QuotaUnlimited:
@@ -119,7 +123,7 @@ public sealed record CodexDesktopBalancePresentation
                     ? FormatAmount(observedWallet, AccountBalanceUnitCode, culture, russian)
                     : russian ? "неизвестен" : "Unknown";
                 lines.Add($"{accountLabel}: {wallet}");
-                AddUsageLine(lines, russian, russian ? "Потрачено ключом" : "Key usage", KeyUsage, KeyUsageUnitCode, culture);
+                AddUsageLine(lines, russian, russian ? "Потрачено ключом" : "Key usage", KeyUsage, KeyUsageUnitCode, culture, KeyUsageDisplay);
                 AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
                 break;
             case CodexDesktopBalanceKind.AccountBalance when AccountBalance is not null:
@@ -127,7 +131,7 @@ public sealed record CodexDesktopBalancePresentation
                 AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
                 break;
             case CodexDesktopBalanceKind.UsageOnly when Usage is not null:
-                lines.Add($"{UsageLabel(russian, ScopeLabel)} {FormatAmount(Usage.Value, UnitCode, culture, russian)}");
+                lines.Add($"{UsageLabel(russian, ScopeLabel)} {FormatAmount(Usage.Value, UnitCode, culture, russian, UsageDisplay)}");
                 break;
             case CodexDesktopBalanceKind.StatusOnly:
                 lines.Add(StateLabel(russian));
@@ -197,8 +201,12 @@ public sealed record CodexDesktopBalancePresentation
         return formatted;
     }
 
-    private static string FormatAmount(decimal value, string? unitCode, CultureInfo culture, bool russian)
+    private static string FormatAmount(decimal value, string? unitCode, CultureInfo culture, bool russian,
+        ProviderMetricDisplay? display = null)
     {
+        if (ProviderQuotaDisplayFormatter.Format(display, culture, symbolAfterAmount: russian) is { } converted)
+            return converted;
+
         var normalizedUnit = unitCode?.Trim();
         if (string.IsNullOrEmpty(normalizedUnit))
         {
@@ -246,11 +254,11 @@ public sealed record CodexDesktopBalancePresentation
                 : russian ? "Использовано" : "Used";
 
     private static void AddUsageLine(List<string> lines, bool russian, string label, decimal? value, string? unitCode,
-        CultureInfo culture)
+        CultureInfo culture, ProviderMetricDisplay? display = null)
     {
         if (value is not null)
         {
-            lines.Add($"{label}: {FormatAmount(value.Value, unitCode, culture, russian)}");
+            lines.Add($"{label}: {FormatAmount(value.Value, unitCode, culture, russian, display)}");
         }
     }
 
@@ -349,6 +357,9 @@ public static class CodexDesktopBalancePresentationMapper
         {
             var keyRemaining = unlimited ? null : remaining;
             var wallet = unlimited ? accountBalance : null;
+            var sharedDenomination = limit.Display is { IsValid: true } limitDisplay &&
+                keyRemaining?.Display is { IsValid: true } remainingDisplay &&
+                limitDisplay.Currency == remainingDisplay.Currency && limitDisplay.Symbol == remainingDisplay.Symbol;
             decimal? percentage = limit.Value > 0m && keyRemaining?.Value is { } amount
                 ? amount / limit.Value.Value * 100m
                 : null;
@@ -362,10 +373,13 @@ public static class CodexDesktopBalancePresentationMapper
                 ScopeLabel = nameof(ProviderMetricScope.ApiKey),
                 Remaining = keyRemaining?.Value,
                 Maximum = limit.Value,
+                RemainingDisplay = sharedDenomination ? keyRemaining?.Display : null,
+                MaximumDisplay = sharedDenomination ? limit.Display : null,
                 RemainingPercentage = percentage,
                 QuotaUnlimited = unlimited,
                 KeyUsage = keyUsage?.Value,
                 KeyUsageUnitCode = DisplayUnitCode(keyUsage?.Unit),
+                KeyUsageDisplay = keyUsage?.Display,
                 AccountUsage = accountUsage?.Value,
                 AccountUsageUnitCode = DisplayUnitCode(accountUsage?.Unit),
                 AccountBalance = wallet?.Value,
@@ -420,6 +434,7 @@ public static class CodexDesktopBalancePresentationMapper
                 ProfileLabel = SafeLabel(profile.Nickname),
                 ScopeLabel = usage.Scope.ToString(),
                 Usage = usage.Value,
+                UsageDisplay = usage.Scope == ProviderMetricScope.ApiKey ? usage.Display : null,
                 UnitCode = DisplayUnitCode(usage.Unit),
                 Period = SafeLabel(usage.Period),
                 Source = SafeLabel(usage.Source),

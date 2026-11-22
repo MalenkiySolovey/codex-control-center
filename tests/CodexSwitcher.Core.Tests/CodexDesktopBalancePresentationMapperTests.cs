@@ -41,6 +41,27 @@ public sealed class CodexDesktopBalancePresentationMapperTests
     }
 
     [Fact]
+    public void CatalogDenominationFormatsKeyAllowanceAndRetainsRawPercentage()
+    {
+        var profile = Profile();
+        var unit = ProviderMetricUnit.Provider("quota-units");
+        var remaining = Metric("remaining", ProviderMetricKind.QuotaRemaining, 2_000_000m, ProviderMetricScope.ApiKey, unit)
+            with { Display = new ProviderMetricDisplay(4m, "USD", "US$") };
+        var limit = Metric("limit", ProviderMetricKind.QuotaLimit, 2_500_000m, ProviderMetricScope.ApiKey, unit)
+            with { Display = new ProviderMetricDisplay(5m, "USD", "US$") };
+        profile.LastBillingSnapshot = Snapshot(profile, [remaining, limit]);
+
+        var presentation = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.Api(profile), CodeHomeFingerprint, "revision-1", Now);
+
+        Assert.Equal(2_000_000m, presentation.Remaining);
+        Assert.Equal(80m, presentation.RemainingPercentage);
+        Assert.Equal("Remaining US$4.00 · 80%", presentation.ToCompactText(russian: false));
+        Assert.Contains("Максимум 5,00 US$", presentation.ToExpandedLines(russian: true));
+        Assert.Null(presentation.AccountBalance);
+    }
+
+    [Fact]
     public void FiniteKeyAllowanceShowsKeyUsageSeparatelyFromAccountUsage()
     {
         var profile = Profile();
