@@ -2,7 +2,7 @@ using CodexSwitcher.Core.Settings.Models;
 
 namespace CodexSwitcher.Core.Routing.Contracts;
 
-/// <summary>Starts and controls isolated interactive Codex CLI sessions owned by Switchboard.</summary>
+/// <summary>Starts and controls isolated Codex sessions owned by Switchboard.</summary>
 public interface ICodexLaunchService
 {
     event EventHandler? SessionsChanged;
@@ -16,7 +16,8 @@ public interface ICodexLaunchService
         CodexLaunchProfile profile,
         CancellationToken cancellationToken = default);
 
-    Task StopAsync(Guid launchProfileId, CancellationToken cancellationToken = default);
+    /// <summary>Stops the selected session if it is still owned and running.</summary>
+    Task StopSessionAsync(Guid sessionId, CancellationToken cancellationToken = default);
 
     Task StopAllAsync(CancellationToken cancellationToken = default);
 }

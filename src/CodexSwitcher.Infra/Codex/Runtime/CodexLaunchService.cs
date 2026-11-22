@@ -637,12 +637,12 @@ public sealed class CodexLaunchService : ICodexLaunchService
         }
     }
 
-    public async Task StopAsync(Guid launchProfileId, CancellationToken cancellationToken = default)
+    public async Task StopSessionAsync(Guid sessionId, CancellationToken cancellationToken = default)
     {
         SessionState? state;
         lock (_sync)
         {
-            state = _sessions.Values.FirstOrDefault(session => session.Manifest.LaunchProfileId == launchProfileId);
+            _sessions.TryGetValue(sessionId, out state);
         }
 
         if (state is null)
@@ -732,16 +732,13 @@ public sealed class CodexLaunchService : ICodexLaunchService
 
     public async Task StopAllAsync(CancellationToken cancellationToken = default)
     {
-        Guid[] launchProfileIds;
+        Guid[] sessionIds;
         lock (_sync)
         {
-            launchProfileIds = _sessions.Values
-                .Select(session => session.Manifest.LaunchProfileId)
-                .Distinct()
-                .ToArray();
+            sessionIds = _sessions.Keys.ToArray();
         }
 
-        await Task.WhenAll(launchProfileIds.Select(profileId => StopAsync(profileId, cancellationToken)))
+        await Task.WhenAll(sessionIds.Select(sessionId => StopSessionAsync(sessionId, cancellationToken)))
             .ConfigureAwait(false);
     }
 

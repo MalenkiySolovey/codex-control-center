@@ -181,7 +181,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
             Profiles.Add(new CodexLaunchProfileItemViewModel(
                 profile,
                 targetLabel,
-                sessions.Any(session => session.LaunchProfileId == profile.Id)));
+                sessions.FirstOrDefault(session => session.LaunchProfileId == profile.Id)));
         }
 
         OnPropertyChanged(nameof(HasProfiles));
@@ -390,24 +390,16 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
             return;
         }
 
-        var isStopping = item.IsRunning;
+        if (item.RunningSession is { } session)
+        {
+            await StopSessionAsync(session);
+            return;
+        }
+
         try
         {
-            if (isStopping)
-            {
-                if (!await ConfirmStopAsync(item.Name, item.Profile.RuntimeKind))
-                {
-                    return;
-                }
-
-                await _launchService.StopAsync(item.Profile.Id);
-                _notifications.ShowInformation("Codex stopped", $"Managed session '{item.Name}' has stopped.");
-            }
-            else
-            {
-                await _launchService.LaunchAsync(item.Profile);
-                _notifications.ShowSuccess("Codex launched", $"Started '{item.Name}' ({item.RuntimeLabel}) in its isolated profile.");
-            }
+            await _launchService.LaunchAsync(item.Profile);
+            _notifications.ShowSuccess("Codex launched", $"Started '{item.Name}' ({item.RuntimeLabel}) in its isolated profile.");
         }
         catch (CodexLaunchProfileSharingException ex)
         {
@@ -422,9 +414,7 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
         }
         catch (Exception ex)
         {
-            _notifications.ShowError(
-                isStopping ? Strings.Current.LaunchProfileStopFailedTitle : Strings.Current.LaunchProfileStartFailedTitle,
-                ex.Message);
+            _notifications.ShowError(Loc.LaunchProfileStartFailedTitle, ex.Message);
         }
         finally
         {
@@ -447,12 +437,12 @@ public sealed partial class LaunchProfilesViewModel : ObservableObject, IDisposa
                 return;
             }
 
-            await _launchService.StopAsync(session.LaunchProfileId);
+            await _launchService.StopSessionAsync(session.Id);
             _notifications.ShowInformation("Codex stopped", $"Managed session '{session.ProfileName}' has stopped.");
         }
         catch (Exception ex)
         {
-            _notifications.ShowError("Could not stop Codex", ex.Message);
+            _notifications.ShowError(Loc.LaunchProfileStopFailedTitle, ex.Message);
         }
         finally
         {

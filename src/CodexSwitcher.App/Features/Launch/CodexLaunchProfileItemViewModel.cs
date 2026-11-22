@@ -1,15 +1,14 @@
 using CodexSwitcher.Core.Settings.Models;
 using CodexSwitcher.App.Localization;
-using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace CodexSwitcher.App.Features.Launch;
 
-public sealed partial class CodexLaunchProfileItemViewModel : ObservableObject
+public sealed class CodexLaunchProfileItemViewModel
 {
     public CodexLaunchProfile Profile { get; }
 
-    [ObservableProperty]
-    public partial bool IsRunning { get; set; }
+    public CodexLaunchSession? RunningSession { get; }
+    public bool IsRunning => RunningSession is not null;
 
     public string Name => Profile.Name;
     public string TargetLabel { get; }
@@ -24,17 +23,10 @@ public sealed partial class CodexLaunchProfileItemViewModel : ObservableObject
         ? Strings.Current.TrayLaunchProfileStop
         : Strings.Current.TrayLaunchProfileStart;
 
-    public CodexLaunchProfileItemViewModel(CodexLaunchProfile profile, string targetLabel, bool isRunning)
+    public CodexLaunchProfileItemViewModel(CodexLaunchProfile profile, string targetLabel, CodexLaunchSession? runningSession)
     {
         Profile = profile;
         TargetLabel = targetLabel;
-        IsRunning = isRunning;
-        PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(IsRunning))
-            {
-                OnPropertyChanged(nameof(ActionLabel));
-            }
-        };
+        RunningSession = runningSession;
     }
 }

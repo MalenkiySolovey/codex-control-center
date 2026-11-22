@@ -20,7 +20,7 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace CodexSwitcher.Core.Tests;
 
-public sealed class LaunchProfilesCorruptProviderIndexStartupTests
+public sealed class LaunchProfilesViewModelTests
 {
     [Fact]
     public void ConstructionAndLoad_WithCorruptProviderIndexKeepLaunchProfilesAvailableAndPreserveFile()
@@ -50,10 +50,10 @@ public sealed class LaunchProfilesCorruptProviderIndexStartupTests
             registry,
             new EmptyAccountReadSnapshotProvider(),
             providerStore,
-            new EmptyCodexLaunchService(),
+            new StubCodexLaunchService(),
             notifications,
             ImmediateUiDispatcher.Instance,
-            new NoOpCommonDialogService());
+            new StubCommonDialogService());
 
         Assert.Empty(viewModel.Profiles);
 
@@ -71,6 +71,67 @@ public sealed class LaunchProfilesCorruptProviderIndexStartupTests
         Assert.Empty(viewModel.TargetChoices);
         Assert.Equal(1, notifications.WarningCount);
         Assert.Equal(originalBytes, File.ReadAllBytes(paths.ApiProvidersPath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConfirmedStopTargetsSelectedSessionAfterProfileRelaunch(bool fromRunningList)
+    {
+        using var temp = new TempDir();
+        var profile = new CodexLaunchProfile
+        {
+            Name = "Synthetic API launch",
+            TargetKind = CodexLaunchTargetKind.ApiProvider,
+            RuntimeKind = CodexLaunchRuntimeKind.Desktop,
+            CredentialProfileId = Guid.NewGuid(),
+            WorkingDirectory = temp.Root,
+        };
+        var original = new CodexLaunchSession(
+            Guid.NewGuid(),
+            profile.Id,
+            profile.TargetKind,
+            profile.RuntimeKind,
+            profile.Name,
+            "Synthetic provider",
+            null,
+            temp.Root,
+            123,
+            DateTimeOffset.UnixEpoch);
+        var replacement = original with
+        {
+            Id = Guid.NewGuid(),
+            ProcessId = 456,
+            StartedAt = original.StartedAt.AddSeconds(1)
+        };
+        var launchService = new StubCodexLaunchService { Sessions = [original] };
+        using var viewModel = new LaunchProfilesViewModel(
+            new AppSettings { CodexLaunchProfiles = [profile] },
+            new NoOpSettingsStore(),
+            new AccountRegistry(new EmptyProfileStore(), new FakeClock(), new FakeAudit()),
+            new EmptyAccountReadSnapshotProvider(),
+            new ApiProviderStore(new PhysicalFileSystem(), Path.Combine(temp.Root, "api-providers.json")),
+            launchService,
+            new RecordingNotificationService(),
+            ImmediateUiDispatcher.Instance,
+            new StubCommonDialogService(() =>
+            {
+                launchService.Sessions = [replacement];
+                return true;
+            }));
+        viewModel.Load();
+
+        if (fromRunningList)
+        {
+            await viewModel.StopSessionCommand.ExecuteAsync(Assert.Single(viewModel.RunningSessions));
+        }
+        else
+        {
+            await viewModel.ToggleProfileCommand.ExecuteAsync(Assert.Single(viewModel.Profiles));
+        }
+
+        Assert.Equal(original.Id, launchService.StoppedSessionId);
+        Assert.Equal(replacement, Assert.Single(viewModel.RunningSessions));
     }
 
     private sealed class EmptyProfileStore : IProfileStore
@@ -100,7 +161,7 @@ public sealed class LaunchProfilesCorruptProviderIndexStartupTests
             0);
     }
 
-    private sealed class EmptyCodexLaunchService : ICodexLaunchService
+    private sealed class StubCodexLaunchService : ICodexLaunchService
     {
         public event EventHandler? SessionsChanged
         {
@@ -114,13 +175,22 @@ public sealed class LaunchProfilesCorruptProviderIndexStartupTests
             remove { }
         }
 
-        public IReadOnlyList<CodexLaunchSession> GetRunningSessions() => [];
+        public IReadOnlyList<CodexLaunchSession> Sessions { get; set; } = [];
+        public Guid? StoppedSessionId { get; private set; }
+
+        public IReadOnlyList<CodexLaunchSession> GetRunningSessions() => Sessions;
         public bool IsChatGptProfileInUse(Guid profileId) => false;
 
         public Task<CodexLaunchSession> LaunchAsync(CodexLaunchProfile profile, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task StopAsync(Guid launchProfileId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StopSessionAsync(Guid sessionId, CancellationToken cancellationToken = default)
+        {
+            StoppedSessionId = sessionId;
+            Sessions = Sessions.Where(session => session.Id != sessionId).ToArray();
+            return Task.CompletedTask;
+        }
+
         public Task StopAllAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
@@ -130,9 +200,10 @@ public sealed class LaunchProfilesCorruptProviderIndexStartupTests
         public void Save(AppSettings settings) { }
     }
 
-    private sealed class NoOpCommonDialogService : ICommonDialogService
+    private sealed class StubCommonDialogService(Func<bool>? confirm = null) : ICommonDialogService
     {
-        public Task<bool> ConfirmAsync(string title, string message, string okText, bool destructive = false) => Task.FromResult(false);
+        public Task<bool> ConfirmAsync(string title, string message, string okText, bool destructive = false) =>
+            Task.FromResult(confirm?.Invoke() ?? false);
         public Task<string?> PromptTextAsync(string title, string prompt, string initialValue, string okText) => Task.FromResult<string?>(null);
         public Task ShowMessageAsync(string title, string message) => Task.CompletedTask;
     }
