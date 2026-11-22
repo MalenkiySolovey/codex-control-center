@@ -46,9 +46,15 @@ public sealed class CodexDesktopBalancePresentationMapperTests
         var profile = Profile();
         var unit = ProviderMetricUnit.Provider("quota-units");
         var remaining = Metric("remaining", ProviderMetricKind.QuotaRemaining, 2_000_000m, ProviderMetricScope.ApiKey, unit)
-            with { Display = new ProviderMetricDisplay(4m, "USD", "US$") };
+            with
+        {
+            Display = new ProviderMetricDisplay(4m, "USD", "US$")
+        };
         var limit = Metric("limit", ProviderMetricKind.QuotaLimit, 2_500_000m, ProviderMetricScope.ApiKey, unit)
-            with { Display = new ProviderMetricDisplay(5m, "USD", "US$") };
+            with
+        {
+            Display = new ProviderMetricDisplay(5m, "USD", "US$")
+        };
         profile.LastBillingSnapshot = Snapshot(profile, [remaining, limit]);
 
         var presentation = CodexDesktopBalancePresentationMapper.Create(
