@@ -215,10 +215,10 @@ public partial class App : Application
                     tracer.RecordMilestone("S8:TotpTimersStopped");
                 });
 
-                // Phase 2: Terminate owned child processes promptly in parallel
-                await tracer.MeasurePhaseAsync("TerminateOwnedProcesses", async () =>
+                // Phase 2: Stop managed sessions, then clean up eligible registry children.
+                await tracer.MeasurePhaseAsync("StopOwnedProcesses", async () =>
                 {
-                    tracer.RecordMilestone("S9:TerminateOwnedProcessesRequested");
+                    tracer.RecordMilestone("S9:OwnedProcessShutdownRequested");
                     var launchService = _host.Services.GetService<ICodexLaunchService>();
                     if (launchService is not null)
                     {
@@ -243,7 +243,7 @@ public partial class App : Application
                         }
                         catch { }
                     }
-                    tracer.RecordMilestone("S10:OwnedProcessesExited");
+                    tracer.RecordMilestone("S10:OwnedProcessShutdownRequestsFinished");
                 }).ConfigureAwait(false);
 
                 // Phase 3: Stop Host with bounded timeout

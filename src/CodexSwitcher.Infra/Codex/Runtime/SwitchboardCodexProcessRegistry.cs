@@ -6,7 +6,7 @@ using CodexSwitcher.Core.Routing.Contracts;
 namespace CodexSwitcher.Infra.Codex.Runtime;
 
 /// <summary>
-/// Thread-safe registry tracking child Codex app-server and CLI processes spawned by Codex Switchboard.
+/// Thread-safe registry tracking Codex processes spawned by Codex Switchboard.
 /// Ensures child processes are not mistaken for external user CLI instances and performs bounded,
 /// best-effort shutdown without terminating a process that reused an old PID.
 /// </summary>
@@ -34,16 +34,16 @@ public sealed class SwitchboardCodexProcessRegistry : ISwitchboardCodexProcessRe
     {
         if (processId > 0)
         {
-            RegisterOwnedProcess(processId, TryGetStartTimeUtcTicks(processId));
+            RegisterOwnedProcess(processId, TryGetStartTimeUtcTicks(processId), allowForceTerminationOnShutdown: true);
         }
     }
 
-    public void RegisterOwnedProcess(Process process)
+    public void RegisterOwnedProcess(Process process, bool allowForceTerminationOnShutdown = true)
     {
         ArgumentNullException.ThrowIfNull(process);
         if (process.Id > 0)
         {
-            RegisterOwnedProcess(process.Id, TryGetStartTimeUtcTicks(process));
+            RegisterOwnedProcess(process.Id, TryGetStartTimeUtcTicks(process), allowForceTerminationOnShutdown);
         }
     }
 
@@ -116,12 +116,9 @@ public sealed class SwitchboardCodexProcessRegistry : ISwitchboardCodexProcessRe
 
     public async Task TerminateAllOwnedProcessesAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
-        var ownedProcesses = _ownedPids.ToArray();
-        if (ownedProcesses.Length == 0)
-            return;
-
-        var tasks = ownedProcesses.Select(pair =>
-            TerminateSingleProcessAsync(pair.Key, pair.Value, timeout, cancellationToken)).ToList();
+        var tasks = _ownedPids.ToArray()
+            .Where(pair => pair.Value.AllowForceTerminationOnShutdown)
+            .Select(pair => TerminateSingleProcessAsync(pair.Key, pair.Value, timeout, cancellationToken));
         await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
@@ -281,13 +278,21 @@ public sealed class SwitchboardCodexProcessRegistry : ISwitchboardCodexProcessRe
         return verified;
     }
 
-    private void RegisterOwnedProcess(int processId, long? startTimeUtcTicks)
+    private void RegisterOwnedProcess(int processId, long? startTimeUtcTicks, bool allowForceTerminationOnShutdown)
     {
-        var identity = new OwnedProcessIdentity(startTimeUtcTicks);
-        _ownedPids.AddOrUpdate(
-            processId,
-            identity,
-            (_, current) => identity.StartTimeUtcTicks is not null ? identity : current);
+        var identity = new OwnedProcessIdentity(startTimeUtcTicks, allowForceTerminationOnShutdown);
+        _ownedPids.AddOrUpdate(processId, identity, (_, current) =>
+        {
+            if (current.StartTimeUtcTicks is long previousStart && startTimeUtcTicks is long start && previousStart != start)
+            {
+                return identity;
+            }
+
+            // Re-registering the same process must not grant permission for forced shutdown.
+            return new OwnedProcessIdentity(
+                startTimeUtcTicks ?? current.StartTimeUtcTicks,
+                current.AllowForceTerminationOnShutdown && allowForceTerminationOnShutdown);
+        });
     }
 
     private static long? TryGetStartTimeUtcTicks(int processId)
@@ -326,7 +331,7 @@ public sealed class SwitchboardCodexProcessRegistry : ISwitchboardCodexProcessRe
         catch { return false; }
     }
 
-    private sealed record OwnedProcessIdentity(long? StartTimeUtcTicks);
+    private sealed record OwnedProcessIdentity(long? StartTimeUtcTicks, bool AllowForceTerminationOnShutdown);
 
     private sealed class ProcessLifecycleLease(SemaphoreSlim gate) : IDisposable
     {

@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Text.Json;
+using CodexSwitcher.App.Composition;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CodexSwitcher.Core.Tests;
@@ -56,36 +59,56 @@ public class SwitchboardCodexProcessRegistryTests
     }
 
     [Fact]
-    public async Task TerminateAllOwnedProcessesAsync_KillsOnlyTheRegisteredLiveProcess()
+    public async Task TerminateAllOwnedProcessesAsync_PreservesRecoveredDesktopAndRejectsMismatchedIdentity()
     {
         if (!OperatingSystem.IsWindows())
         {
             return;
         }
 
+        using var temp = new TempDir();
+        var paths = new AppPaths(temp.Root, temp.Combine("codex-home"), temp.Combine("legacy"));
+        using var services = new ServiceCollection().AddSwitchboardServices(paths).BuildServiceProvider();
         using var owned = StartLongRunningLocalProcess();
+        using var desktop = StartLongRunningLocalProcess();
         using var unrelated = StartLongRunningLocalProcess();
-        var registry = new SwitchboardCodexProcessRegistry();
-        registry.RegisterOwnedProcess(owned);
 
         try
         {
+            var desktopManifest = SaveDesktopManifest(paths, desktop.Id, desktop.StartTime.ToUniversalTime());
+            var unrelatedStart = unrelated.StartTime.ToUniversalTime();
+            var mismatchedManifest = SaveDesktopManifest(paths, unrelated.Id, unrelatedStart.AddMilliseconds(250));
+            var reusedPidManifest = SaveDesktopManifest(paths, unrelated.Id, unrelatedStart.AddMilliseconds(-250));
+            var registry = services.GetRequiredService<ISwitchboardCodexProcessRegistry>();
+            var launchService = services.GetRequiredService<ICodexLaunchService>();
+            var session = Assert.Single(launchService.GetRunningSessions());
+            Assert.Equal(desktop.Id, session.ProcessId);
+            Assert.Equal(CodexLaunchRuntimeKind.Desktop, session.RuntimeKind);
+            Assert.Contains(desktop.Id, registry.GetOwnedProcessTreeIds());
+            Assert.False(registry.IsOwnedProcess(unrelated.Id));
+
+            registry.RegisterOwnedProcess(owned);
+            registry.RegisterOwnedProcess(desktop.Id);
             await registry.TerminateAllOwnedProcessesAsync(TimeSpan.FromSeconds(2));
 
+
             Assert.True(owned.HasExited);
+            Assert.False(desktop.HasExited);
             Assert.False(unrelated.HasExited);
-            Assert.Empty(registry.GetOwnedProcessIds());
+            Assert.Equal([desktop.Id], registry.GetOwnedProcessIds());
+            Assert.True(File.Exists(desktopManifest));
+            Assert.True(File.Exists(mismatchedManifest));
+            Assert.False(File.Exists(reusedPidManifest));
         }
         finally
         {
-            if (!owned.HasExited)
+            foreach (var process in new[] { owned, desktop, unrelated })
             {
-                owned.Kill(entireProcessTree: true);
-            }
-
-            if (!unrelated.HasExited)
-            {
-                unrelated.Kill(entireProcessTree: true);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
+                }
             }
         }
     }
@@ -140,6 +163,27 @@ public class SwitchboardCodexProcessRegistryTests
                 await process.WaitForExitAsync();
             }
         }
+    }
+
+    private static string SaveDesktopManifest(AppPaths paths, int processId, DateTime processStartedAt)
+    {
+        var launchProfileId = Guid.NewGuid();
+        var credentialProfileId = Guid.NewGuid();
+        var home = Path.Combine(paths.LaunchHomesDir, $"{launchProfileId:N}-2-{credentialProfileId:N}-desktop");
+        Directory.CreateDirectory(home);
+        var path = Path.Combine(home, ".switchboard-launch.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(new
+        {
+            sessionId = Guid.NewGuid(),
+            launchProfileId,
+            targetKind = CodexLaunchTargetKind.ApiProvider,
+            runtimeKind = CodexLaunchRuntimeKind.Cli, // Legacy records relied on the Desktop home suffix.
+            credentialProfileId,
+            processId,
+            processStartedAt,
+            processStartMayHaveBeenIssued = true,
+        }));
+        return path;
     }
 
     private static Process StartLongRunningLocalProcess()

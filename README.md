@@ -80,7 +80,7 @@ Codex Control Center solves both challenges:
 ### Isolated Multi-Account Sandboxes
 - **Zero-Write Invariant:** Background quota polling and telemetry queries never modify or lock `%USERPROFILE%\.codex\auth.json`.
 - **Sandbox Isolation:** Spawns headless `codex app-server --listen stdio://` child processes within dedicated, isolated working directories (`CODEX_HOME`), completely decoupled from your primary coding environment.
-- **Process Lifecycle Management:** Automatic timeout guards and graceful shutdown ensure no orphaned background processes remain.
+- **Process Lifecycle Management.** Timeouts bound shutdown of Control Center's headless app-server processes.
 
 ### Profile-Scoped API Providers & Model Inventories
 - **Custom Provider Profiles:** Add and manage OpenAI Responses-compatible API providers with credentials encrypted at rest via Windows DPAPI (`CurrentUser`).
@@ -100,7 +100,8 @@ Codex Control Center solves both challenges:
 - **HeJu API / JuAPI:** Registered OpenAI-compatible provider support with separate **Global** and **Hong Kong** routes.
 - **Read-Only Model Discovery:** Both routes expose model discovery through their qualified `/v1/models` endpoints using the profile's encrypted bearer key.
 - **HeJu Global key quota:** The signed catalog includes a read-only API-key quota probe alongside the existing usage recipe. Finite keys show remaining and maximum quota in raw units. Unlimited keys have an explicit unlimited status. The account wallet and display currency are unknown.
-- **Codex Desktop API balance:** Enable this option in Settings before launching a managed API Desktop profile. The chip and its expanded panel follow that window's isolated profile and credential. The current renderer uses the header toolbar when the native usage label is absent. Turning the option off removes the chip. Control Center closes managed Desktop sessions gracefully.
+- **Codex Desktop API balance.** Enable this option in Settings before launching a managed API Desktop profile. The chip and its expanded panel follow that window's isolated profile and credential. The current renderer uses the header toolbar when the native usage label is absent. Turning the option off removes the chip.
+- **Managed Desktop shutdown.** Control Center requests a normal window close. If Codex Desktop keeps running in the background, Control Center keeps its launch record and isolated profile. To exit a visible managed instance directly, use its Quit command (`Ctrl+Q` on Windows).
 
 ### Safe Legacy Data Migration
 - **Zero-Friction Upgrade:** Automatically detects existing profiles from legacy `%LOCALAPPDATA%\CodexSwitcher`.

@@ -63,6 +63,8 @@ public sealed class CodexRuntimeKitAdapterTests
         }
 
         public void RegisterOwnedProcess(int processId) => RegisteredProcessId = processId;
+        public void RegisterOwnedProcess(Process process, bool allowForceTerminationOnShutdown = true) =>
+            RegisteredProcessId = process.Id;
 
         public void UnregisterOwnedProcess(int processId) => UnregisteredProcessId = processId;
 

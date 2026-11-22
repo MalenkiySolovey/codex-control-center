@@ -493,7 +493,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                     enableDesktopBalanceDebugging: CodexDesktopBalanceLaunchPolicy.ShouldEnableLoopbackDebugging(
                         _settings.CodexDesktopApiBalanceIntegrationEnabled,
                         profile));
-                _processRegistry.RegisterOwnedProcess(startedProcess);
+                RegisterLaunchProcess(startedProcess, profile.RuntimeKind);
             }
             manifest.ProcessId = startedProcess.Id;
             _fs.WriteAllTextAtomic(GetManifestPath(home), JsonSerializer.Serialize(manifest, JsonOptions));
@@ -572,7 +572,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                     {
                         using (await _processRegistry.AcquireProcessLifecycleLeaseAsync(CancellationToken.None).ConfigureAwait(false))
                         {
-                            _processRegistry.RegisterOwnedProcess(startedProcess);
+                            RegisterLaunchProcess(startedProcess, profile.RuntimeKind);
                         }
                     }
                     catch { }
@@ -776,7 +776,8 @@ public sealed class CodexLaunchService : ICodexLaunchService
                 continue;
             }
 
-            manifest.RuntimeKind = ResolveRuntimeKind(manifest, home);
+            var runtimeKind = ResolveRuntimeKind(manifest, home);
+            manifest.RuntimeKind = runtimeKind;
             var credentialHomeSecured =
                 manifest.TargetKind != CodexLaunchTargetKind.ChatGptAccount ||
                 TrySecureCredentialHome(home, manifest.ProfileName);
@@ -816,15 +817,12 @@ public sealed class CodexLaunchService : ICodexLaunchService
             {
                 process = Process.GetProcessById(manifest.ProcessId);
                 var actualStart = TryGetStartTime(process);
-                if (actualStart is null)
+                if (actualStart is null || actualStart < manifest.ProcessStartedAt)
                 {
                     processStateUnknown = true;
                 }
-                else if (Math.Abs((actualStart.Value - manifest.ProcessStartedAt).TotalSeconds) >= 2)
-                {
-                    processStateUnknown = true;
-                }
-                else if (!process.HasExited)
+                // A later start at the recorded PID proves the original process has exited.
+                else if (actualStart == manifest.ProcessStartedAt && !process.HasExited)
                 {
                     matchingProcessIsRunning = true;
                     IDisposable? profileLock = manifest.TargetKind == CodexLaunchTargetKind.ChatGptAccount
@@ -838,7 +836,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
 
                     using (_processRegistry.AcquireProcessLifecycleLease())
                     {
-                        _processRegistry.RegisterOwnedProcess(process);
+                        RegisterLaunchProcess(process, runtimeKind);
                     }
                     WatchProcess(state);
                     process = null;
@@ -954,6 +952,9 @@ public sealed class CodexLaunchService : ICodexLaunchService
             profileLock?.Dispose();
         }
     }
+
+    private void RegisterLaunchProcess(Process process, CodexLaunchRuntimeKind runtimeKind) =>
+        _processRegistry.RegisterOwnedProcess(process, allowForceTerminationOnShutdown: runtimeKind != CodexLaunchRuntimeKind.Desktop);
 
     private void WatchProcess(SessionState state)
     {
