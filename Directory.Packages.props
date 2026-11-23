@@ -6,7 +6,7 @@
   <ItemGroup>
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="ChatGpt.Accounts" Version="0.1.0-preview.3" />
-    <PackageVersion Include="Codex.RuntimeKit" Version="0.1.0-preview.3" />
+    <PackageVersion Include="Codex.RuntimeKit" Version="0.1.0-preview.4" />
     <PackageVersion Include="H.NotifyIcon.WinUI" Version="2.4.1" />
     <PackageVersion Include="JsonSchema.Net" Version="9.4.1" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />

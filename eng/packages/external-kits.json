@@ -20,10 +20,10 @@
     {
       "name": "codex-runtime-kit",
       "repository": "https://github.com/MalenkiySolovey/codex-runtime-kit.git",
-      "commit": "e7bcfb7fad35f35c8509e76d2317691f0c1648b1",
+      "commit": "9c33ba84baddb4c751751d3768c70dada916c107",
       "project": "src/Codex.RuntimeKit/Codex.RuntimeKit.csproj",
       "packageId": "Codex.RuntimeKit",
-      "version": "0.1.0-preview.3"
+      "version": "0.1.0-preview.4"
     }
   ]
 }

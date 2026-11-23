@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Codex.RuntimeKit.Desktop.Discovery;
+using Codex.RuntimeKit.Desktop.Lifecycle;
 using CodexSwitcher.Core.Accounts.Contracts;
 using CodexSwitcher.Core.Accounts.Formatting;
 using CodexSwitcher.Core.Accounts.Models;
@@ -34,13 +35,14 @@ public sealed class CodexLaunchService : ICodexLaunchService
     private const string ApiKeyEnvironmentVariable = "CODEX_SWITCHBOARD_API_KEY";
     private const string CodexSqliteHomeEnvironmentVariable = "CODEX_SQLITE_HOME";
     private const string DesktopUserDataEnvironmentVariable = "CODEX_ELECTRON_USER_DATA_PATH";
-    private const string ManifestFileName = ".switchboard-launch.json";
+    internal const string ManifestFileName = ".switchboard-launch.json";
     private const string SharedChatsManifestFileName = ".switchboard-shared-chats.json";
     private const uint SymbolicLinkFlagDirectory = 0x1;
     private const uint SymbolicLinkFlagAllowUnprivilegedCreate = 0x2;
     private const int ErrorInvalidParameter = 87;
     private const int ErrorAlreadyExists = 183;
     private const int ErrorPrivilegeNotHeld = 1314;
+    private static readonly TimeSpan DesktopQuitTimeout = TimeSpan.FromSeconds(18);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -239,9 +241,10 @@ public sealed class CodexLaunchService : ICodexLaunchService
             }
         }
 
-        var executable = profile.RuntimeKind == CodexLaunchRuntimeKind.Desktop
-            ? ResolveDesktopExecutable()
-            : ResolveExecutable();
+        var desktopInstallation = profile.RuntimeKind == CodexLaunchRuntimeKind.Desktop
+            ? ResolveDesktopInstallation()
+            : null;
+        var executable = desktopInstallation?.ExecutablePath ?? ResolveExecutable();
         var arguments = ParseArguments(profile.Arguments);
         ValidateArguments(arguments);
         var workingDirectory = ResolveWorkingDirectory(profile.WorkingDirectory);
@@ -284,7 +287,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
         string? catalogPath = null;
         Guid? credentialOwnerId = null;
         string? credentialRevision = null;
-        LaunchManifest manifest = null!;
+        LaunchManifest? manifest = null;
         try
         {
             if (profile.TargetKind == CodexLaunchTargetKind.ChatGptAccount)
@@ -478,6 +481,12 @@ public sealed class CodexLaunchService : ICodexLaunchService
 
             // A zero-PID manifest is recoverable only while this remains false.
             // From this durable marker onward, a crash may leave an untracked child.
+            if (desktopInstallation is not null && CodexDesktopParentLifetime.IsSupported(desktopInstallation))
+            {
+                manifest.DesktopExitSupervisor = CodexDesktopExitSupervisor.TryStart(
+                    GetManifestPath(home), sessionId, cancellationToken);
+            }
+
             manifest.ProcessStartMayHaveBeenIssued = true;
             _fs.WriteAllTextAtomic(GetManifestPath(home), JsonSerializer.Serialize(manifest, JsonOptions));
             using (await _processRegistry.AcquireProcessLifecycleLeaseAsync(cancellationToken).ConfigureAwait(false))
@@ -492,7 +501,9 @@ public sealed class CodexLaunchService : ICodexLaunchService
                     sharedSqliteHome,
                     enableDesktopBalanceDebugging: CodexDesktopBalanceLaunchPolicy.ShouldEnableLoopbackDebugging(
                         _settings.CodexDesktopApiBalanceIntegrationEnabled,
-                        profile));
+                        profile),
+                    desktopInstallation,
+                    manifest.DesktopExitSupervisor?.ProcessId);
                 RegisterLaunchProcess(startedProcess, profile.RuntimeKind);
             }
             manifest.ProcessId = startedProcess.Id;
@@ -523,7 +534,10 @@ public sealed class CodexLaunchService : ICodexLaunchService
         }
         catch
         {
-            if (startedProcess is not null)
+            using var exitSupervisor = manifest?.DesktopExitSupervisor is { } supervisor
+                ? CodexDesktopExitSupervisor.TryRequestStop(manifest.SessionId, supervisor)
+                : null;
+            if (startedProcess is not null && manifest is not null)
             {
                 var processStopped = false;
                 try
@@ -536,14 +550,18 @@ public sealed class CodexLaunchService : ICodexLaunchService
                     {
                         if (profile.RuntimeKind == CodexLaunchRuntimeKind.Desktop)
                         {
-                            startedProcess.CloseMainWindow();
+                            if (manifest.DesktopExitSupervisor is null)
+                            {
+                                startedProcess.CloseMainWindow();
+                            }
                         }
                         else
                         {
                             startedProcess.Kill(entireProcessTree: true);
                         }
                         await startedProcess.WaitForExitAsync(CancellationToken.None)
-                            .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+                            .WaitAsync(manifest.DesktopExitSupervisor is not null ? DesktopQuitTimeout : TimeSpan.FromSeconds(5),
+                                CancellationToken.None)
                             .ConfigureAwait(false);
                         processStopped = startedProcess.HasExited;
                     }
@@ -615,7 +633,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
                     }
                 }
             }
-            else if (createdState is null)
+            else if (startedProcess is null && createdState is null)
             {
                 // No CLI process owns this freshly seeded home, so discard only the
                 // plaintext auth copy created by this failed launch attempt.
@@ -650,15 +668,24 @@ public sealed class CodexLaunchService : ICodexLaunchService
             return;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             if (!HasExitedOrDetached(state.Process))
             {
                 try
                 {
-                    state.Process.CloseMainWindow();
+                    var supervisor = state.Presentation.RuntimeKind == CodexLaunchRuntimeKind.Desktop
+                        ? state.Manifest.DesktopExitSupervisor
+                        : null;
+                    using var exitSupervisor = CodexDesktopExitSupervisor.TryRequestStop(sessionId, supervisor);
+                    if (supervisor is null)
+                    {
+                        state.Process.CloseMainWindow();
+                    }
+
                     using var gracefulTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    gracefulTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+                    gracefulTimeout.CancelAfter(supervisor is not null ? DesktopQuitTimeout : TimeSpan.FromSeconds(10));
                     await WaitForExitOrDetachedAsync(state.Process, gracefulTimeout.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -760,7 +787,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
             LaunchManifest? manifest;
             try
             {
-                manifest = JsonSerializer.Deserialize<LaunchManifest>(_fs.ReadAllText(manifestPath), JsonOptions);
+                manifest = DeserializeLaunchManifest(_fs.ReadAllText(manifestPath));
             }
             catch
             {
@@ -1059,7 +1086,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
         return runtime.ExecutablePath;
     }
 
-    private static string ResolveDesktopExecutable()
+    private static CodexDesktopInstallation ResolveDesktopInstallation()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -1067,7 +1094,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
         }
 
         var result = new CodexDesktopDiscovery().Discover();
-        return result.Installation?.ExecutablePath ??
+        return result.Installation ??
             throw new InvalidOperationException($"Could not verify the installed Codex Desktop package ({result.DiagnosticCode}).");
     }
 
@@ -1079,7 +1106,9 @@ public sealed class CodexLaunchService : ICodexLaunchService
         string? apiKey,
         CodexLaunchRuntimeKind runtimeKind,
         string? sharedSqliteHome,
-        bool enableDesktopBalanceDebugging)
+        bool enableDesktopBalanceDebugging,
+        CodexDesktopInstallation? desktopInstallation,
+        int? desktopSupervisorProcessId)
     {
         var extension = Path.GetExtension(executable);
         var startInfo = new ProcessStartInfo
@@ -1150,6 +1179,11 @@ public sealed class CodexLaunchService : ICodexLaunchService
             {
                 startInfo.ArgumentList.Add(argument);
             }
+        }
+
+        if (desktopInstallation is not null)
+        {
+            CodexDesktopParentLifetime.ConfigureLaunch(startInfo, desktopInstallation, desktopSupervisorProcessId);
         }
 
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -1989,7 +2023,10 @@ public sealed class CodexLaunchService : ICodexLaunchService
         public bool WatcherAttached { get; set; }
     }
 
-    private sealed class LaunchManifest
+    internal static LaunchManifest? DeserializeLaunchManifest(string contents) =>
+        JsonSerializer.Deserialize<LaunchManifest>(contents, JsonOptions);
+
+    internal sealed class LaunchManifest
     {
         public Guid SessionId { get; set; }
         public Guid LaunchProfileId { get; set; }
@@ -2005,6 +2042,7 @@ public sealed class CodexLaunchService : ICodexLaunchService
         public int ProcessId { get; set; }
         public DateTimeOffset ProcessStartedAt { get; set; }
         public bool? ProcessStartMayHaveBeenIssued { get; set; }
+        public DesktopExitSupervisorIdentity? DesktopExitSupervisor { get; set; }
         public string? InitialAuthFingerprint { get; set; }
     }
 

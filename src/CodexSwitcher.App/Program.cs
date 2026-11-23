@@ -98,6 +98,11 @@ public static class Program
     public static void Main(string[] args)
     {
         CommandLineArgs = args ?? [];
+        if (CodexDesktopExitSupervisor.TryRun(CommandLineArgs))
+        {
+            return;
+        }
+
         StartupTracer.Instance.RecordMilestone("T0:ProcessEntry");
         if (args != null && args.Length > 0 && Array.Exists(args, a => a.Equals("--diagnose-windows-auth", StringComparison.OrdinalIgnoreCase)))
         {

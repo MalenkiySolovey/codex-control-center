@@ -101,7 +101,7 @@ Codex Control Center solves both challenges:
 - **Read-Only Model Discovery:** Both routes expose model discovery through their qualified `/v1/models` endpoints using the profile's encrypted bearer key.
 - **HeJu Global key quota.** The signed catalog declares the key-quota endpoint and its USD display conversion. ProviderKit calculates the display amounts and retains the raw quota. The API key card shows finite remaining and maximum amounts or an explicit unlimited status. The account wallet stays unknown when the provider has supplied no wallet value.
 - **Codex Desktop API balance.** Enable this option in Settings before launching a managed API Desktop profile. The chip and its expanded panel follow that window's isolated profile and credential. The current renderer uses the header toolbar when the native usage label is absent. Turning the option off removes the chip.
-- **Managed Desktop shutdown.** Control Center requests a normal window close. If Codex Desktop keeps running in the background, Control Center keeps its launch record and isolated profile. To exit a visible managed instance directly, use its Quit command (`Ctrl+Q` on Windows).
+- **Managed Desktop shutdown.** Stop requests a normal app Quit for each newly managed session on the verified Desktop build `26.1117.4957.0`. Older sessions and other builds use a normal window-close request. Control Center keeps the launch record and isolated profile while the process is still running. A visible managed instance can also quit through `Ctrl+Q` on Windows.
 
 ### Safe Legacy Data Migration
 - **Zero-Friction Upgrade:** Automatically detects existing profiles from legacy `%LOCALAPPDATA%\CodexSwitcher`.

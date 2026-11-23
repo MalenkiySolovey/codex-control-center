@@ -169,8 +169,8 @@ public sealed class Strings
             $"A sessão '{profileName}' será encerrada. Salve seu trabalho primeiro. Se ela não fechar normalmente, o Control Center terminará o processo e alterações não salvas poderão ser perdidas.",
             $"The managed session '{profileName}' will be stopped. Save your work first. If it does not close normally, Control Center will terminate its process tree and unsaved work may be lost.")
         : S(
-            $"O Control Center pedirá que a janela '{profileName}' feche normalmente. Salve seu trabalho primeiro.",
-            $"Control Center will ask the '{profileName}' window to close normally. Save your work first.");
+            $"O Control Center solicitará o encerramento normal de '{profileName}'. Salve seu trabalho primeiro.",
+            $"Control Center will request a graceful stop for '{profileName}'. Save your work first.");
     public string LaunchStopConfirmButton => S("Parar sessão", "Stop session");
     public string LaunchProfileStartFailedTitle => S("Falha ao iniciar o Codex", "Codex launch failed");
     public string LaunchProfileStopFailedTitle => S("Não foi possível parar o Codex", "Could not stop Codex");
