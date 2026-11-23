@@ -29,6 +29,7 @@
   <ItemGroup>
     <ProjectReference Include="..\CodexSwitcher.Core\CodexSwitcher.Core.csproj" />
     <ProjectReference Include="..\CodexSwitcher.Infra\CodexSwitcher.Infra.csproj" />
+    <InternalsVisibleTo Include="CodexSwitcher.Core.Tests" />
   </ItemGroup>
 
   <ItemGroup>
@@ -36,6 +37,7 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <EmbeddedResource Include="Features\CodexDesktopBalance\CodexDesktopBalanceRendererExtension.js" />
+    <EmbeddedResource Include="Features\CodexDesktopBalance\CodexDesktopNativeUsage.js" />
   </ItemGroup>
 
   <ItemGroup>

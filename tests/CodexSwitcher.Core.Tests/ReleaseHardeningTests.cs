@@ -358,6 +358,7 @@ public sealed class ReleaseHardeningTests
         {
             AlwaysConfirmSwitch = true,
             CodexDesktopApiBalanceIntegrationEnabled = true,
+            CodexDesktopPreferNativeApiBalance = true,
             GracefulCloseTimeoutSeconds = 7,
             CodexExecutablePathOverride = @"C:\CustomBin\codex.exe"
         };
@@ -368,9 +369,11 @@ public sealed class ReleaseHardeningTests
         Assert.NotNull(deserialized);
         Assert.True(deserialized.AlwaysConfirmSwitch);
         Assert.True(deserialized.CodexDesktopApiBalanceIntegrationEnabled);
+        Assert.True(deserialized.CodexDesktopPreferNativeApiBalance);
         Assert.Equal(7, deserialized.GracefulCloseTimeoutSeconds);
         Assert.Equal(@"C:\CustomBin\codex.exe", deserialized.CodexExecutablePathOverride);
         Assert.False(new AppSettings().CodexDesktopApiBalanceIntegrationEnabled);
+        Assert.False(new AppSettings().CodexDesktopPreferNativeApiBalance);
     }
 
     [Fact]

@@ -253,6 +253,23 @@ public sealed class SettingsViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    public bool CodexDesktopPreferNativeApiBalance
+    {
+        get => _settings.CodexDesktopPreferNativeApiBalance;
+        set
+        {
+            if (_settings.CodexDesktopPreferNativeApiBalance == value)
+            {
+                return;
+            }
+
+            _settings.CodexDesktopPreferNativeApiBalance = value;
+            _settingsStore.Save(_settings);
+            _desktopBalanceController?.NotifyConfigurationChanged();
+            OnPropertyChanged();
+        }
+    }
+
     public string CodexDesktopBalanceStatus => _desktopBalanceController?.StatusText
         ?? Loc.CodexDesktopBalanceStatusOff;
 

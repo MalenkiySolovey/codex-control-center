@@ -249,6 +249,65 @@ public sealed class CodexDesktopBalancePresentationMapperTests
     }
 
     [Fact]
+    public void NativeUsageKeepsKeyScopeCurrencyAndFreshnessWithStructuredRows()
+    {
+        var presentation = new CodexDesktopBalancePresentation
+        {
+            Kind = CodexDesktopBalanceKind.ApiKeyAllowance,
+            State = CodexDesktopBalanceState.Stale,
+            ProviderLabel = "Synthetic provider",
+            ProfileLabel = "Test profile",
+            ScopeLabel = "ApiKey",
+            Remaining = 3.50m,
+            Maximum = 5m,
+            RemainingPercentage = 70m,
+            UnitCode = "USD",
+            KeyUsage = 1.50m,
+            KeyUsageUnitCode = "USD",
+            ObservedAt = Now,
+            Source = "internal-source",
+            ActiveCodeHomeFingerprint = CodeHomeFingerprint,
+        };
+
+        var native = Assert.IsType<CodexDesktopNativeUsagePayload>(
+            CodexDesktopNativeUsagePayload.FromPresentation(presentation, russian: false));
+        Assert.Equal(70m, native.RemainingPercentage);
+        Assert.Contains(new CodexDesktopNativeUsageRow("Remaining", "$3.50"), native.Rows);
+        Assert.Contains(new CodexDesktopNativeUsageRow("Maximum", "$5.00"), native.Rows);
+        Assert.Contains(new CodexDesktopNativeUsageRow("Key usage", "$1.50"), native.Rows);
+        Assert.Contains(new CodexDesktopNativeUsageRow("Scope", "API key"), native.Rows);
+        Assert.Contains(new CodexDesktopNativeUsageRow("Profile", "Test profile"), native.Rows);
+        Assert.Contains(native.Rows, row => row.Label == "Observed");
+        Assert.Contains(new CodexDesktopNativeUsageRow("Stale", string.Empty), native.Rows);
+        var json = JsonSerializer.Serialize(native);
+        Assert.DoesNotContain("internal-source", json, StringComparison.Ordinal);
+        Assert.DoesNotContain(CodeHomeFingerprint, json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeUsageShowsUnlimitedAndUnknownWalletWithoutAFiniteRing()
+    {
+        var presentation = new CodexDesktopBalancePresentation
+        {
+            Kind = CodexDesktopBalanceKind.ApiKeyAllowance,
+            State = CodexDesktopBalanceState.Partial,
+            QuotaUnlimited = true,
+            RemainingPercentage = 100m,
+        };
+
+        var native = Assert.IsType<CodexDesktopNativeUsagePayload>(
+            CodexDesktopNativeUsagePayload.FromPresentation(presentation, russian: false));
+        Assert.Null(native.RemainingPercentage);
+        Assert.Contains(new CodexDesktopNativeUsageRow("Key limit", "unlimited"), native.Rows);
+        Assert.Contains(new CodexDesktopNativeUsageRow("Account balance", "Unknown"), native.Rows);
+        Assert.DoesNotContain(native.Rows, row => row.Label == "Maximum");
+
+        var hidden = CodexDesktopBalancePresentationMapper.Create(
+            new ActiveTarget.ChatGpt(Guid.NewGuid()), CodeHomeFingerprint, null, Now);
+        Assert.Null(CodexDesktopNativeUsagePayload.FromPresentation(hidden, russian: false));
+    }
+
+    [Fact]
     public void AccountBalanceIsSeparateAndNeverInventsALimitOrPercentage()
     {
         var profile = Profile();

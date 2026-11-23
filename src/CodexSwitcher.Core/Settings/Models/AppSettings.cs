@@ -61,6 +61,9 @@ public sealed class AppSettings
     /// <summary>Explicit opt-in for a compatible, removable API balance extension inside Codex Desktop.</summary>
     public bool CodexDesktopApiBalanceIntegrationEnabled { get; set; }
 
+    /// <summary>Explicit opt-in to use the installed build's native usage components where verified.</summary>
+    public bool CodexDesktopPreferNativeApiBalance { get; set; }
+
     /// <summary>Up to nine user-configured direct account/provider switch shortcuts.</summary>
     public List<QuickSwitchHotkeyAssignment> QuickSwitchHotkeyAssignments { get; set; } = [];
 

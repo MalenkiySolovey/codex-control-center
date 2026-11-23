@@ -43,7 +43,7 @@ public sealed record CodexDesktopBalanceRendererPayload(
         return new CodexDesktopBalanceRendererPayload(compact, title, lines);
     }
 
-    private static string? SafeDisplayText(string? value, int maximumLength)
+    internal static string? SafeDisplayText(string? value, int maximumLength)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength || value.Any(char.IsControl))
         {

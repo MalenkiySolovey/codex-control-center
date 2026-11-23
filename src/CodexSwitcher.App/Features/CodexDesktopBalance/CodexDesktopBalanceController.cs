@@ -98,17 +98,21 @@ public sealed class CodexDesktopBalanceController(
             .Select(group => group.Key)
             .ToHashSet();
         var discovery = _discovery.Discover();
+        var preferNative = settings.CodexDesktopPreferNativeApiBalance;
         var installed = 0;
+        var native = 0;
         string? firstFailure = null;
         foreach (var session in sessions)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var failure = ambiguousProfiles.Contains(session.LaunchProfileId)
                 ? Strings.Current.CodexDesktopBalanceStatusAmbiguousProfile
-                : await PresentAsync(session, discovery.Installation, cancellationToken).ConfigureAwait(false);
+                : await PresentAsync(session, discovery.Installation, preferNative, cancellationToken).ConfigureAwait(false);
             if (failure is null)
             {
                 installed++;
+                if (_attachments[session.Id].IsNativeActive)
+                    native++;
             }
             else
             {
@@ -117,14 +121,18 @@ public sealed class CodexDesktopBalanceController(
             }
         }
 
-        SetStatus(installed > 0
-            ? Strings.Current.CodexDesktopBalanceStatusWatching(installed, sessions.Length - installed)
-            : firstFailure ?? Strings.Current.CodexDesktopBalanceStatusUnavailable);
+        var status = installed == 0
+            ? firstFailure ?? Strings.Current.CodexDesktopBalanceStatusUnavailable
+            : preferNative
+                ? Strings.Current.CodexDesktopBalanceStatusNativeWatching(native, installed - native, sessions.Length - installed)
+                : Strings.Current.CodexDesktopBalanceStatusWatching(installed, sessions.Length - installed);
+        SetStatus(status);
     }
 
     private async Task<string?> PresentAsync(
         CodexLaunchSession session,
         CodexDesktopInstallation? installation,
+        bool preferNative,
         CancellationToken cancellationToken)
     {
         try
@@ -155,35 +163,35 @@ public sealed class CodexDesktopBalanceController(
             if (selection.Target is not { } target)
                 return Strings.Current.CodexDesktopBalanceStatusWaitingForRenderer;
 
-            if (!_attachments.TryGetValue(session.Id, out var attachment) || !attachment.Matches(endpoint, target))
+            if (!_attachments.TryGetValue(session.Id, out var attachment) || !attachment.Matches(endpoint, target, preferNative))
             {
                 await DetachAsync(session.Id).ConfigureAwait(false);
-                attachment = await CodexDesktopBalanceRendererAttachment.ConnectAsync(endpoint, targets, installation.Version, cancellationToken)
+                attachment = await CodexDesktopBalanceRendererAttachment.ConnectAsync(endpoint, targets, installation, preferNative, cancellationToken)
                     .ConfigureAwait(false);
                 if (attachment is null) return Strings.Current.CodexDesktopBalanceStatusWaitingForRenderer;
                 _attachments.Add(session.Id, attachment);
             }
 
             _billing.Schedule(binding.ProviderProfile, credentialRevision, cancellationToken);
-            return await attachment.PresentAsync(CreateCurrentPayload, cancellationToken).ConfigureAwait(false);
+            var russian = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru";
+            return await attachment.PresentAsync(CreateCurrentPresentation, russian, cancellationToken).ConfigureAwait(false);
 
-            CodexDesktopBalanceRendererPayload? CreateCurrentPayload()
+            CodexDesktopBalancePresentation? CreateCurrentPresentation()
             {
                 // Renderer initialization can cross a route, credential, or option change. Bind again immediately before publishing.
                 if (!settings.CodexDesktopApiBalanceIntegrationEnabled ||
+                    settings.CodexDesktopPreferNativeApiBalance != preferNative ||
                     ReadBinding(session, codeHome, out _) is not { ProviderProfile.Status: ApiProviderProfileStatus.Active } current ||
                     !string.Equals(GetCurrentRevision(session), credentialRevision, StringComparison.Ordinal))
                 {
                     return null;
                 }
 
-                var presentation = CodexDesktopBalancePresentationMapper.Create(
+                return CodexDesktopBalancePresentationMapper.Create(
                     new ActiveTarget.Api(current.ProviderProfile),
                     CodexDesktopBalancePresentationMapper.CreateCodeHomeFingerprint(codeHome),
                     credentialRevision,
                     DateTimeOffset.UtcNow);
-                return CodexDesktopBalanceRendererPayload.FromPresentation(presentation,
-                    System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru");
             }
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)

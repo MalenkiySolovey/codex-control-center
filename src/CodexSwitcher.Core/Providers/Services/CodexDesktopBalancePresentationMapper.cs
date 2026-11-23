@@ -29,6 +29,11 @@ public enum CodexDesktopBalanceState
     Unauthorized = 7,
 }
 
+internal sealed record CodexDesktopBalanceDetail(string Label, string? Value = null, string Separator = ": ")
+{
+    public override string ToString() => Value is null ? Label : Label + Separator + Value;
+}
+
 /// <summary>
 /// Small read-only payload for a verified Codex Desktop renderer. It contains
 /// presentation facts only, never credentials, provider URLs, or raw responses.
@@ -95,46 +100,54 @@ public sealed record CodexDesktopBalancePresentation
         _ => string.Empty,
     };
 
-    public IReadOnlyList<string> ToExpandedLines(bool russian)
+    public IReadOnlyList<string> ToExpandedLines(bool russian) =>
+        ToExpandedDetails(russian).Select(detail => detail.ToString()).ToArray();
+
+    internal IReadOnlyList<CodexDesktopBalanceDetail> ToExpandedDetails(bool russian)
     {
         var culture = russian ? CultureInfo.GetCultureInfo("ru-RU") : CultureInfo.GetCultureInfo("en-US");
-        var lines = new List<string>();
+        var lines = new List<CodexDesktopBalanceDetail>();
         switch (Kind)
         {
             case CodexDesktopBalanceKind.ApiKeyAllowance when Remaining is not null:
-                lines.Add($"{(russian ? "Осталось" : "Remaining")} {FormatAmount(Remaining.Value, UnitCode, culture, russian, RemainingDisplay)}");
+                lines.Add(new(russian ? "Осталось" : "Remaining",
+                    FormatAmount(Remaining.Value, UnitCode, culture, russian, RemainingDisplay), " "));
                 if (Maximum is not null)
                 {
-                    lines.Add($"{(russian ? "Максимум" : "Maximum")} {FormatAmount(Maximum.Value, UnitCode, culture, russian, MaximumDisplay)}");
+                    lines.Add(new(russian ? "Максимум" : "Maximum",
+                        FormatAmount(Maximum.Value, UnitCode, culture, russian, MaximumDisplay), " "));
                 }
 
                 if (RemainingPercentage is not null)
                 {
-                    lines.Add($"{(russian ? "Доля остатка" : "Remaining share")} {FormatPercentage(RemainingPercentage.Value, culture)}%");
+                    lines.Add(new(russian ? "Доля остатка" : "Remaining share",
+                        $"{FormatPercentage(RemainingPercentage.Value, culture)}%", " "));
                 }
 
                 AddUsageLine(lines, russian, russian ? "Потрачено ключом" : "Key usage", KeyUsage, KeyUsageUnitCode, culture, KeyUsageDisplay);
                 AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
                 break;
             case CodexDesktopBalanceKind.ApiKeyAllowance when QuotaUnlimited:
-                lines.Add(russian ? "Лимит ключа: без ограничений" : "Key limit: unlimited");
+                lines.Add(new(russian ? "Лимит ключа" : "Key limit", russian ? "без ограничений" : "unlimited"));
                 var accountLabel = russian ? "Баланс аккаунта" : "Account balance";
                 var wallet = AccountBalance is { } observedWallet
                     ? FormatAmount(observedWallet, AccountBalanceUnitCode, culture, russian)
                     : russian ? "неизвестен" : "Unknown";
-                lines.Add($"{accountLabel}: {wallet}");
+                lines.Add(new(accountLabel, wallet));
                 AddUsageLine(lines, russian, russian ? "Потрачено ключом" : "Key usage", KeyUsage, KeyUsageUnitCode, culture, KeyUsageDisplay);
                 AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
                 break;
             case CodexDesktopBalanceKind.AccountBalance when AccountBalance is not null:
-                lines.Add($"{(russian ? "Доступный баланс" : "Available balance")} {FormatAmount(AccountBalance.Value, UnitCode, culture, russian)}");
+                lines.Add(new(russian ? "Доступный баланс" : "Available balance",
+                    FormatAmount(AccountBalance.Value, UnitCode, culture, russian), " "));
                 AddAccountUsageLine(lines, russian, AccountUsage, AccountUsageUnitCode, culture);
                 break;
             case CodexDesktopBalanceKind.UsageOnly when Usage is not null:
-                lines.Add($"{UsageLabel(russian, ScopeLabel)} {FormatAmount(Usage.Value, UnitCode, culture, russian, UsageDisplay)}");
+                lines.Add(new(UsageLabel(russian, ScopeLabel),
+                    FormatAmount(Usage.Value, UnitCode, culture, russian, UsageDisplay), " "));
                 break;
             case CodexDesktopBalanceKind.StatusOnly:
-                lines.Add(StateLabel(russian));
+                lines.Add(new(StateLabel(russian)));
                 break;
         }
 
@@ -148,28 +161,28 @@ public sealed record CodexDesktopBalancePresentation
                 nameof(ProviderMetricScope.Account) => russian ? "аккаунт" : "account",
                 _ => ScopeLabel,
             };
-            lines.Add($"{(russian ? "Область" : "Scope")}: {scope}");
+            lines.Add(new(russian ? "Область" : "Scope", scope));
         }
 
         AddLabel(lines, russian ? "Период" : "Period", Period);
         if (ObservedAt is not null)
         {
-            lines.Add($"{(russian ? "Получено" : "Observed")}: {ObservedAt.Value.ToLocalTime().ToString("g", culture)}");
+            lines.Add(new(russian ? "Получено" : "Observed", ObservedAt.Value.ToLocalTime().ToString("g", culture)));
         }
 
         if (ResetAt is not null)
         {
-            lines.Add($"{(russian ? "Сброс" : "Resets")}: {ResetAt.Value.ToLocalTime().ToString("g", culture)}");
+            lines.Add(new(russian ? "Сброс" : "Resets", ResetAt.Value.ToLocalTime().ToString("g", culture)));
         }
 
         if (ExpiresAt is not null)
         {
-            lines.Add($"{(russian ? "Ключ действует до" : "Key expires")}: {ExpiresAt.Value.ToLocalTime().ToString("g", culture)}");
+            lines.Add(new(russian ? "Ключ действует до" : "Key expires", ExpiresAt.Value.ToLocalTime().ToString("g", culture)));
         }
 
         if (Kind != CodexDesktopBalanceKind.StatusOnly)
         {
-            lines.Add(StateLabel(russian));
+            lines.Add(new(StateLabel(russian)));
         }
 
         return lines;
@@ -253,24 +266,24 @@ public sealed record CodexDesktopBalancePresentation
                 ? russian ? "Потрачено ключом" : "Key usage"
                 : russian ? "Использовано" : "Used";
 
-    private static void AddUsageLine(List<string> lines, bool russian, string label, decimal? value, string? unitCode,
+    private static void AddUsageLine(List<CodexDesktopBalanceDetail> lines, bool russian, string label, decimal? value, string? unitCode,
         CultureInfo culture, ProviderMetricDisplay? display = null)
     {
         if (value is not null)
         {
-            lines.Add($"{label}: {FormatAmount(value.Value, unitCode, culture, russian, display)}");
+            lines.Add(new(label, FormatAmount(value.Value, unitCode, culture, russian, display)));
         }
     }
 
-    private static void AddAccountUsageLine(List<string> lines, bool russian, decimal? value, string? unitCode,
+    private static void AddAccountUsageLine(List<CodexDesktopBalanceDetail> lines, bool russian, decimal? value, string? unitCode,
         CultureInfo culture) =>
         AddUsageLine(lines, russian, russian ? "Расход аккаунта" : "Account usage", value, unitCode, culture);
 
-    private static void AddLabel(List<string> lines, string label, string? value)
+    private static void AddLabel(List<CodexDesktopBalanceDetail> lines, string label, string? value)
     {
         if (!string.IsNullOrWhiteSpace(value))
         {
-            lines.Add($"{label}: {value}");
+            lines.Add(new(label, value));
         }
     }
 }
