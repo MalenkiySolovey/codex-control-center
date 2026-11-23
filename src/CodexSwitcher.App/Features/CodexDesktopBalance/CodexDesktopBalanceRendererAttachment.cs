@@ -78,16 +78,17 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
         if (preferNative && native.IsUniqueVisible)
             return Strings.Current.CodexDesktopBalanceStatusNoApiRoute;
 
-        var toolbar = !native.IsUniqueVisible
-            ? await renderer.ProbeUniqueVisibleAnchorAsync(CodexDesktopBalanceAnchorPolicy.HeaderToolbarSelector,
-                cancellationToken).ConfigureAwait(false)
-            : null;
-        var anchor = CodexDesktopBalanceAnchorPolicy.SelectAnchor(native, toolbar);
-        if (anchor is null) return Strings.Current.CodexDesktopBalanceStatusAnchorUnverified;
-
-        if (preferNative && !_nativeRejected && anchor == CodexDesktopBalanceAnchorPolicy.HeaderToolbarSelector &&
+        if (preferNative && !_nativeRejected && CodexDesktopNativeUsagePackage.SupportsInstallation(installation) &&
             _extensionId != CodexDesktopBalanceRendererExtension.Id)
         {
+            var rail = await renderer.ProbeUniqueVisibleAnchorAsync(CodexDesktopBalanceAnchorPolicy.NavigationRailSelector,
+                cancellationToken).ConfigureAwait(false);
+            if (!rail.IsUniqueVisible && !(await renderer.ProbeUniqueVisibleAnchorAsync(
+                    CodexDesktopBalanceAnchorPolicy.SidebarContentSelector, cancellationToken).ConfigureAwait(false)).IsUniqueVisible)
+            {
+                return Strings.Current.CodexDesktopBalanceStatusAnchorUnverified;
+            }
+
             var alreadyNative = IsNativeActive;
             var failure = await PresentNativeAsync(currentPresentation, russian, cancellationToken).ConfigureAwait(false);
             if (failure is null || alreadyNative || failure == Strings.Current.CodexDesktopBalanceStatusNoPresentation)
@@ -102,7 +103,14 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
             return Strings.Current.CodexDesktopBalanceStatusInstallFailed;
         }
 
-        return await PresentFallbackAsync(anchor, currentPresentation, russian, cancellationToken).ConfigureAwait(false);
+        var toolbar = !native.IsUniqueVisible
+            ? await renderer.ProbeUniqueVisibleAnchorAsync(CodexDesktopBalanceAnchorPolicy.HeaderToolbarSelector,
+                cancellationToken).ConfigureAwait(false)
+            : null;
+        var anchor = CodexDesktopBalanceAnchorPolicy.SelectAnchor(native, toolbar);
+        return anchor is null
+            ? Strings.Current.CodexDesktopBalanceStatusAnchorUnverified
+            : await PresentFallbackAsync(anchor, currentPresentation, russian, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<string?> PresentNativeAsync(Func<CodexDesktopBalancePresentation?> currentPresentation, bool russian,
@@ -126,8 +134,10 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
         // Loading the original asynchronous usage chunk and committing its React root can take a turn.
         for (var attempt = 0; attempt < (needsInstall ? 12 : 3); attempt++)
         {
-            if (await renderer.IsExtensionAdjacentToAnchorAsync(CodexDesktopBalanceAnchorPolicy.HeaderToolbarSelector,
-                    CodexDesktopNativeUsagePackage.RootAttribute, cancellationToken).ConfigureAwait(false))
+            // The bundled renderer sets this marker after measuring both arcs above the profile.
+            var ready = await renderer.ProbeUniqueVisibleAnchorAsync($"[{CodexDesktopNativeUsagePackage.RootAttribute}]",
+                cancellationToken).ConfigureAwait(false);
+            if (ready.IsUniqueVisible)
             {
                 return null;
             }

@@ -271,7 +271,8 @@ public sealed class CodexDesktopBalancePresentationMapperTests
 
         var native = Assert.IsType<CodexDesktopNativeUsagePayload>(
             CodexDesktopNativeUsagePayload.FromPresentation(presentation, russian: false));
-        Assert.Equal(70m, native.RemainingPercentage);
+        Assert.Equal(new CodexDesktopNativeUsageArc("Remaining · $3.50", 70m), native.UpperArc);
+        Assert.Equal(new CodexDesktopNativeUsageArc("Key limit · $5.00", 100m), native.LowerArc);
         Assert.Contains(new CodexDesktopNativeUsageRow("Remaining", "$3.50"), native.Rows);
         Assert.Contains(new CodexDesktopNativeUsageRow("Maximum", "$5.00"), native.Rows);
         Assert.Contains(new CodexDesktopNativeUsageRow("Key usage", "$1.50"), native.Rows);
@@ -297,7 +298,8 @@ public sealed class CodexDesktopBalancePresentationMapperTests
 
         var native = Assert.IsType<CodexDesktopNativeUsagePayload>(
             CodexDesktopNativeUsagePayload.FromPresentation(presentation, russian: false));
-        Assert.Null(native.RemainingPercentage);
+        Assert.Equal(new CodexDesktopNativeUsageArc("Account balance · Unknown", null), native.UpperArc);
+        Assert.Equal(new CodexDesktopNativeUsageArc("Key usage · Unknown", null), native.LowerArc);
         Assert.Contains(new CodexDesktopNativeUsageRow("Key limit", "unlimited"), native.Rows);
         Assert.Contains(new CodexDesktopNativeUsageRow("Account balance", "Unknown"), native.Rows);
         Assert.DoesNotContain(native.Rows, row => row.Label == "Maximum");
@@ -305,6 +307,27 @@ public sealed class CodexDesktopBalancePresentationMapperTests
         var hidden = CodexDesktopBalancePresentationMapper.Create(
             new ActiveTarget.ChatGpt(Guid.NewGuid()), CodeHomeFingerprint, null, Now);
         Assert.Null(CodexDesktopNativeUsagePayload.FromPresentation(hidden, russian: false));
+    }
+
+    [Fact]
+    public void NativeUnlimitedArcsKeepWalletAndKeySpendInTheirObservedUnits()
+    {
+        var presentation = new CodexDesktopBalancePresentation
+        {
+            Kind = CodexDesktopBalanceKind.ApiKeyAllowance,
+            State = CodexDesktopBalanceState.Live,
+            QuotaUnlimited = true,
+            KeyUsage = 1.5m,
+            KeyUsageUnitCode = "USD",
+            AccountBalance = 12.5m,
+            AccountBalanceUnitCode = "CNY",
+            AccountUsage = 90m,
+        };
+
+        var native = Assert.IsType<CodexDesktopNativeUsagePayload>(
+            CodexDesktopNativeUsagePayload.FromPresentation(presentation, russian: false));
+        Assert.Equal(new CodexDesktopNativeUsageArc("Account balance · ¥12.50", null), native.UpperArc);
+        Assert.Equal(new CodexDesktopNativeUsageArc("Key usage · $1.50", null), native.LowerArc);
     }
 
     [Fact]

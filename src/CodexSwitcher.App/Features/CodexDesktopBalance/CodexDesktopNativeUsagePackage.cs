@@ -13,7 +13,7 @@ internal static class CodexDesktopNativeUsagePackage
 {
     internal const string Id = "codex-control-center-api-balance-native";
     internal const string RootAttribute = "data-codex-control-center-api-balance-native";
-    internal const string ApprovedSha256 = "72130041C4D8DA321BED128FAA75B3DF9E381A9E9E8BA12920C33FF16A07EE33";
+    internal const string ApprovedSha256 = "A36C096404BEF32A4519F1BA8E5E8A2DD10E3FF3B6C2175F45CC0B070BF438E0";
     private const string SourceArchiveSha256 = "8A437AAD94098770C1BF5FD5385C204E162B62C6D7917F688741D74E05BABE90";
     private const string SourceChunkSha256 = "B0606AD7D47549336938132BED9AB10FF636C73E01CBC4FB0E69BC3AE420F698";
     private const long SourceArchiveLength = 443_800_006;
@@ -21,17 +21,23 @@ internal static class CodexDesktopNativeUsagePackage
     private const string FactoryStart = "w5W4(e,n,i){";
     private const string FactoryEnd = "},mBEO(e,n,i){";
     private const string SourceExport = "i.d(n,{AmbientUsageRailMenu:()=>K})";
-    private const string NativeExports = "i.d(n,{Ring:()=>W,Glyph:()=>R,Indicator:()=>V,Popup:()=>u.Ab,Menu:()=>u.ms,Row:()=>G,Trigger:()=>g.l,Tooltip:()=>l.m})";
+    private const string NativeExports = "i.d(n,{Ring:()=>W,Glyph:()=>R,Popup:()=>u.Ab,Menu:()=>u.ms,Row:()=>G,Trigger:()=>g.l,Tooltip:()=>l.m})";
+    private const string ArcTooltipAnchor = "let E=B&&null!=P;";
+    private const string ArcTooltipAdapter =
+        "if(\"primary\"===P&&typeof e.primaryTooltip===\"string\")r=e.primaryTooltip;else if(\"secondary\"===P&&typeof e.secondaryTooltip===\"string\")r=e.secondaryTooltip;let E=B&&null!=P;";
     private const string TemplateSlot = "/* CODEX_NATIVE_USAGE_FACTORY */ null";
     private const string ResourceName = "CodexSwitcher.App.Features.CodexDesktopBalance.CodexDesktopNativeUsage.js";
     private static readonly Version DesktopVersion = new(26, 1117, 4957, 0);
-    private static readonly Version RecipeVersion = new(1, 0, 0);
+    private static readonly Version RecipeVersion = new(1, 1, 0);
+
+    internal static bool SupportsInstallation(CodexDesktopInstallation installation) =>
+        installation.Version == DesktopVersion && installation.PackageName == "OpenAI.Codex" &&
+        installation.PackageFamilyName == "OpenAI.Codex_2p2nqsd0c76g0";
 
     public static async Task<CodexDesktopExtensionPackage?> TryLoadAsync(
         CodexDesktopInstallation installation, CancellationToken cancellationToken)
     {
-        if (installation.Version != DesktopVersion || installation.PackageName != "OpenAI.Codex" ||
-            installation.PackageFamilyName != "OpenAI.Codex_2p2nqsd0c76g0")
+        if (!SupportsInstallation(installation))
         {
             return null;
         }
@@ -92,20 +98,22 @@ internal static class CodexDesktopNativeUsagePackage
         }
 
         var factory = source[start..(end + 1)];
+        var meter = FindUnique(factory, "function W(e)");
+        var tooltip = FindUnique(factory, ArcTooltipAnchor);
         if (FindUnique(factory, SourceExport) != FactoryStart.Length ||
             FindUnique(factory, "contentWidth:\"menuReadout\"") < 0 ||
-            FindUnique(factory, "function W(e)") < 0 ||
             FindUnique(factory, "function R(e)") < 0 ||
-            FindUnique(factory, "function V(e)") < 0 ||
-            FindUnique(factory, "function G(e,n)") < 0)
+            FindUnique(factory, "function G(e,n)") < 0 ||
+            meter < 0 || tooltip <= meter || tooltip >= factory.IndexOf("function ", meter + 1, StringComparison.Ordinal))
         {
             return null;
         }
 
-        // Expose the original component functions through a separate module instance.
-        // The official loader, account UI, and original module stay unchanged.
-        return template.Replace(TemplateSlot, "function " + factory.Replace(SourceExport, NativeExports, StringComparison.Ordinal),
-            StringComparison.Ordinal);
+        // The usage component retains its native hit testing, animation and tooltip rendering.
+        // This separate module instance supplies the API text for each segment.
+        var adapted = factory.Replace(SourceExport, NativeExports, StringComparison.Ordinal)
+            .Replace(ArcTooltipAnchor, ArcTooltipAdapter, StringComparison.Ordinal);
+        return template.Replace(TemplateSlot, "function " + adapted, StringComparison.Ordinal);
     }
 
     private static async Task<byte[]?> ReadSourceChunkAsync(Stream archive, CancellationToken cancellationToken)

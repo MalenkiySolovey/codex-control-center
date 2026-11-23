@@ -214,7 +214,7 @@ public sealed record CodexDesktopBalancePresentation
         return formatted;
     }
 
-    private static string FormatAmount(decimal value, string? unitCode, CultureInfo culture, bool russian,
+    internal static string FormatAmount(decimal value, string? unitCode, CultureInfo culture, bool russian,
         ProviderMetricDisplay? display = null)
     {
         if (ProviderQuotaDisplayFormatter.Format(display, culture, symbolAfterAmount: russian) is { } converted)
