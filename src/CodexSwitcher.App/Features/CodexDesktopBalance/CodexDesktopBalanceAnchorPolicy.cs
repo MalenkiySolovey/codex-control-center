@@ -10,8 +10,6 @@ public static class CodexDesktopBalanceAnchorPolicy
 {
     public const string NativeUsageLabelSelector = "[data-ambient-usage-label]";
     public const string HeaderToolbarSelector = "[data-app-shell-header-toolbar]";
-    internal const string NavigationRailSelector = "[data-app-navigation-rail]";
-    internal const string SidebarContentSelector = "[data-slate-sidebar-content]";
 
     public static string? SelectAnchor(
         CodexDesktopAnchorProbeResult nativeUsageLabel,

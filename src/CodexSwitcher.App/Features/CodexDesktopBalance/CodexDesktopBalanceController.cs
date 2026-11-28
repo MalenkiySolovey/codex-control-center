@@ -1,4 +1,3 @@
-using Codex.RuntimeKit.Desktop.Discovery;
 using CodexSwitcher.App.Localization;
 using CodexSwitcher.Core.Providers.Contracts;
 using CodexSwitcher.Core.Providers.Models;
@@ -21,8 +20,8 @@ public sealed class CodexDesktopBalanceController(
     ICodexRoutingConfigStore routingConfigStore) : BackgroundService
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
-    private readonly CodexDesktopDiscovery _discovery = new();
     private readonly CodexDesktopBalanceBillingRefresh _billing = new(inspectionService);
+    private readonly CodexDesktopNativeUsagePackage _nativePackages = new();
     private readonly Dictionary<Guid, CodexDesktopBalanceRendererAttachment> _attachments = [];
     private string _statusText = Strings.Current.CodexDesktopBalanceStatusOff;
 
@@ -97,27 +96,33 @@ public sealed class CodexDesktopBalanceController(
             .Where(group => group.Count() > 1)
             .Select(group => group.Key)
             .ToHashSet();
-        var discovery = _discovery.Discover();
         var preferNative = settings.CodexDesktopPreferNativeApiBalance;
         var installed = 0;
         var native = 0;
         string? firstFailure = null;
+        string? nativeDiagnostic = null;
         foreach (var session in sessions)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var failure = ambiguousProfiles.Contains(session.LaunchProfileId)
                 ? Strings.Current.CodexDesktopBalanceStatusAmbiguousProfile
-                : await PresentAsync(session, discovery.Installation, preferNative, cancellationToken).ConfigureAwait(false);
-            if (failure is null)
+                : await PresentAsync(session, preferNative, cancellationToken).ConfigureAwait(false);
+            _attachments.TryGetValue(session.Id, out var currentAttachment);
+            nativeDiagnostic ??= currentAttachment?.NativeDiagnostic;
+            if (failure is null && currentAttachment is not null)
             {
                 installed++;
-                if (_attachments[session.Id].IsNativeActive)
+                if (currentAttachment.IsNativeActive)
                     native++;
             }
             else
             {
                 firstFailure ??= failure;
-                await DetachAsync(session.Id).ConfigureAwait(false);
+                if (failure != Strings.Current.CodexDesktopBalanceStatusPlacementFailed ||
+                    currentAttachment?.IsNativeActive != true)
+                {
+                    await DetachAsync(session.Id).ConfigureAwait(false);
+                }
             }
         }
 
@@ -126,12 +131,11 @@ public sealed class CodexDesktopBalanceController(
             : preferNative
                 ? Strings.Current.CodexDesktopBalanceStatusNativeWatching(native, installed - native, sessions.Length - installed)
                 : Strings.Current.CodexDesktopBalanceStatusWatching(installed, sessions.Length - installed);
-        SetStatus(status);
+        SetStatus(nativeDiagnostic is null ? status : $"{status} {nativeDiagnostic}");
     }
 
     private async Task<string?> PresentAsync(
         CodexLaunchSession session,
-        CodexDesktopInstallation? installation,
         bool preferNative,
         CancellationToken cancellationToken)
     {
@@ -151,6 +155,8 @@ public sealed class CodexDesktopBalanceController(
             if (!string.Equals(session.CredentialRevision, credentialRevision, StringComparison.Ordinal))
                 return Strings.Current.CodexDesktopBalanceStatusCredentialChanged;
 
+            _attachments.TryGetValue(session.Id, out var attachment);
+            var installation = attachment?.Installation ?? CodexDesktopBalanceInstallationResolver.FindForProcess(session);
             if (installation is null) return Strings.Current.CodexDesktopBalanceStatusDesktopUnavailable;
             if (!CodexDesktopBalanceCompatibilityPolicy.IsSupportedVersion(installation.Version))
                 return Strings.Current.CodexDesktopBalanceStatusUnsupportedVersion;
@@ -163,10 +169,10 @@ public sealed class CodexDesktopBalanceController(
             if (selection.Target is not { } target)
                 return Strings.Current.CodexDesktopBalanceStatusWaitingForRenderer;
 
-            if (!_attachments.TryGetValue(session.Id, out var attachment) || !attachment.Matches(endpoint, target, preferNative))
+            if (attachment is null || !attachment.Matches(endpoint, target, preferNative))
             {
                 await DetachAsync(session.Id).ConfigureAwait(false);
-                attachment = await CodexDesktopBalanceRendererAttachment.ConnectAsync(endpoint, targets, installation, preferNative, cancellationToken)
+                attachment = await CodexDesktopBalanceRendererAttachment.ConnectAsync(endpoint, targets, installation, _nativePackages.ResolveAsync, preferNative, cancellationToken)
                     .ConfigureAwait(false);
                 if (attachment is null) return Strings.Current.CodexDesktopBalanceStatusWaitingForRenderer;
                 _attachments.Add(session.Id, attachment);

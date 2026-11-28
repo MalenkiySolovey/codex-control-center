@@ -15,21 +15,24 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
     CodexDesktopDebugEndpoint endpoint,
     CodexDesktopCdpSession renderer,
     CodexDesktopInstallation installation,
+    Func<CodexDesktopInstallation, CancellationToken, Task<CodexDesktopNativeUsagePackage.Resolution>> resolveNative,
     bool preferNative) : IAsyncDisposable
 {
     private const string RootAttribute = "data-codex-control-center-api-balance";
     private static readonly CodexDesktopDebugTransport Transport = new();
     private static readonly WindowsCodexDesktopListenerOwnerResolver ListenerOwner = new();
-    private readonly CodexDesktopExtensionHost _host = new(new Dictionary<string, string>(StringComparer.Ordinal)
-    {
-        [CodexDesktopBalanceRendererExtension.Id] = CodexDesktopBalanceRendererExtension.ApprovedSha256,
-        [CodexDesktopNativeUsagePackage.Id] = CodexDesktopNativeUsagePackage.ApprovedSha256,
-    });
+    private CodexDesktopExtensionHost? _host;
     private string? _extensionId;
     private bool _installed;
-    private bool _nativeRejected;
+    private CodexDesktopNativeUsagePackage.Resolution? _nativeResolution;
+    private DateTimeOffset? _nativePlacementDeadline;
+    private DateTimeOffset _nextNativeAttempt;
+
+    public string? NativeDiagnostic { get; private set; }
 
     public bool IsNativeActive => _installed && _extensionId == CodexDesktopNativeUsagePackage.Id;
+
+    public CodexDesktopInstallation Installation => installation;
 
     public bool Matches(CodexDesktopDebugEndpoint activeEndpoint, CodexDesktopRendererTarget activeTarget, bool currentPreference) =>
         endpoint == activeEndpoint && renderer.Target == activeTarget && preferNative == currentPreference;
@@ -63,11 +66,12 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
         CodexDesktopRendererVerifier.SelectMainRenderer(targets, endpoint.Port);
 
     public static async Task<CodexDesktopBalanceRendererAttachment?> ConnectAsync(CodexDesktopDebugEndpoint endpoint,
-        IReadOnlyList<CodexDesktopRendererTarget> targets, CodexDesktopInstallation installation, bool preferNative,
+        IReadOnlyList<CodexDesktopRendererTarget> targets, CodexDesktopInstallation installation,
+        Func<CodexDesktopInstallation, CancellationToken, Task<CodexDesktopNativeUsagePackage.Resolution>> resolveNative, bool preferNative,
         CancellationToken cancellationToken)
     {
         var attach = await Transport.AttachToMainRendererAsync(endpoint, targets, cancellationToken).ConfigureAwait(false);
-        return attach.Session is { } verified ? new(endpoint, verified, installation, preferNative) : null;
+        return attach.Session is { } verified ? new(endpoint, verified, installation, resolveNative, preferNative) : null;
     }
 
     public async Task<string?> PresentAsync(Func<CodexDesktopBalancePresentation?> currentPresentation, bool russian,
@@ -75,26 +79,55 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
     {
         var native = await renderer.ProbeUniqueVisibleAnchorAsync(CodexDesktopBalanceAnchorPolicy.NativeUsageLabelSelector,
             cancellationToken).ConfigureAwait(false);
-        if (preferNative && native.IsUniqueVisible)
-            return Strings.Current.CodexDesktopBalanceStatusNoApiRoute;
+        if (preferNative && native.VisibleCount > 0)
+            return native.IsUniqueVisible ? Strings.Current.CodexDesktopBalanceStatusNoApiRoute : Strings.Current.CodexDesktopBalanceStatusAmbiguousAnchors;
 
-        if (preferNative && !_nativeRejected && CodexDesktopNativeUsagePackage.SupportsInstallation(installation) &&
-            _extensionId != CodexDesktopBalanceRendererExtension.Id)
+        if (preferNative && DateTimeOffset.UtcNow >= _nextNativeAttempt)
         {
-            var rail = await renderer.ProbeUniqueVisibleAnchorAsync(CodexDesktopBalanceAnchorPolicy.NavigationRailSelector,
-                cancellationToken).ConfigureAwait(false);
-            if (!rail.IsUniqueVisible && !(await renderer.ProbeUniqueVisibleAnchorAsync(
-                    CodexDesktopBalanceAnchorPolicy.SidebarContentSelector, cancellationToken).ConfigureAwait(false)).IsUniqueVisible)
+            _nativeResolution ??= await resolveNative(installation, cancellationToken).ConfigureAwait(false);
+            if (_nativeResolution.Package is { } package)
             {
-                return Strings.Current.CodexDesktopBalanceStatusAnchorUnverified;
+                if (_extensionId == CodexDesktopBalanceRendererExtension.Id &&
+                    !await RemoveExtensionAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    return Strings.Current.CodexDesktopBalanceStatusInstallFailed;
+                }
+
+                var failure = await PresentNativeAsync(package, currentPresentation, russian, cancellationToken).ConfigureAwait(false);
+                if (failure is null)
+                {
+                    _nativePlacementDeadline = null;
+                    NativeDiagnostic = null;
+                    return null;
+                }
+                if (failure == Strings.Current.CodexDesktopBalanceStatusNoPresentation) return failure;
+
+                var now = DateTimeOffset.UtcNow;
+                if (failure == Strings.Current.CodexDesktopBalanceStatusPlacementFailed)
+                {
+                    _nativePlacementDeadline ??= now.AddSeconds(12);
+                    if (now < _nativePlacementDeadline) return failure;
+                }
+
+                NativeDiagnostic = failure;
+                _nativePlacementDeadline = null;
+                _nextNativeAttempt = DateTimeOffset.UtcNow.AddSeconds(30);
             }
-
-            var alreadyNative = IsNativeActive;
-            var failure = await PresentNativeAsync(currentPresentation, russian, cancellationToken).ConfigureAwait(false);
-            if (failure is null || alreadyNative || failure == Strings.Current.CodexDesktopBalanceStatusNoPresentation)
-                return failure;
-
-            _nativeRejected = true;
+            else
+            {
+                NativeDiagnostic = _nativeResolution.State switch
+                {
+                    CodexDesktopNativeUsagePackage.State.AmbiguousContract => Strings.Current.CodexDesktopBalanceStatusNativeAmbiguous,
+                    CodexDesktopNativeUsagePackage.State.CorruptSource => Strings.Current.CodexDesktopBalanceStatusAssetRejected,
+                    CodexDesktopNativeUsagePackage.State.UnsupportedContract => Strings.Current.CodexDesktopBalanceStatusNativeUnsupported,
+                    _ => Strings.Current.CodexDesktopBalanceStatusDesktopUnavailable,
+                };
+                if (_nativeResolution.State == CodexDesktopNativeUsagePackage.State.Unavailable)
+                {
+                    _nativeResolution = null;
+                    _nextNativeAttempt = DateTimeOffset.UtcNow.AddSeconds(30);
+                }
+            }
         }
 
         if (_extensionId == CodexDesktopNativeUsagePackage.Id &&
@@ -108,19 +141,22 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
                 cancellationToken).ConfigureAwait(false)
             : null;
         var anchor = CodexDesktopBalanceAnchorPolicy.SelectAnchor(native, toolbar);
-        return anchor is null
-            ? Strings.Current.CodexDesktopBalanceStatusAnchorUnverified
-            : await PresentFallbackAsync(anchor, currentPresentation, russian, cancellationToken).ConfigureAwait(false);
+        if (anchor is not null)
+            return await PresentFallbackAsync(anchor, currentPresentation, russian, cancellationToken).ConfigureAwait(false);
+
+        return native.TotalCount > 1 || toolbar?.TotalCount > 1
+            ? Strings.Current.CodexDesktopBalanceStatusAmbiguousAnchors
+            : Strings.Current.CodexDesktopBalanceStatusAnchorUnverified;
     }
 
-    private async Task<string?> PresentNativeAsync(Func<CodexDesktopBalancePresentation?> currentPresentation, bool russian,
+    private async Task<string?> PresentNativeAsync(CodexDesktopExtensionPackage package,
+        Func<CodexDesktopBalancePresentation?> currentPresentation, bool russian,
         CancellationToken cancellationToken)
     {
         var needsInstall = !_installed;
         if (needsInstall)
         {
-            var package = await CodexDesktopNativeUsagePackage.TryLoadAsync(installation, cancellationToken).ConfigureAwait(false);
-            if (package is null || !await InstallAsync(package, cancellationToken).ConfigureAwait(false))
+            if (!await InstallAsync(package, cancellationToken).ConfigureAwait(false))
                 return Strings.Current.CodexDesktopBalanceStatusInstallFailed;
         }
 
@@ -134,7 +170,7 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
         // Loading the original asynchronous usage chunk and committing its React root can take a turn.
         for (var attempt = 0; attempt < (needsInstall ? 12 : 3); attempt++)
         {
-            // The bundled renderer sets this marker after measuring both arcs above the profile.
+            // The renderer sets this marker after the native control is visible above the profile.
             var ready = await renderer.ProbeUniqueVisibleAnchorAsync($"[{CodexDesktopNativeUsagePackage.RootAttribute}]",
                 cancellationToken).ConfigureAwait(false);
             if (ready.IsUniqueVisible)
@@ -184,6 +220,9 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
 
     private async Task<bool> InstallAsync(CodexDesktopExtensionPackage package, CancellationToken cancellationToken)
     {
+        // Native scripts are generated only from a verified Store package. The host still checks
+        // the digest and the renderer on every installation.
+        _host = new(new Dictionary<string, string>(StringComparer.Ordinal) { [package.Id] = package.Sha256 });
         _extensionId = package.Id;
         var result = await _host.InstallOrUpdateAsync(package, installation.Version, renderer, cancellationToken).ConfigureAwait(false);
         _installed = result.Succeeded;
@@ -192,7 +231,7 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
 
     private async Task<bool> SendPayloadAsync<TPayload>(TPayload payload, CancellationToken cancellationToken)
     {
-        var result = await _host.UpdatePayloadAsync(_extensionId!, JsonSerializer.SerializeToElement(payload),
+        var result = await _host!.UpdatePayloadAsync(_extensionId!, JsonSerializer.SerializeToElement(payload),
             renderer, cancellationToken).ConfigureAwait(false);
         return result.State == CodexDesktopExtensionResultState.Updated;
     }
@@ -200,10 +239,11 @@ internal sealed class CodexDesktopBalanceRendererAttachment(
     private async Task<bool> RemoveExtensionAsync(CancellationToken cancellationToken)
     {
         if (_extensionId is not { } id) return true;
-        var result = await _host.RemoveAsync(id, renderer, cancellationToken).ConfigureAwait(false);
+        var result = await _host!.RemoveAsync(id, renderer, cancellationToken).ConfigureAwait(false);
         if (!result.Succeeded) return false;
 
         _extensionId = null;
+        _host = null;
         _installed = false;
         return true;
     }

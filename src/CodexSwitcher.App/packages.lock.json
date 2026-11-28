@@ -14,6 +14,12 @@
         "resolved": "8.4.2",
         "contentHash": "WadCzGEc2U+3e20avRLng4qNtt4zoOGWrdUISqJWrHe3/FSnrYjuM5Sb4yQb09LhkBXrrI4Zt3dLKgRMbItsrg=="
       },
+      "Esprima": {
+        "type": "Direct",
+        "requested": "[3.0.6, )",
+        "resolved": "3.0.6",
+        "contentHash": "TpN21y4Ze2oOFcZGwn5LHDcrht5ORvHXh4okmOfOdNptoVK5v1GBKyN/7BZk5vg+y/om6ytdWgZ1LtQpCQd7RA=="
+      },
       "H.NotifyIcon.WinUI": {
         "type": "Direct",
         "requested": "[2.4.1, )",

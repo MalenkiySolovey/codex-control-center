@@ -4,12 +4,12 @@ using Llm.ProviderKit.Inspection;
 
 namespace CodexSwitcher.Core.Providers.Services;
 
-/// <summary>Presentation values for the version-matched Codex usage components.</summary>
+/// <summary>Presentation values shared by the native Codex usage components.</summary>
 public sealed record CodexDesktopNativeUsagePayload(
     [property: JsonPropertyName("compact")] string Compact,
     [property: JsonPropertyName("title")] string Title,
-    [property: JsonPropertyName("upperArc")] CodexDesktopNativeUsageArc UpperArc,
-    [property: JsonPropertyName("lowerArc")] CodexDesktopNativeUsageArc LowerArc,
+    [property: JsonPropertyName("primary")] CodexDesktopNativeUsageSegment Primary,
+    [property: JsonPropertyName("secondary")] CodexDesktopNativeUsageSegment Secondary,
     [property: JsonPropertyName("rows")] IReadOnlyList<CodexDesktopNativeUsageRow> Rows)
 {
     public const int MaximumRows = 16;
@@ -48,35 +48,38 @@ public sealed record CodexDesktopNativeUsagePayload(
         }
 
         var culture = russian ? CultureInfo.GetCultureInfo("ru-RU") : CultureInfo.GetCultureInfo("en-US");
-        CodexDesktopNativeUsageArc upper;
-        CodexDesktopNativeUsageArc lower;
+        CodexDesktopNativeUsageSegment primary;
+        CodexDesktopNativeUsageSegment secondary;
         if (presentation.Kind == CodexDesktopBalanceKind.ApiKeyAllowance && !presentation.QuotaUnlimited)
         {
             var percentage = presentation.Remaining.HasValue && presentation.Maximum > 0m &&
                 presentation.RemainingPercentage is >= 0m and <= 100m
                     ? presentation.RemainingPercentage
                     : null;
-            upper = Arc(russian ? "Осталось" : "Remaining", presentation.Remaining, presentation.UnitCode,
+            primary = Segment(russian ? "Осталось" : "Remaining", presentation.Remaining, presentation.UnitCode,
                 presentation.RemainingDisplay, percentage);
-            lower = Arc(russian ? "Лимит ключа" : "Key limit", presentation.Maximum, presentation.UnitCode,
+            secondary = Segment(russian ? "Лимит ключа" : "Key limit", presentation.Maximum, presentation.UnitCode,
                 presentation.MaximumDisplay, presentation.Maximum > 0m ? 100m : null);
         }
         else
         {
-            upper = Arc(russian ? "Баланс аккаунта" : "Account balance", presentation.AccountBalance,
+            var accountBalance = Segment(russian ? "Баланс аккаунта" : "Account balance", presentation.AccountBalance,
                 presentation.Kind == CodexDesktopBalanceKind.AccountBalance ? presentation.UnitCode : presentation.AccountBalanceUnitCode,
                 display: null, fill: null);
             var hasScopedUsage = presentation.Kind == CodexDesktopBalanceKind.UsageOnly &&
                 presentation.ScopeLabel == nameof(ProviderMetricScope.ApiKey);
-            lower = Arc(russian ? "Потрачено ключом" : "Key usage",
+            var keyUsage = Segment(russian ? "Потрачено ключом" : "Key usage",
                 hasScopedUsage ? presentation.Usage : presentation.KeyUsage,
                 hasScopedUsage ? presentation.UnitCode : presentation.KeyUsageUnitCode,
                 hasScopedUsage ? presentation.UsageDisplay : presentation.KeyUsageDisplay, fill: null);
+            (primary, secondary) = presentation is { Kind: CodexDesktopBalanceKind.ApiKeyAllowance, QuotaUnlimited: true }
+                ? (keyUsage, accountBalance)
+                : (accountBalance, keyUsage);
         }
 
-        return new(compact, title, upper, lower, rows);
+        return new(compact, title, primary, secondary, rows);
 
-        CodexDesktopNativeUsageArc Arc(string label, decimal? amount, string? unitCode,
+        CodexDesktopNativeUsageSegment Segment(string label, decimal? amount, string? unitCode,
             ProviderMetricDisplay? display, decimal? fill)
         {
             var unknown = russian ? "неизвестно" : "Unknown";
@@ -90,7 +93,7 @@ public sealed record CodexDesktopNativeUsagePayload(
     }
 }
 
-public sealed record CodexDesktopNativeUsageArc(
+public sealed record CodexDesktopNativeUsageSegment(
     [property: JsonPropertyName("tooltip")] string Tooltip,
     [property: JsonPropertyName("fill")] decimal? FillPercentage);
 

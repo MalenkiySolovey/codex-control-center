@@ -110,10 +110,10 @@ public sealed class Strings
         "Выключено по умолчанию. Каждое управляемое API-окно получает баланс только своего активного маршрута и запущенного ключа. При переходе на ChatGPT индикатор снимается, штатные лимиты сохраняются; для другого API-профиля перезапустите окно с его ключом. Обновление баланса — раз в 30 секунд.",
         "Off by default. Each managed API window shows only the balance for its active route and the key it was launched with. Switching to ChatGPT removes the indicator and keeps native limits; restart the window with another API profile's key to show that balance. Balance refreshes every 30 seconds.");
     private string R(string ru, string en) => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals("ru", StringComparison.OrdinalIgnoreCase) ? ru : en;
-    public string CodexDesktopNativeApiBalanceLabel => R("Использовать штатный круг Codex для бюджета API", "Use Codex's native usage ring for API budget");
+    public string CodexDesktopNativeApiBalanceLabel => R("Использовать штатный индикатор Codex для бюджета API", "Use Codex's native usage indicator for the API budget");
     public string CodexDesktopNativeApiBalanceDescription => R(
-        "Доступно для проверенных сборок Codex. Если штатный круг недоступен, бюджет отображается в резервном индикаторе.",
-        "Available for verified Codex builds. The fallback indicator displays the budget if the native ring is unavailable.");
+        "Индикатор подбирается автоматически из версии Codex, в которой запущен профиль API.",
+        "Selects the native indicator from the version of Codex running the API profile.");
     public string CodexDesktopBalanceStatusLabel => R("Состояние индикатора", "Indicator status");
     public string CodexDesktopBalanceStatusOff => R("Выключено; индикатор отсоединён.", "Off; the indicator is detached.");
     public string CodexDesktopBalanceStatusInvalidProfile => R("Профиль запуска изменился; перезапустите его, чтобы применить актуальную привязку API.", "The launch profile changed; relaunch it to apply its current API binding.");
@@ -126,6 +126,9 @@ public sealed class Strings
     public string CodexDesktopBalanceStatusRestartProfile => R("Закройте этот профиль и запустите его снова, чтобы включить локальный CDP.", "Close this profile and launch it again to enable loopback CDP.");
     public string CodexDesktopBalanceStatusWaitingForRenderer => R("Ожидаю основное окно Codex Desktop, запущенное этим профилем.", "Waiting for the main Codex Desktop window launched by this profile.");
     public string CodexDesktopBalanceStatusAnchorUnverified => R("В этой сборке не найден единственный видимый штатный якорь; интерфейс не изменён.", "This build has no unique visible native anchor; the interface was not changed.");
+    public string CodexDesktopBalanceStatusAmbiguousAnchors => R("Найдено несколько штатных якорей для индикатора API.", "Multiple native anchors matched the API indicator.");
+    public string CodexDesktopBalanceStatusNativeAmbiguous => R("В сборке найдено несколько подходящих компонентов лимитов.", "The build has multiple matching native usage components.");
+    public string CodexDesktopBalanceStatusNativeUnsupported => R("В этой сборке входы штатного индикатора лимитов не распознаны.", "The native usage component inputs are unrecognized in this build.");
     public string CodexDesktopBalanceStatusUnsupportedVersion => R("Эта сборка Codex Desktop не входит в проверенный список.", "This Codex Desktop build is not in the verified compatibility list.");
     public string CodexDesktopBalanceStatusNoPresentation => R("Нет безопасных данных для показа.", "No safe presentation data is available.");
     public string CodexDesktopBalanceStatusAssetRejected => R("Проверка целостности индикатора не пройдена.", "The indicator integrity check failed.");
@@ -138,8 +141,8 @@ public sealed class Strings
         $"Индикатор подключён в {installed} API-окнах Codex; проверка раз в 30 секунд. Ожидают: {pending}.",
         $"Indicator attached in {installed} API Codex window(s); balance checked every 30 seconds. Waiting: {pending}.");
     public string CodexDesktopBalanceStatusNativeWatching(int native, int fallback, int pending) => R(
-        $"Окна с бюджетом API. Штатный круг — {native}, резервный индикатор — {fallback}, подключение ожидается — {pending}.",
-        $"API budget windows. Native ring — {native}, fallback indicator — {fallback}, waiting — {pending}.");
+        $"Окна с бюджетом API. Штатный индикатор — {native}, резервный индикатор — {fallback}, подключение ожидается — {pending}.",
+        $"API budget windows. Native indicator — {native}, fallback indicator — {fallback}, waiting — {pending}.");
     public string CodexDesktopBalanceStatusUnavailable => R("Интеграция временно недоступна; подключение безопасно остановлено.", "The integration is temporarily unavailable; attachment was safely stopped.");
     public string TrayTooltipModeDescription => S(
         "Escolha o que aparece ao passar o cursor. A cota usa apenas dados em cache e não inicia uma atualização.",

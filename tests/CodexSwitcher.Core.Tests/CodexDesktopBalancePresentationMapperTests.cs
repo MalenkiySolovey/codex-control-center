@@ -271,8 +271,8 @@ public sealed class CodexDesktopBalancePresentationMapperTests
 
         var native = Assert.IsType<CodexDesktopNativeUsagePayload>(
             CodexDesktopNativeUsagePayload.FromPresentation(presentation, russian: false));
-        Assert.Equal(new CodexDesktopNativeUsageArc("Remaining · $3.50", 70m), native.UpperArc);
-        Assert.Equal(new CodexDesktopNativeUsageArc("Key limit · $5.00", 100m), native.LowerArc);
+        Assert.Equal(new CodexDesktopNativeUsageSegment("Remaining · $3.50", 70m), native.Primary);
+        Assert.Equal(new CodexDesktopNativeUsageSegment("Key limit · $5.00", 100m), native.Secondary);
         Assert.Contains(new CodexDesktopNativeUsageRow("Remaining", "$3.50"), native.Rows);
         Assert.Contains(new CodexDesktopNativeUsageRow("Maximum", "$5.00"), native.Rows);
         Assert.Contains(new CodexDesktopNativeUsageRow("Key usage", "$1.50"), native.Rows);
@@ -298,8 +298,8 @@ public sealed class CodexDesktopBalancePresentationMapperTests
 
         var native = Assert.IsType<CodexDesktopNativeUsagePayload>(
             CodexDesktopNativeUsagePayload.FromPresentation(presentation, russian: false));
-        Assert.Equal(new CodexDesktopNativeUsageArc("Account balance · Unknown", null), native.UpperArc);
-        Assert.Equal(new CodexDesktopNativeUsageArc("Key usage · Unknown", null), native.LowerArc);
+        Assert.Equal(new CodexDesktopNativeUsageSegment("Key usage · Unknown", null), native.Primary);
+        Assert.Equal(new CodexDesktopNativeUsageSegment("Account balance · Unknown", null), native.Secondary);
         Assert.Contains(new CodexDesktopNativeUsageRow("Key limit", "unlimited"), native.Rows);
         Assert.Contains(new CodexDesktopNativeUsageRow("Account balance", "Unknown"), native.Rows);
         Assert.DoesNotContain(native.Rows, row => row.Label == "Maximum");
@@ -326,8 +326,8 @@ public sealed class CodexDesktopBalancePresentationMapperTests
 
         var native = Assert.IsType<CodexDesktopNativeUsagePayload>(
             CodexDesktopNativeUsagePayload.FromPresentation(presentation, russian: false));
-        Assert.Equal(new CodexDesktopNativeUsageArc("Account balance · ¥12.50", null), native.UpperArc);
-        Assert.Equal(new CodexDesktopNativeUsageArc("Key usage · $1.50", null), native.LowerArc);
+        Assert.Equal(new CodexDesktopNativeUsageSegment("Key usage · $1.50", null), native.Primary);
+        Assert.Equal(new CodexDesktopNativeUsageSegment("Account balance · ¥12.50", null), native.Secondary);
     }
 
     [Fact]
